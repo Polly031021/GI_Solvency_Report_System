@@ -1,0 +1,914 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import html
+import re
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Iterable
+
+import pandas as pd
+import streamlit as st
+
+from services.solvency_financing_analysis import summarize_financing
+from services.solvency_navigation import KPMG_CATEGORIES
+from services.solvency_report_notes import (
+    NOTE_COLUMNS,
+    normalize_notes_frame,
+    notes_lookup,
+    notes_workbook_bytes,
+    overlay_notes,
+    read_notes_workbook,
+)
+from services.solvency_step6_analysis import sort_report_periods
+
+
+@dataclass(frozen=True)
+class IndustryOverview:
+    report_period: str
+    period_scope: str
+    company_count: int
+    combined_median: float | None
+    core_median: float | None
+    sufficient_count: int
+    warning_count: int
+    insufficient_count: int
+
+
+def _text_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series("", index=frame.index, dtype="string")
+    return frame[column].fillna("").astype(str).str.strip()
+
+
+def company_detail_rows(frame: pd.DataFrame | None) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.DataFrame()
+    result = frame.copy()
+    company = _text_series(result, "公司")
+    company_type = _text_series(result, "公司类型")
+    company_code = _text_series(result, "公司统一编码")
+    industry = (
+        company.eq("行业合计")
+        | company_type.eq("行业合计")
+        | company_code.str.startswith("INDUSTRY_")
+    )
+    return result.loc[~industry & company.ne("")].copy()
+
+
+def preferred_period_scope(frame: pd.DataFrame, requested: str = "") -> str:
+    scopes = _text_series(frame, "期间口径")
+    available = [value for value in scopes.unique().tolist() if value]
+    if requested and requested in available:
+        return requested
+    for preferred in ("本季度末数", "期末数", "本年累计数", "本季度数"):
+        if preferred in available:
+            return preferred
+    return available[0] if available else ""
+
+
+def profile_platform_copy(
+    profile_id: str,
+    profile_name: str,
+    frequency: str,
+) -> tuple[str, str]:
+    profile_text = f"{profile_id} {profile_name}".lower()
+    if "non_life" in profile_text or "财产" in profile_text or "财险" in profile_text:
+        sector = "财产险公司"
+    elif "life" in profile_text or "寿险" in profile_text or "人身" in profile_text:
+        sector = "人身险公司"
+    else:
+        clean_name = str(profile_name or "保险公司").replace("季度报告", "").replace("年度报告", "").strip()
+        sector = clean_name or "保险公司"
+
+    annual = str(frequency or "").upper() == "ANNUAL" or "年报" in profile_text or "年度报告" in profile_text
+    if annual:
+        report_label = "年度报告"
+        database_label = "年度报告数据库"
+    else:
+        report_label = "偿付能力"
+        database_label = "偿付能力季度报告数据库"
+    return (
+        f"{sector}{report_label}信息分享",
+        f"中国{sector}{database_label}",
+    )
+
+
+def format_period_label(periods: Iterable[object]) -> str:
+    ordered = sort_report_periods(periods)
+    if not ordered:
+        return "-"
+    if len(ordered) == 1:
+        return ordered[0]
+    if len(ordered) <= 3:
+        return "、".join(ordered)
+    return f"{ordered[0]}–{ordered[-1]}"
+
+
+def format_target_label(targets: Iterable[object] | str) -> str:
+    if isinstance(targets, str):
+        return targets.strip() or "全部公司"
+    values = [str(value).strip() for value in targets if str(value).strip()]
+    if not values:
+        return "全部公司"
+    if len(values) <= 3:
+        return "、".join(values)
+    return f"{len(values)} 家公司"
+
+
+@lru_cache(maxsize=8)
+def _image_data_uri(path_value: str) -> str:
+    path = Path(path_value)
+    if not path.exists():
+        return ""
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def build_dashboard_header_html(
+    *,
+    title: str,
+    database_name: str,
+    report_period: str,
+    period_scope: str,
+    company_count: int,
+    target: str,
+    image_path: str | Path,
+) -> str:
+    image_uri = _image_data_uri(str(Path(image_path).resolve()))
+    background = (
+        f"url('{image_uri}')"
+        if image_uri
+        else "linear-gradient(90deg, #1525ff 0%, #1525ff 67%, #071b69 67%, #071b69 100%)"
+    )
+    safe_title = html.escape(str(title))
+    details = (
+        f"{database_name}　·　报告期：{report_period or '-'}　·　"
+        f"口径：{period_scope or '-'}　·　{int(company_count):,} 家公司　·　"
+        f"目标：{target or '全部公司'}"
+    )
+    safe_details = html.escape(details)
+    return f"""
+    <style>
+      .solvency-dashboard-hero {{
+        min-height: 178px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        padding: 32px 34px;
+        margin: 0 0 18px 0;
+        border-radius: 8px;
+        background-image: {background};
+        background-size: 100% auto;
+        background-position: center top;
+        background-repeat: no-repeat;
+        color: #ffffff;
+      }}
+      .solvency-dashboard-hero__content {{
+        width: 72%;
+      }}
+      .solvency-dashboard-hero__title {{
+        margin: 0 0 16px 0;
+        color: #ffffff !important;
+        font-size: clamp(25px, 2.6vw, 40px);
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }}
+      .solvency-dashboard-hero__details {{
+        margin: 0;
+        color: #ffffff !important;
+        font-size: clamp(12px, 1.15vw, 16px);
+        line-height: 1.6;
+        font-weight: 500;
+      }}
+      @media (max-width: 760px) {{
+        .solvency-dashboard-hero {{ min-height: 150px; padding: 24px; }}
+        .solvency-dashboard-hero__content {{ width: 78%; }}
+      }}
+    </style>
+    <section class="solvency-dashboard-hero" aria-label="{safe_title}">
+      <div class="solvency-dashboard-hero__content">
+        <div
+          class="solvency-dashboard-hero__title"
+          role="heading"
+          aria-level="1"
+          style="color: #ffffff !important;"
+        >{safe_title}</div>
+        <p class="solvency-dashboard-hero__details" style="color: #ffffff !important;">{safe_details}</p>
+      </div>
+    </section>
+    """
+
+
+def build_report_cover_html(
+    *,
+    title: str,
+    subtitle: str,
+    date_text: str,
+    image_path: str | Path,
+) -> str:
+    image_uri = _image_data_uri(str(Path(image_path).resolve()))
+    background = (
+        f'<img src="{image_uri}" alt="" />'
+        if image_uri
+        else '<div class="solvency-cover-fallback"></div>'
+    )
+    return f"""
+    <div class="solvency-print-cover solvency-print-cover--front">
+      {background}
+      <div class="solvency-print-cover__text">
+        <div class="solvency-print-cover__title">{html.escape(str(title))}</div>
+        <div class="solvency-print-cover__subtitle">{html.escape(str(subtitle))}</div>
+        <div class="solvency-print-cover__date">{html.escape(str(date_text))}</div>
+      </div>
+    </div>
+    """
+
+
+def build_report_back_cover_html(image_path: str | Path) -> str:
+    image_uri = _image_data_uri(str(Path(image_path).resolve()))
+    background = (
+        f'<img src="{image_uri}" alt="" />'
+        if image_uri
+        else '<div class="solvency-cover-fallback"></div>'
+    )
+    return f"""
+    <div class="solvency-print-cover solvency-print-cover--back">
+      {background}
+    </div>
+    """
+
+
+def render_report_cover(
+    *,
+    title: str,
+    subtitle: str,
+    date_text: str,
+    picture_dir: str | Path,
+) -> None:
+    st.markdown(
+        build_report_cover_html(
+            title=title,
+            subtitle=subtitle,
+            date_text=date_text,
+            image_path=Path(picture_dir) / "标题页.png",
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_report_back_cover(*, picture_dir: str | Path) -> None:
+    st.markdown(
+        build_report_back_cover_html(Path(picture_dir) / "封底页.png"),
+        unsafe_allow_html=True,
+    )
+
+
+def render_report_notes_editor(
+    *,
+    title: str,
+    key_prefix: str,
+    template: pd.DataFrame,
+) -> dict[str, dict[str, str]]:
+    """Render the annual-platform notes workflow with an offline template."""
+    source_key = f"{key_prefix}_notes_source"
+    digest_key = f"{key_prefix}_notes_upload_digest"
+    editor_key = f"{key_prefix}_notes_editor"
+    if source_key not in st.session_state:
+        st.session_state[source_key] = normalize_notes_frame(template)
+
+    notes_expander = st.expander(
+        title,
+        expanded=False,
+        icon=":material/edit_note:",
+        key=f"{key_prefix}_notes_expander",
+        on_change="rerun",
+    )
+    source = st.session_state[source_key]
+    if not notes_expander.open:
+        return notes_lookup(source.reindex(columns=NOTE_COLUMNS))
+
+    with notes_expander:
+        st.caption(
+            "先下载模板填写，也可上传后直接在页面中修改分析内容和注释；"
+            "一级、二级模块及图表对应关系保持锁定。"
+        )
+        st.download_button(
+            "下载分析注释模板",
+            data=notes_workbook_bytes(template),
+            file_name=f"{key_prefix}_图片内容分析和注释模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon=":material/download:",
+            key=f"{key_prefix}_notes_template_download",
+        )
+        upload = st.file_uploader(
+            "上传分析注释表 Excel",
+            type=["xlsx"],
+            key=f"{key_prefix}_notes_upload",
+        )
+        if upload is not None:
+            payload = upload.getvalue()
+            digest = hashlib.sha256(payload).hexdigest()
+            if st.session_state.get(digest_key) != digest:
+                try:
+                    uploaded = read_notes_workbook(payload, upload.name)
+                    st.session_state[source_key] = overlay_notes(template, uploaded)
+                    st.session_state[digest_key] = digest
+                    st.session_state.pop(editor_key, None)
+                    st.success(f"已读取 {len(uploaded):,} 条分析注释配置。")
+                except Exception as exc:
+                    st.error(f"分析注释表读取失败：{exc}")
+
+        source = st.session_state[source_key]
+        edited = st.data_editor(
+            source,
+            key=editor_key,
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            disabled=["模块ID", "一级分类", "二级分类", "对应图表名称"],
+            column_config={
+                "模块ID": st.column_config.TextColumn(width="small"),
+                "一级分类": st.column_config.TextColumn(width="medium"),
+                "二级分类": st.column_config.TextColumn(width="medium"),
+                "对应图表名称": st.column_config.TextColumn(width="large", pinned=True),
+                "分析内容-默认": st.column_config.TextColumn(width="large"),
+                "分析内容-自定义": st.column_config.TextColumn(width="large"),
+                "注释内容": st.column_config.TextColumn(width="large"),
+                "图片文件名": st.column_config.TextColumn(width="medium"),
+            },
+        )
+        st.session_state[source_key] = normalize_notes_frame(edited)
+    return notes_lookup(edited.reindex(columns=NOTE_COLUMNS))
+
+
+def render_report_analysis(note: dict[str, str] | None) -> None:
+    note = note or {}
+    default_text = str(note.get("分析内容-默认", "") or "").strip()
+    custom_text = str(note.get("分析内容-自定义", "") or "").strip()
+    if not default_text and not custom_text:
+        return
+    paragraphs = []
+    if default_text:
+        paragraphs.append(
+            f'<p class="solvency-note-default">{html.escape(default_text)}</p>'
+        )
+    if custom_text:
+        paragraphs.append(
+            f'<p class="solvency-note-custom">{html.escape(custom_text)}</p>'
+        )
+    st.markdown(
+        '<div class="solvency-report-analysis">' + "".join(paragraphs) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_report_footnote(note: dict[str, str] | None) -> None:
+    text = str((note or {}).get("注释内容", "") or "").strip()
+    if text:
+        st.markdown(
+            f'<p class="solvency-report-footnote">注：{html.escape(text)}</p>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_dashboard_header(
+    placeholder,
+    data: pd.DataFrame | None,
+    *,
+    profile_id: str,
+    profile_name: str,
+    frequency: str,
+    image_path: str | Path,
+    periods: Iterable[object] = (),
+    period_scope: str = "",
+    targets: Iterable[object] | str = (),
+) -> None:
+    title, database_name = profile_platform_copy(profile_id, profile_name, frequency)
+    detail = company_detail_rows(data)
+    company_count = int(_text_series(detail, "公司").nunique()) if not detail.empty else 0
+    available_periods = periods or _text_series(detail, "报告期").tolist()
+    report_period = format_period_label(available_periods)
+    if not period_scope and not detail.empty:
+        selected_period = sort_report_periods(_text_series(detail, "报告期").tolist())
+        period_frame = detail[
+            _text_series(detail, "报告期").eq(selected_period[-1])
+        ] if selected_period else detail
+        period_scope = preferred_period_scope(period_frame)
+    header_html = build_dashboard_header_html(
+        title=title,
+        database_name=database_name,
+        report_period=report_period,
+        period_scope=period_scope,
+        company_count=company_count,
+        target=format_target_label(targets),
+        image_path=image_path,
+    )
+    placeholder.html(header_html, width="stretch")
+
+
+def calculate_industry_overview(
+    data: pd.DataFrame | None,
+    *,
+    report_period: str = "",
+    period_scope: str = "",
+) -> IndustryOverview:
+    detail = company_detail_rows(data)
+    if detail.empty:
+        return IndustryOverview("", "", 0, None, None, 0, 0, 0)
+    periods = sort_report_periods(_text_series(detail, "报告期").tolist())
+    selected_period = report_period if report_period in periods else (periods[-1] if periods else "")
+    period_frame = detail[_text_series(detail, "报告期").eq(selected_period)].copy()
+    selected_scope = preferred_period_scope(period_frame, period_scope)
+    if selected_scope:
+        period_frame = period_frame[
+            _text_series(period_frame, "期间口径").eq(selected_scope)
+        ].copy()
+    period_frame["数值_numeric"] = pd.to_numeric(period_frame.get("数值"), errors="coerce")
+
+    def metric_values(code: str) -> pd.Series:
+        rows = period_frame[
+            _text_series(period_frame, "指标编码").eq(code)
+        ].dropna(subset=["数值_numeric"])
+        rows = rows.drop_duplicates(subset=["公司"], keep="last")
+        return rows.set_index("公司")["数值_numeric"]
+
+    combined = metric_values("COMBINED_SOLVENCY_RATIO")
+    core = metric_values("CORE_SOLVENCY_RATIO")
+    company_count = int(combined.index.nunique())
+    if company_count == 0:
+        company_count = int(_text_series(period_frame, "公司").nunique())
+    combined_median = float(combined.median()) if not combined.empty else None
+    core_median = float(core.median()) if not core.empty else None
+    return IndustryOverview(
+        report_period=selected_period,
+        period_scope=selected_scope,
+        company_count=company_count,
+        combined_median=combined_median,
+        core_median=core_median,
+        sufficient_count=int((combined >= 150).sum()),
+        warning_count=int(((combined >= 100) & (combined < 150)).sum()),
+        insufficient_count=int((combined < 100).sum()),
+    )
+
+
+def build_key_solvency_overview_table(
+    data: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, str, str]:
+    """Return the Excel-guide comparison using the prior-year matching period."""
+    detail = company_detail_rows(data)
+    periods = sort_report_periods(_text_series(detail, "报告期").tolist())
+    latest_period = periods[-1] if periods else ""
+    latest_match = re.match(r"^(20\d{2})(.*)$", latest_period)
+    prior_period = ""
+    if latest_match:
+        prior_candidate = f"{int(latest_match.group(1)) - 1}{latest_match.group(2)}"
+        if prior_candidate in periods:
+            prior_period = prior_candidate
+    latest_label = latest_period or "本期"
+    prior_label = prior_period or "上年同期"
+    columns = [
+        "公司名称",
+        f"核心资本充足率{latest_label}",
+        f"核心资本充足率{prior_label}",
+        f"综合资本充足率{latest_label}",
+        f"综合资本充足率{prior_label}",
+        f"实际资本{latest_label}",
+        f"实际资本{prior_label}",
+        f"未来保单盈余{latest_label}",
+        f"未来保单盈余{prior_label}",
+        f"保单未来盈余/核心资本比例 {latest_label}",
+        f"市场风险占比 {latest_label}",
+        f"保险风险占比 {latest_label}",
+        f"认可负债余额{latest_label}",
+        f"认可负债余额{prior_label}",
+    ]
+    if detail.empty or not latest_period:
+        return pd.DataFrame(columns=columns), latest_period, prior_period
+
+    scope_priority = {
+        "期末数": 0,
+        "本季度末数": 1,
+        "本季度数": 2,
+        "": 3,
+        "上季度末数": 4,
+        "期初数": 5,
+    }
+    selected = detail[
+        _text_series(detail, "报告期").isin([period for period in (prior_period, latest_period) if period])
+    ].copy()
+    selected["_scope_rank"] = _text_series(selected, "期间口径").map(
+        lambda value: scope_priority.get(value, 3)
+    )
+    selected["数值"] = pd.to_numeric(selected.get("数值"), errors="coerce")
+    selected = selected.sort_values("_scope_rank").drop_duplicates(
+        ["公司", "报告期", "指标编码"],
+        keep="first",
+    )
+    pivot = selected.pivot_table(
+        index=["公司", "报告期"],
+        columns="指标编码",
+        values="数值",
+        aggfunc="first",
+    )
+
+    policy_codes = (
+        "POLICY_SURPLUS_CORE_T1",
+        "POLICY_SURPLUS_CORE_T2",
+        "POLICY_SURPLUS_ANC_T1",
+        "POLICY_SURPLUS_ANC_T2",
+    )
+
+    def value(company: str, period: str, code: str) -> float | None:
+        if not period or (company, period) not in pivot.index or code not in pivot.columns:
+            return None
+        raw = pivot.loc[(company, period), code]
+        return None if pd.isna(raw) else float(raw)
+
+    def total(company: str, period: str, codes: Iterable[str]) -> float | None:
+        values = [value(company, period, code) for code in codes]
+        return None if any(item is None for item in values) else float(sum(values))
+
+    companies = list(dict.fromkeys(_text_series(detail, "公司")))
+    rows: list[dict[str, object]] = []
+    for company in companies:
+        latest_policy = total(company, latest_period, policy_codes)
+        prior_policy = total(company, prior_period, policy_codes)
+        core_ratio = value(company, latest_period, "POLICY_SURPLUS_CORE_TO_CORE_CAPITAL")
+        if core_ratio is None:
+            core_policy = total(
+                company,
+                latest_period,
+                ("POLICY_SURPLUS_CORE_T1", "POLICY_SURPLUS_CORE_T2"),
+            )
+            core_capital = total(
+                company,
+                latest_period,
+                ("CORE_T1_CAPITAL", "CORE_T2_CAPITAL"),
+            )
+            core_ratio = (
+                None
+                if core_policy is None or core_capital in {None, 0}
+                else core_policy / core_capital
+            )
+        rows.append({
+            "公司名称": company,
+            columns[1]: value(company, latest_period, "CORE_SOLVENCY_RATIO"),
+            columns[2]: value(company, prior_period, "CORE_SOLVENCY_RATIO"),
+            columns[3]: value(company, latest_period, "COMBINED_SOLVENCY_RATIO"),
+            columns[4]: value(company, prior_period, "COMBINED_SOLVENCY_RATIO"),
+            columns[5]: value(company, latest_period, "ACTUAL_CAPITAL"),
+            columns[6]: value(company, prior_period, "ACTUAL_CAPITAL"),
+            columns[7]: latest_policy,
+            columns[8]: prior_policy,
+            columns[9]: core_ratio,
+            columns[10]: value(company, latest_period, "MARKET_RISK_TO_QUANT_CAPITAL"),
+            columns[11]: value(company, latest_period, "LIFE_INSURANCE_RISK_TO_QUANT_CAPITAL"),
+            columns[12]: value(company, latest_period, "RECOGNIZED_LIABILITIES"),
+            columns[13]: value(company, prior_period, "RECOGNIZED_LIABILITIES"),
+        })
+    return pd.DataFrame(rows, columns=columns), latest_period, prior_period
+
+
+def build_key_solvency_overview_html(
+    display: pd.DataFrame,
+    highlight_company: str = "无",
+    *,
+    latest_period: str = "",
+    prior_period: str = "",
+) -> str:
+    """Render the overview with the annual-report platform's exact table styling."""
+    column_weights: list[float] = []
+    for index, column in enumerate(display.columns):
+        column_text = str(column)
+        if index == 0:
+            weight = 6.3
+        elif "保单未来盈余/核心资本比例" in column_text:
+            weight = 9.4
+        elif column_text.startswith("认可负债余额"):
+            weight = 8.2
+        elif column_text.startswith(("实际资本", "未来保单盈余")):
+            weight = 7.5
+        elif "风险占比" in column_text:
+            weight = 6.2
+        else:
+            weight = 6.7
+        column_weights.append(weight)
+    total_weight = sum(column_weights) or 1.0
+
+    parts = [
+        "<style>"
+        ".key-solvency-overview-wrap{width:100%;max-width:100%;overflow:visible;}"
+        ".key-solvency-overview{width:100%;max-width:100%;table-layout:fixed;}"
+        ".key-solvency-overview th,.key-solvency-overview td{box-sizing:border-box;}"
+        "@media screen and (max-width:1400px){"
+        ".key-solvency-overview{font-size:9px!important;}"
+        ".key-solvency-overview th,.key-solvency-overview td{padding:3px 1px!important;font-size:9px!important;}"
+        "}"
+        "@media print{"
+        ".key-solvency-overview-wrap{width:100%!important;max-width:100%!important;overflow:visible!important;}"
+        ".key-solvency-overview{width:100%!important;min-width:0!important;max-width:100%!important;"
+        "table-layout:fixed!important;font-size:7pt!important;}"
+        ".key-solvency-overview thead{display:table-header-group;}"
+        ".key-solvency-overview tr{break-inside:avoid;page-break-inside:avoid;}"
+        ".key-solvency-overview th,.key-solvency-overview td{min-width:0!important;max-width:none!important;"
+        "padding:2pt 1pt!important;font-size:7pt!important;white-space:normal!important;"
+        "word-break:break-word!important;overflow-wrap:anywhere!important;}"
+        ".key-solvency-overview th:first-child,.key-solvency-overview td:first-child{"
+        "white-space:nowrap!important;word-break:keep-all!important;overflow-wrap:normal!important;}"
+        "}"
+        "</style>",
+        "<div class='key-solvency-overview-wrap'>",
+        "<table class='key-solvency-overview' style='width:100%;max-width:100%;table-layout:fixed;"
+        "border-collapse:collapse;font-family:sans-serif;font-size:10px;margin-bottom:15px;'>",
+        "<colgroup>",
+    ]
+    for weight in column_weights:
+        parts.append(f"<col style='width:{weight / total_weight * 100:.3f}%;'>")
+    parts.append(
+        "</colgroup><thead><tr style='background-color:#00338D;color:white;"
+        "text-align:center;font-weight:bold;'>"
+    )
+    for index, column in enumerate(display.columns):
+        header = html.escape(str(column))
+        if index:
+            for period_token in (
+                latest_period or "本期",
+                prior_period or "上年同期",
+            ):
+                escaped_token = html.escape(period_token)
+                if escaped_token and header.endswith(escaped_token):
+                    header = f"{header[:-len(escaped_token)]}<br>{escaped_token}"
+                    break
+        alignment = "left" if index == 0 else "center"
+        nowrap = "white-space:nowrap;" if index == 0 else "white-space:normal;line-height:1.25;"
+        parts.append(
+            f"<th style='padding:5px 2px;text-align:{alignment};border:1.5px solid white;"
+            f"font-size:10px;font-weight:bold;overflow-wrap:anywhere;{nowrap}'>{header}</th>"
+        )
+    parts.append("</tr></thead><tbody>")
+    tracked_company = str(highlight_company or "").strip()
+    for row_position, (_, row) in enumerate(display.iterrows()):
+        company = str(row.iloc[0]).strip() if len(row) else ""
+        is_highlight = (
+            tracked_company not in {"", "无"} and company == tracked_company
+        )
+        row_background = (
+            "rgba(0,51,141,0.03)"
+            if is_highlight
+            else "white" if row_position % 2 == 0 else "#F8F9FA"
+        )
+        parts.append("<tr>")
+        for column_index, value in enumerate(row.tolist()):
+            text = html.escape(str(value))
+            is_missing = text == "未披露"
+            background = "#CDCDCD" if is_missing else row_background
+            color = (
+                "white"
+                if is_missing
+                else "#00338D" if is_highlight and column_index else "#333333" if column_index == 0 else "#444444"
+            )
+            alignment = "left" if column_index == 0 else "center"
+            nowrap = (
+                "white-space:nowrap;word-break:keep-all;overflow-wrap:normal;"
+                if column_index == 0
+                else "white-space:nowrap;line-height:1.2;"
+            )
+            if is_highlight:
+                border = "border-top:1.5px solid #00338D;border-bottom:1.5px solid #00338D;"
+                if column_index == 0:
+                    border += "border-left:1.5px solid #00338D;"
+                if column_index == len(row) - 1:
+                    border += "border-right:1.5px solid #00338D;"
+                weight = "font-weight:bold;"
+            else:
+                border = "border:1px solid #EAEAEA;"
+                weight = ""
+            parts.append(
+                f"<td style='background-color:{background};padding:4px 2px;font-size:10px;"
+                f"{border}{weight}text-align:{alignment};color:{color};{nowrap}'>{text}</td>"
+            )
+        parts.append("</tr>")
+    parts.append("</tbody></table></div>")
+    return "".join(parts)
+
+
+def _format_key_solvency_overview_display(table: pd.DataFrame) -> pd.DataFrame:
+    """Format the comparison table while preserving its underlying numeric values."""
+    display = table.copy()
+    percent_point_prefixes = ("核心资本充足率", "综合资本充足率")
+    amount_prefixes = ("实际资本", "未来保单盈余", "认可负债余额")
+    for column in display.columns[1:]:
+        column_text = str(column)
+        if column_text.startswith(percent_point_prefixes):
+            formatter = lambda value: f"{float(value):.1f}%"
+        elif column_text.startswith(amount_prefixes):
+            formatter = lambda value: f"{float(value):,.2f}"
+        else:
+            formatter = lambda value: f"{float(value):.1%}"
+        display[column] = display[column].map(
+            lambda value, format_value=formatter: (
+                "未披露" if pd.isna(value) else format_value(value)
+            )
+        )
+    return display
+
+
+def render_key_solvency_overview(
+    data: pd.DataFrame | None,
+    *,
+    highlight_company: str = "无",
+) -> pd.DataFrame:
+    table, latest_period, prior_period = build_key_solvency_overview_table(data)
+    st.markdown("### :material/table_chart: 关键偿付数据概览")
+    if table.empty:
+        st.info("当前数据没有可生成关键偿付数据概览的公司记录。")
+        return table
+    if not prior_period:
+        st.warning("当前缺少本期对应的上年同期报告期；所有同期变化列暂时留空。")
+    display = _format_key_solvency_overview_display(table)
+    st.markdown(
+        build_key_solvency_overview_html(
+            display,
+            highlight_company,
+            latest_period=latest_period,
+            prior_period=prior_period,
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"比较期间：{prior_period or '缺少上期'} → {latest_period or '缺少本期'}；"
+        "灰色“未披露”表示原始披露或派生指标不足，未以 0 替代。"
+    )
+    return table
+
+
+def render_industry_overview(data: pd.DataFrame | None) -> IndustryOverview:
+    overview = calculate_industry_overview(data)
+    st.markdown(
+        f"### :material/account_balance: 01 · 行业整体偿付能力概览 · "
+        f"{overview.report_period or '-'}"
+    )
+    first_row = st.columns(3)
+    first_row[0].metric("纳入公司数", f"{overview.company_count:,} 家", border=True)
+    first_row[1].metric(
+        "综合偿付能力充足率中位数",
+        "-" if overview.combined_median is None else f"{overview.combined_median:.1f}%",
+        border=True,
+    )
+    first_row[2].metric(
+        "核心偿付能力充足率中位数",
+        "-" if overview.core_median is None else f"{overview.core_median:.1f}%",
+        border=True,
+    )
+    denominator = max(overview.company_count, 1)
+    second_row = st.columns(3)
+    second_row[0].metric(
+        "充足（≥150%）",
+        f"{overview.sufficient_count:,} 家",
+        f"占比 {overview.sufficient_count / denominator:.0%}",
+        delta_color="green",
+        delta_arrow="off",
+        border=True,
+    )
+    second_row[1].metric(
+        "预警（100%–150%）",
+        f"{overview.warning_count:,} 家",
+        f"占比 {overview.warning_count / denominator:.0%}",
+        delta_color="gray",
+        delta_arrow="off",
+        border=True,
+    )
+    second_row[2].metric(
+        "不达标（<100%）",
+        f"{overview.insufficient_count:,} 家",
+        f"占比 {overview.insufficient_count / denominator:.0%}",
+        delta_color="red",
+        delta_arrow="off",
+        border=True,
+    )
+    if overview.period_scope:
+        st.caption(f"概览采用“{overview.period_scope}”口径；分档依据综合偿付能力充足率。")
+    return overview
+
+
+def render_major_financing(
+    data: pd.DataFrame | None,
+    *,
+    print_mode: bool = False,
+) -> None:
+    summary = summarize_financing(data)
+    st.markdown("### :material/assignment: 重大融资信息统计")
+    st.info(
+        "本页统计各公司在各季度的增资或发债事项，以及综合偿付能力充足率的变动情况。"
+    )
+    metrics = st.columns(3)
+    metrics[0].metric("融资事件总数", f"{summary.event_count:,}", border=True)
+    metrics[1].metric("涉及公司数", f"{summary.company_count:,}", border=True)
+    metrics[2].metric("最新季度", summary.latest_period or "-", border=True)
+
+    st.divider()
+    st.markdown("#### :material/bar_chart: 重大融资信息明细")
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        st.info("请在左侧边栏上传重大融资信息 Excel。")
+        return
+
+    periods = list(reversed(sort_report_periods(data["季度"].tolist())))
+    def render_period_table(period: str, period_frame: pd.DataFrame) -> None:
+        display = period_frame[
+            ["公司名称", "增资/发债", "季度总变动", "增资/发债的影响"]
+        ].reset_index(drop=True)
+        st.dataframe(
+            display,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "公司名称": st.column_config.TextColumn("公司名称", pinned=True, width="small"),
+                "增资/发债": st.column_config.TextColumn("增资/发债", width="large"),
+                "季度总变动": st.column_config.TextColumn("季度总变动", width="medium"),
+                "增资/发债的影响": st.column_config.TextColumn("增资/发债的影响", width="medium"),
+            },
+        )
+
+    for period in periods:
+        period_frame = data[data["季度"] == period].copy()
+        company_count = int(period_frame["公司名称"].nunique())
+        label = f"{period}（{company_count} 家公司）"
+        if print_mode:
+            st.markdown(f"#### {label}")
+            render_period_table(period, period_frame)
+        else:
+            with st.expander(
+                f":material/calendar_month: {label}",
+                expanded=period == summary.latest_period,
+            ):
+                render_period_table(period, period_frame)
+
+
+def render_print_control(*, key: str = "solvency_dashboard_print") -> None:
+    st.markdown("### :material/print: 打印/导出 PDF")
+    st.info(
+        "竖版 A4 与横版 16:9 均导出封面、正文和封底。"
+        "打印时请勾选“背景图形”以保留颜色。"
+    )
+
+    html_code = """
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button onclick="printParent('portrait')" style="padding:10px 24px; background:#00338D; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:14px; flex:1;">
+            🖨️ 导出竖版 A4 PDF
+        </button>
+        <button onclick="printParent('widescreen')" style="padding:10px 24px; background:#098E7E; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:14px; flex:1;">
+            🖨️ 导出横版 16:9 PDF
+        </button>
+    </div>
+    <script>
+    function printParent(mode) {
+        // 获取父窗口的 document
+        var parentDoc = window.parent.document;
+        
+        // 移除旧打印样式
+        var old = parentDoc.getElementById('dynamic-print-style');
+        if (old) old.remove();
+        
+        var style = parentDoc.createElement('style');
+        style.id = 'dynamic-print-style';
+        
+        if (mode === 'widescreen') {
+            style.innerHTML = '@page { size: 338.67mm 190.5mm; margin: 0; }';
+        } else {
+            style.innerHTML = '@page { size: A4 portrait; margin: 10mm; }';
+        }
+        parentDoc.head.appendChild(style);
+        
+        // 在父窗口执行打印
+        setTimeout(function() {
+            window.parent.print();
+            setTimeout(function() {
+                var s = parentDoc.getElementById('dynamic-print-style');
+                if (s) s.remove();
+            }, 500);
+        }, 300);
+    }
+    </script>
+    """
+    st.components.v1.html(html_code, height=80)
+
+
+def render_kpmg_palette() -> None:
+    with st.expander("查看 KPMG 官方色卡", icon=":material/palette:"):
+        for category, colors in KPMG_CATEGORIES.items():
+            st.markdown(f"**{category}**")
+            swatches = "".join(
+                (
+                    '<span style="display:inline-flex;align-items:center;gap:4px;'
+                    'margin:0 14px 8px 0;font-size:13px;">'
+                    f'<span style="width:14px;height:14px;border-radius:3px;'
+                    f'border:1px solid #d7dce5;background:{html.escape(color)};"></span>'
+                    f'{html.escape(name)} <b>({html.escape(color)})</b></span>'
+                )
+                for name, color in colors.items()
+            )
+            st.html(f'<div style="display:flex;flex-wrap:wrap;">{swatches}</div>')
