@@ -1,5 +1,6 @@
 streamlit
 pandas
+numpy
 altair
 requests
 beautifulsoup4
@@ -7,6 +8,11 @@ PyMuPDF
 pdfplumber
 openai
 openpyxl
-numpy
+xlrd
 lxml
 python-dateutil
+Pillow
+matplotlib
+plotly
+kaleido
+pyyaml
