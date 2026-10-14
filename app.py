@@ -132,7 +132,8 @@ from services.batch_processor import (
 ROOT = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "config"
 PROFILE_DIR = CONFIG_DIR / "report_profiles"
-DEFAULT_PROFILE_ID = "LIFE_SOLVENCY"
+# ★ 默认 profile 改为财险，登录后直接进入 NON_LIFE_SOLVENCY
+DEFAULT_PROFILE_ID = "NON_LIFE_SOLVENCY"
 STANDARD_SCHEMA_VERSION = 2
 GOLD_MANIFEST = ROOT / "gold_standard" / "manifest.json"
 PEER_GROUP_CONFIG = CONFIG_DIR / "solvency_peer_groups.json"
