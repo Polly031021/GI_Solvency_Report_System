@@ -1,0 +1,12 @@
+streamlit
+pandas
+altair
+requests
+beautifulsoup4
+PyMuPDF
+pdfplumber
+openai
+openpyxl
+numpy
+lxml
+python-dateutil
