@@ -651,11 +651,25 @@ def load_profile_registry(
     profile_dir: str | Path,
     project_root: str | Path,
 ) -> dict[str, ReportProfile]:
+    """Load every profile under the registry directory.
+
+    正式格式是 Profile 配置工作簿（``*_profile.xlsx``）；同时保留对历史
+    JSON profile 的兼容读取，避免外部部署在升级时配置失效。两类文件
+    同时存在时按 profile_id 去重校验，不允许同一 profile_id 出现两份。
+    """
     directory = Path(profile_dir)
-    profiles = [
-        load_profile_file(path, project_root)
-        for path in sorted(directory.glob("*.json"))
-    ]
+    root = Path(project_root)
+    profiles: list[ReportProfile] = []
+    for path in sorted(directory.glob("*_profile.xlsx")):
+        profiles.append(
+            load_profile_workbook(
+                path.read_bytes(),
+                project_root=root,
+                source_name=path.name,
+            )
+        )
+    for path in sorted(directory.glob("*.json")):
+        profiles.append(load_profile_file(path, root))
     result = {profile.profile_id: profile for profile in profiles}
     if not result:
         raise ProfileValidationError(f"未在 {directory} 找到报告 profile。")
