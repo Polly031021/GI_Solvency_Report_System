@@ -833,18 +833,78 @@ def _locator_prompt(
 {json.dumps(example, ensure_ascii=False)}"""
 
 
+def _confidence_from_sources(
+    *,
+    boundary_closed: bool,
+    local_pages: list[int],
+    radar_pages: list[int],
+    directory_pages: list[int],
+    ai_pages: list[int],
+    visual_pages: list[int],
+) -> tuple[int, str]:
+    """Score locator evidence deterministically (0-100).
+
+    Boundary closure and multi-source agreement are the strongest signals.
+    A single weak source (radar or directory only) stays below the review
+    threshold so the UI can ask the user to confirm manually.
+    """
+    if boundary_closed and local_pages:
+        return 92, "首尾项目闭合（确定性边界）"
+    page_sets = [
+        set(pages)
+        for pages in (local_pages, directory_pages, radar_pages, ai_pages, visual_pages)
+        if pages
+    ]
+    if len(page_sets) >= 2 and all(item == page_sets[0] for item in page_sets[1:]):
+        return 88, "多路证据完全一致"
+    if len(page_sets) >= 2:
+        overlap = set.intersection(*page_sets)
+        if overlap:
+            return 80, "多路证据部分一致"
+        return 62, "多路证据冲突，已按主证据合并"
+    if local_pages:
+        return 74, "关键词锚点定位（单路证据）"
+    if directory_pages:
+        return 60, "目录换算定位（单路证据）"
+    if ai_pages:
+        return 70, "大模型语义定位（单路证据）"
+    if visual_pages:
+        return 75, "视觉模型定位（单路证据）"
+    if radar_pages:
+        return 50, "结构雷达兜底（单路证据）"
+    return 0, "未找到页码证据"
+
+
 def locate_tables_hybrid(
     pdf_bytes: bytes,
     feature_config: dict,
     *,
-    api_key: str,
-    base_url: str,
-    model: str,
+    api_key: str = "",
+    base_url: str = "",
+    model: str = "",
     timeout: int = 180,
     post_func: Callable | None = None,
     profile_context: Mapping[str, object] | None = None,
+    mode: str = "hybrid",
+    llm_verify: bool = False,
 ) -> tuple[list[PageMatch], str]:
-    """Locate target disclosures through text radar and two-stage page vision."""
+    """Locate target disclosures through rules, optionally with LLM support.
+
+    mode="hybrid" keeps the historical primary-LLM behaviour. mode="rule"
+    runs the offline path only (boundary analysis + radar + directory); when
+    llm_verify=True the text model is called once afterwards to cross-check
+    the rule result instead of contributing pages itself.
+    """
+    mode = (mode or "hybrid").lower()
+    if mode not in {"hybrid", "rule"}:
+        raise ValueError("mode must be 'hybrid' or 'rule'")
+    rule_mode = mode == "rule"
+    llm_configured = all(
+        str(value or "").strip()
+        for value in (api_key, base_url, model)
+    )
+    verify_with_llm = rule_mode and llm_verify and llm_configured
+
     local_matches = locate_tables(pdf_bytes, feature_config)
     local_by_id = {item.table_id: item for item in local_matches}
     page_texts, radar_hints, hint_text = _solvency_radar(pdf_bytes, feature_config)
@@ -854,7 +914,7 @@ def locate_tables_hybrid(
         tables,
     )
     low_text_pages = _low_text_page_numbers(page_texts)
-    if low_text_pages and not any(directory_hints.values()):
+    if low_text_pages and not any(directory_hints.values()) and not rule_mode:
         visual_directory_hints, visual_directory_message = (
             _locate_scan_directory_with_vision(
                 pdf_bytes,
@@ -899,7 +959,8 @@ def locate_tables_hybrid(
     )
     ai_error = ""
     ai_result: dict = {}
-    if searchable_pages:
+    run_text_llm = (not rule_mode) or verify_with_llm
+    if run_text_llm and searchable_pages and llm_configured:
         try:
             content = _call_chat(
                 api_key=api_key,
@@ -917,7 +978,7 @@ def locate_tables_hybrid(
     vision_candidates = {str(item["table_id"]): [] for item in tables}
     vision_pages = {str(item["table_id"]): [] for item in tables}
     vision_errors: list[str] = []
-    if low_text_pages:
+    if low_text_pages and not rule_mode:
         vision_candidates, vision_pages, vision_errors = _locate_low_text_pages_with_vision(
             pdf_bytes,
             tables,
@@ -985,12 +1046,15 @@ def locate_tables_hybrid(
         radar_pages = sorted(set(radar_hints.get(table_id, [])))
         directory_pages = sorted(set(directory_hints.get(table_id, [])))
         boundary_closed = local_boundary_closed
+        # In rule mode the LLM output is verification-only: it must never
+        # contribute pages itself, otherwise this stops being an offline path.
+        merge_ai_pages = [] if rule_mode else ai_pages
         pages = (
             local_pages
             if boundary_closed
             else _merge_locator_pages(
                 local_pages,
-                sorted(set(ai_pages + visual_pages)),
+                sorted(set(merge_ai_pages + visual_pages)),
                 radar_pages,
                 max(1, int(table.get("max_pages", 1))),
                 directory_pages,
@@ -998,18 +1062,42 @@ def locate_tables_hybrid(
         )
         review_required, review_reason = _locator_conflict(
             local_pages=local_pages,
-            ai_pages=ai_pages,
+            ai_pages=merge_ai_pages,
             visual_pages=visual_pages,
             directory_pages=directory_pages,
             boundary_closed=boundary_closed,
         )
+        confidence, confidence_basis = _confidence_from_sources(
+            boundary_closed=boundary_closed,
+            local_pages=local_pages,
+            radar_pages=radar_pages,
+            directory_pages=directory_pages,
+            ai_pages=merge_ai_pages,
+            visual_pages=visual_pages,
+        )
+        if verify_with_llm and ai_pages:
+            if set(ai_pages) == set(pages):
+                confidence = min(confidence + 5, 98)
+                confidence_basis += "；大模型复核一致（+5）"
+            else:
+                confidence = min(confidence, 55)
+                review_required = True
+                review_reason = (
+                    "规则法与大模型复核不一致，请人工确认（规则："
+                    f"{','.join(map(str, pages))}；大模型："
+                    f"{','.join(map(str, ai_pages))}）"
+                )
+        elif verify_with_llm and not ai_error:
+            confidence_basis += "；大模型复核未返回该表页码"
         evidence_parts = []
         if local and local.evidence:
             evidence_parts.append(local.evidence)
         if boundary_closed:
             evidence_parts.append("首尾项目已闭合，页码范围以项目边界为准")
-        if ai_pages:
+        if ai_pages and merge_ai_pages:
             evidence_parts.append(f"大模型页码推断：{','.join(map(str, ai_pages))}")
+        elif ai_pages:
+            evidence_parts.append(f"大模型复核页码：{','.join(map(str, ai_pages))}")
         if excluded_detail_pages:
             evidence_parts.append(
                 "已隔离非目标明细页："
@@ -1047,7 +1135,7 @@ def locate_tables_hybrid(
                 pages=pages,
                 score=max(
                     float(local.score) if local else 0.0,
-                    10.0 if ai_pages else 0.0,
+                    10.0 if merge_ai_pages else 0.0,
                     12.0 if visual_pages else 0.0,
                 ),
                 evidence="；".join(evidence_parts) or "未找到明确页码证据",
@@ -1062,18 +1150,34 @@ def locate_tables_hybrid(
                 },
                 strategy_id=str(table.get("strategy_id", "")),
                 table_config=dict(table),
+                confidence=int(confidence),
+                confidence_basis=confidence_basis,
             )
         )
     status_parts: list[str] = []
-    if low_text_pages:
+    if rule_mode:
         status_parts.append(
-            f"检测到{len(low_text_pages)}/{total_pages}个低文本页，已启用两阶段图片页码定位"
+            "已完成规则法定位：本地边界分析＋表格雷达＋目录换算"
+            + ("＋大模型复核" if verify_with_llm else "（未调用大模型）")
         )
-    if searchable_pages:
-        status_parts.append("已完成可检索页面语义推断与表格结构雷达复核")
+    else:
+        if low_text_pages:
+            status_parts.append(
+                f"检测到{len(low_text_pages)}/{total_pages}个低文本页，已启用两阶段图片页码定位"
+            )
+        if searchable_pages:
+            status_parts.append("已完成可检索页面语义推断与表格结构雷达复核")
+    if low_text_pages and rule_mode:
+        status_parts.append(
+            f"检测到{len(low_text_pages)}/{total_pages}个低文本页；规则法不读取图片页，"
+            "如结果为空请切换大模型法或人工填写页码"
+        )
     status_parts.append(directory_message)
     if ai_error:
-        status_parts.append(f"文本语义定位失败，已保留其他定位结果：{ai_error}")
+        if verify_with_llm:
+            status_parts.append(f"大模型复核失败，已保留规则法结果：{ai_error}")
+        else:
+            status_parts.append(f"文本语义定位失败，已保留其他定位结果：{ai_error}")
     if vision_errors:
         status_parts.append("图片页码定位部分失败：" + "；".join(vision_errors))
     conflict_count = sum(item.review_required for item in results)
