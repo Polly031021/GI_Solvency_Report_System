@@ -15,6 +15,7 @@ from .solvency_table_boundaries import (
     boundary_variants,
     end_item_groups,
     line_has_item,
+    text_has_item,
 )
 
 
@@ -258,7 +259,13 @@ def _single_row_tail_continuation(
 ) -> bool:
     """Recognize a final continuation page containing only one table row."""
     previous_widths = _numeric_widths(previous_text)
-    leading_lines = (text or "").splitlines()[:14]
+    # 只统计前 14 个非空行：稀疏文字层 PDF（扫描件、单元格式排版）的
+    # 页首常有多行空白，若按原始行序扫描会在第一个空行处提前中断。
+    leading_lines = [
+        line
+        for line in (text or "").splitlines()
+        if line.strip()
+    ][:14]
     compact_text = _compact(text)
     boundary_position = min(boundary_positions) if boundary_positions else len(compact_text)
     leading_widths: list[tuple[int, int]] = []
@@ -709,11 +716,20 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
             ]
             while len(selected) < max_pages:
                 previous_page = selected[-1][0]
-                terminal_terms = list(table.get("terminal_terms", []))
+                previous_text = page_texts[previous_page - 1]
+                # 表格自身的终止项必须按“行标签”匹配（允许带行次和数值）：
+                # S05 等表格的中间子行（如“非寿险业务保险风险最低资本合计”）
+                # 会包含终止词子串，但并不是表格真正的终止行；只有当终止项
+                # 作为独立行标签出现时，才允许据此停止续页扫描。
+                terminal_hits = [
+                    term
+                    for term in table.get("terminal_terms", [])
+                    if text_has_item(previous_text, str(term))
+                ]
                 if len(selected) > 1:
-                    terminal_terms.extend(table.get("stop_terms", []))
-                    terminal_terms.extend(other_titles)
-                terminal_hits = _term_hits(page_texts[previous_page - 1], terminal_terms)
+                    # 停止词和其他表标题是页面级边界信号，仍按子串匹配。
+                    terminal_hits.extend(_term_hits(previous_text, table.get("stop_terms", [])))
+                    terminal_hits.extend(_term_hits(previous_text, other_titles))
                 if terminal_hits:
                     break
                 next_page = previous_page + 1
