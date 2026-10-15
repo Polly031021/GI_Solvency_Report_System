@@ -102,6 +102,7 @@ from services.solvency_normalizer import (
 )
 from services.solvency_pdf_locator import (
     PageMatch,
+    analyze_document_type,
     extract_report_metadata,
     report_identity_warning,
 )
@@ -425,6 +426,7 @@ def new_state_defaults() -> dict[str, object]:
         "pdf_bytes": None,
         "pdf_name": "",
         "metadata": {},
+        "document_type_profile": None,
         "page_matches": [],
         "auto_page_matches": [],
         "raw_tables": [],
@@ -946,6 +948,12 @@ def check_company_report(
         }
     except Exception as exc:
         return {**base, "检查结果": "检查异常，需人工核对", "说明": str(exc)[:300]}
+
+
+@st.cache_data(show_spinner=False)
+def cached_analyze_document_type(pdf_bytes: bytes):
+    """Classify the uploaded PDF once per file; safe to cache on bytes."""
+    return analyze_document_type(pdf_bytes)
 
 
 @st.cache_data(show_spinner=False)
@@ -1521,6 +1529,12 @@ if is_project_member:
                 st.session_state.pdf_bytes = incoming
                 st.session_state.pdf_name = uploaded_pdf.name
                 st.session_state.metadata = extract_report_metadata(incoming)
+                try:
+                    st.session_state.document_type_profile = (
+                        cached_analyze_document_type(incoming)
+                    )
+                except Exception:
+                    st.session_state.document_type_profile = None
                 # --- 提取整份 PDF 文本，用于抓取注册资本等公司信息 ---
                 # ★ 双栏 PDF 的文本层会把标签和值分开排，注册资本常出现在第 3 页，
                 #   为兼容各种排版，这里一次性读全文档文本；对几十页的 PDF 也就
@@ -1593,30 +1607,111 @@ if is_project_member:
                     if name in table_config_by_name
                 ]
 
+                # --- 文档类型识别与定位方法推荐 ---
+                doc_profile = st.session_state.get("document_type_profile")
+                if doc_profile is not None:
+                    method_hint = (
+                        "规则法（离线，零模型调用）"
+                        if doc_profile.recommended_method == "RULE"
+                        else "大模型法（需要API Key）"
+                    )
+                    st.info(
+                        f"**文档类型：{doc_profile.label}**（可检索文本页 "
+                        f"{doc_profile.text_pages}/{doc_profile.total_pages}）\n\n"
+                        f"**推荐识别方法：{method_hint}**\n\n"
+                        f"{doc_profile.notes}"
+                    )
+                else:
+                    st.caption("未能识别文档类型，请手动选择定位方法。")
+
+                locator_method = st.radio(
+                    "定位方法",
+                    [
+                        "规则法（离线，零模型调用）",
+                        "大模型法（语义+视觉混合）",
+                    ],
+                    index=(
+                        0
+                        if doc_profile is None
+                        or doc_profile.recommended_method == "RULE"
+                        else 1
+                    ),
+                    key=f"locator_method_{active_profile.profile_id}",
+                    help=(
+                        "规则法只使用本地边界分析、表格雷达和目录换算，结果确定可复现；"
+                        "大模型法会调用登录页配置的模型，适合扫描版或版式异常报告。"
+                    ),
+                )
+                use_rule_mode = locator_method.startswith("规则法")
+                llm_credentials_ready = all(
+                    str(st.session_state.get(key, "")).strip()
+                    for key in ("llm_base_url", "llm_model", "llm_api_key")
+                )
+                llm_verify = False
+                if use_rule_mode:
+                    llm_verify = st.checkbox(
+                        "规则法完成后用大模型复核",
+                        value=False,
+                        key=f"locator_llm_verify_{active_profile.profile_id}",
+                        disabled=not llm_credentials_ready,
+                        help=(
+                            "规则法先独立出结果，再调用一次大模型交叉验证：一致则提升置信度，"
+                            "不一致则标记人工确认。未配置API Key时不可用。"
+                        ),
+                    )
+                    if not llm_credentials_ready:
+                        st.caption("当前未配置AI接口：规则法可正常使用，大模型复核不可用。")
+
                 configured_provider = st.session_state.get("llm_provider", "自定义节点")
                 configured_model = st.session_state.get("llm_model", "") or "未配置"
                 st.caption(
                     f"AI 配置来自登录页：{configured_provider} / {configured_model}。"
                     "Step1、Step2 与 Step7 共用该配置；如需更改，请退出后重新登录。"
                 )
-                if st.button(
+
+                method_needs_llm = (not use_rule_mode) or llm_verify
+                locate_clicked = st.button(
                     "启动智能定位",
                     type="primary",
                     key="locate_tables",
                     width="stretch",
-                ):
+                )
+                rescan_clicked = st.button(
+                    "重新扫描",
+                    key="rescan_locator",
+                    width="stretch",
+                    disabled=not st.session_state.auto_page_matches,
+                    help=(
+                        "清除当前定位结果并按上方设置重新扫描PDF；"
+                        "手工修改过的页码会被新结果覆盖，请重新核对。"
+                    ),
+                )
+                if rescan_clicked:
+                    st.session_state.auto_page_matches = []
+                    st.session_state.page_matches = []
+                    st.session_state.edited_pages = {}
+                    st.session_state.pages_confirmed = False
+                    for item in table_configs:
+                        st.session_state.pop(f"page_edit_{item['table_id']}", None)
+
+                if locate_clicked or rescan_clicked:
                     if not selected_configs:
                         st.error("请至少选择一张报表。")
-                    elif not all(
-                        str(st.session_state.get(key, "")).strip()
-                        for key in ("llm_base_url", "llm_model", "llm_api_key")
-                    ):
+                    elif method_needs_llm and not llm_credentials_ready:
                         st.error(
-                            "当前登录会话的 AI 配置不完整。请退出登录，在登录页填写 "
-                            "Base URL、模型名称和 API Key 后重新进入。"
+                            "当前定位方法需要AI配置。请退出登录，在登录页填写 "
+                            "Base URL、模型名称和 API Key 后重新进入；"
+                            "或切换为规则法（离线）。"
                         )
                     else:
-                        with st.spinner("正在检测PDF文字层并执行语义、结构与图片页码定位..."):
+                        spinner_text = (
+                            "正在执行规则法定位（本地边界分析+表格雷达+目录换算）..."
+                            if use_rule_mode
+                            else "正在检测PDF文字层并执行语义、结构与图片页码定位..."
+                        )
+                        if use_rule_mode and llm_verify:
+                            spinner_text = "规则法定位完成，正在调用大模型复核..."
+                        with st.spinner(spinner_text):
                             selected_feature_config = {
                                 **feature_config,
                                 "tables": selected_configs,
@@ -1628,6 +1723,8 @@ if is_project_member:
                                 base_url=st.session_state.llm_base_url,
                                 model=st.session_state.llm_model,
                                 profile_context=active_profile.locator_context(),
+                                mode="rule" if use_rule_mode else "hybrid",
+                                llm_verify=llm_verify,
                             )
                             st.session_state.auto_page_matches = matches
                             st.session_state.page_matches = matches
@@ -1642,7 +1739,7 @@ if is_project_member:
                         if located_count:
                             st.success(
                                 f"定位完成：{located_count}类目标已找到候选页。"
-                                "请结合右侧页面预览进行校准。"
+                                "请结合右侧页面预览和置信度提示进行校准。"
                             )
                         else:
                             st.warning("尚未自动找到目标页，请查看定位说明或直接填写物理页码。")
@@ -1690,11 +1787,33 @@ if is_project_member:
                                 sources=match.sources,
                                 strategy_id=match.strategy_id,
                                 table_config=match.table_config,
+                                confidence=match.confidence,
+                                confidence_basis=match.confidence_basis,
                             )
                         )
                         auto_text = ", ".join(map(str, match.pages)) if match.pages else "未自动找到"
                         evidence_text = match.evidence or "无明确关键词证据"
+                        confidence = int(getattr(match, "confidence", 0) or 0)
+                        confidence_basis = (
+                            getattr(match, "confidence_basis", "") or "未评估"
+                        )
+                        manual_override = bool(valid_pages) and valid_pages != match.pages
+                        confidence_status = (
+                            f"置信度 {confidence}%（{confidence_basis}）"
+                            if confidence
+                            else "置信度 0%（无自动定位证据，请手动填写）"
+                        )
+                        if manual_override:
+                            confidence_status += "｜已手动修改页码"
                         st.caption(f"自动定位：{auto_text}　|　识别依据：{evidence_text}")
+                        if confidence >= 85:
+                            st.success(confidence_status)
+                        elif confidence >= 65:
+                            st.info(confidence_status)
+                        elif confidence > 0:
+                            st.warning(confidence_status + "，建议人工确认。")
+                        else:
+                            st.error(confidence_status)
                         if match.review_required:
                             st.error(f"定位证据冲突：{match.review_reason}")
                         if invalid_values:
