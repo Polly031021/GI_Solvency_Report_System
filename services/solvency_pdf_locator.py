@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+import fitz
 import pdfplumber
 
 from .solvency_table_boundaries import (
@@ -29,9 +30,95 @@ class PageMatch:
     sources: dict[str, list[int]] = field(default_factory=dict)
     strategy_id: str = ""
     table_config: dict = field(default_factory=dict)
+    # 0-100. Boundary closure / multi-source agreement scores higher; pure
+    # radar fallback or LLM disagreement scores lower and require review.
+    confidence: int = 0
+    confidence_basis: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class DocumentTypeProfile:
+    """Searchable-text statistics used to recommend a locator method."""
+
+    doc_type: str  # TEXT / SCANNED / MIXED
+    label: str
+    total_pages: int
+    text_pages: int
+    low_text_pages: int
+    low_text_page_numbers: list[int]
+    median_text_chars: int
+    recommended_method: str  # RULE / LLM
+    recommendation: str
+    notes: str
+
+
+LOW_TEXT_MIN_CHARACTERS = 24
+
+
+def analyze_document_type(pdf_bytes: bytes) -> DocumentTypeProfile:
+    """Classify a PDF by text-layer coverage and recommend a locator method.
+
+    Text-layer coverage is deterministic and free: reports exported from Word
+    or with an OCR layer are suitable for the offline rule locator, while
+    image-only scans need vision-model support or manual page entry.
+    """
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    char_counts: list[int] = []
+    try:
+        for index in range(len(document)):
+            text = document.load_page(index).get_text() or ""
+            char_counts.append(len(re.sub(r"\s+", "", text)))
+    finally:
+        document.close()
+
+    total_pages = len(char_counts)
+    low_numbers = [
+        index + 1
+        for index, count in enumerate(char_counts)
+        if count < LOW_TEXT_MIN_CHARACTERS
+    ]
+    text_pages = total_pages - len(low_numbers)
+    ordered = sorted(char_counts)
+    median_chars = ordered[total_pages // 2] if total_pages else 0
+    ratio = (text_pages / total_pages) if total_pages else 0.0
+
+    if ratio >= 0.9:
+        doc_type, label = "TEXT", "文字版PDF"
+        method, recommendation = (
+            "RULE",
+            "推荐规则法（离线、零成本、结果可复现）",
+        )
+        notes = "全文档均有可检索文本层，关键词与表格结构信号充足。"
+    elif ratio <= 0.3:
+        doc_type, label = "SCANNED", "扫描版PDF"
+        method, recommendation = (
+            "LLM",
+            "推荐大模型法（需要视觉识别无文字层页面）",
+        )
+        notes = "大部分页面无可检索文本，规则法只能依赖目录页换算。"
+    else:
+        doc_type, label = "MIXED", "混合版PDF"
+        method, recommendation = (
+            "RULE",
+            "推荐规则法并开启大模型复核（部分页面无文字层）",
+        )
+        notes = "主体页面可检索，但存在少量图片页或空白页。"
+
+    return DocumentTypeProfile(
+        doc_type=doc_type,
+        label=label,
+        total_pages=total_pages,
+        text_pages=text_pages,
+        low_text_pages=len(low_numbers),
+        low_text_page_numbers=low_numbers,
+        median_text_chars=median_chars,
+        recommended_method=method,
+        recommendation=recommendation,
+        notes=notes,
+    )
 
 
 def load_page_features(path: str | Path) -> dict:

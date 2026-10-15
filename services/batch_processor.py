@@ -311,6 +311,10 @@ def process_one_pdf_bytes(
                         sources=_m.sources,
                         strategy_id=_m.strategy_id,
                         table_config=_m.table_config,
+                        # 人工确认页码是最高优先级证据，保留自动定位的
+                        # 原始置信度供结果表展示，依据注明为人工确认。
+                        confidence=_m.confidence,
+                        confidence_basis="人工确认页码",
                     ))
                 else:
                     _new_matches.append(_m)
