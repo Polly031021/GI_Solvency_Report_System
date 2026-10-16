@@ -69,55 +69,6 @@ def preferred_period_scope(frame: pd.DataFrame, requested: str = "") -> str:
     return available[0] if available else ""
 
 
-def profile_platform_copy(
-    profile_id: str,
-    profile_name: str,
-    frequency: str,
-) -> tuple[str, str]:
-    profile_text = f"{profile_id} {profile_name}".lower()
-    if "non_life" in profile_text or "财产" in profile_text or "财险" in profile_text:
-        sector = "财产险公司"
-    elif "life" in profile_text or "寿险" in profile_text or "人身" in profile_text:
-        sector = "人身险公司"
-    else:
-        clean_name = str(profile_name or "保险公司").replace("季度报告", "").replace("年度报告", "").strip()
-        sector = clean_name or "保险公司"
-
-    annual = str(frequency or "").upper() == "ANNUAL" or "年报" in profile_text or "年度报告" in profile_text
-    if annual:
-        report_label = "年度报告"
-        database_label = "年度报告数据库"
-    else:
-        report_label = "偿付能力"
-        database_label = "偿付能力季度报告数据库"
-    return (
-        f"{sector}{report_label}信息分享",
-        f"中国{sector}{database_label}",
-    )
-
-
-def format_period_label(periods: Iterable[object]) -> str:
-    ordered = sort_report_periods(periods)
-    if not ordered:
-        return "-"
-    if len(ordered) == 1:
-        return ordered[0]
-    if len(ordered) <= 3:
-        return "、".join(ordered)
-    return f"{ordered[0]}–{ordered[-1]}"
-
-
-def format_target_label(targets: Iterable[object] | str) -> str:
-    if isinstance(targets, str):
-        return targets.strip() or "全部公司"
-    values = [str(value).strip() for value in targets if str(value).strip()]
-    if not values:
-        return "全部公司"
-    if len(values) <= 3:
-        return "、".join(values)
-    return f"{len(values)} 家公司"
-
-
 @lru_cache(maxsize=8)
 def _image_data_uri(path_value: str) -> str:
     path = Path(path_value)
@@ -125,82 +76,6 @@ def _image_data_uri(path_value: str) -> str:
         return ""
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
-
-
-def build_dashboard_header_html(
-    *,
-    title: str,
-    database_name: str,
-    report_period: str,
-    period_scope: str,
-    company_count: int,
-    target: str,
-    image_path: str | Path,
-) -> str:
-    image_uri = _image_data_uri(str(Path(image_path).resolve()))
-    background = (
-        f"url('{image_uri}')"
-        if image_uri
-        else "linear-gradient(90deg, #1525ff 0%, #1525ff 67%, #071b69 67%, #071b69 100%)"
-    )
-    safe_title = html.escape(str(title))
-    details = (
-        f"{database_name}　·　报告期：{report_period or '-'}　·　"
-        f"口径：{period_scope or '-'}　·　{int(company_count):,} 家公司　·　"
-        f"目标：{target or '全部公司'}"
-    )
-    safe_details = html.escape(details)
-    return f"""
-    <style>
-      .solvency-dashboard-hero {{
-        min-height: 178px;
-        box-sizing: border-box;
-        display: flex;
-        align-items: center;
-        padding: 32px 34px;
-        margin: 0 0 18px 0;
-        border-radius: 8px;
-        background-image: {background};
-        background-size: 100% auto;
-        background-position: center top;
-        background-repeat: no-repeat;
-        color: #ffffff;
-      }}
-      .solvency-dashboard-hero__content {{
-        width: 72%;
-      }}
-      .solvency-dashboard-hero__title {{
-        margin: 0 0 16px 0;
-        color: #ffffff !important;
-        font-size: clamp(25px, 2.6vw, 40px);
-        line-height: 1.2;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-      }}
-      .solvency-dashboard-hero__details {{
-        margin: 0;
-        color: #ffffff !important;
-        font-size: clamp(12px, 1.15vw, 16px);
-        line-height: 1.6;
-        font-weight: 500;
-      }}
-      @media (max-width: 760px) {{
-        .solvency-dashboard-hero {{ min-height: 150px; padding: 24px; }}
-        .solvency-dashboard-hero__content {{ width: 78%; }}
-      }}
-    </style>
-    <section class="solvency-dashboard-hero" aria-label="{safe_title}">
-      <div class="solvency-dashboard-hero__content">
-        <div
-          class="solvency-dashboard-hero__title"
-          role="heading"
-          aria-level="1"
-          style="color: #ffffff !important;"
-        >{safe_title}</div>
-        <p class="solvency-dashboard-hero__details" style="color: #ffffff !important;">{safe_details}</p>
-      </div>
-    </section>
-    """
 
 
 def build_report_cover_html(
@@ -373,41 +248,6 @@ def render_report_footnote(note: dict[str, str] | None) -> None:
             f'<p class="solvency-report-footnote">注：{html.escape(text)}</p>',
             unsafe_allow_html=True,
         )
-
-
-def render_dashboard_header(
-    placeholder,
-    data: pd.DataFrame | None,
-    *,
-    profile_id: str,
-    profile_name: str,
-    frequency: str,
-    image_path: str | Path,
-    periods: Iterable[object] = (),
-    period_scope: str = "",
-    targets: Iterable[object] | str = (),
-) -> None:
-    title, database_name = profile_platform_copy(profile_id, profile_name, frequency)
-    detail = company_detail_rows(data)
-    company_count = int(_text_series(detail, "公司").nunique()) if not detail.empty else 0
-    available_periods = periods or _text_series(detail, "报告期").tolist()
-    report_period = format_period_label(available_periods)
-    if not period_scope and not detail.empty:
-        selected_period = sort_report_periods(_text_series(detail, "报告期").tolist())
-        period_frame = detail[
-            _text_series(detail, "报告期").eq(selected_period[-1])
-        ] if selected_period else detail
-        period_scope = preferred_period_scope(period_frame)
-    header_html = build_dashboard_header_html(
-        title=title,
-        database_name=database_name,
-        report_period=report_period,
-        period_scope=period_scope,
-        company_count=company_count,
-        target=format_target_label(targets),
-        image_path=image_path,
-    )
-    placeholder.html(header_html, width="stretch")
 
 
 def calculate_industry_overview(

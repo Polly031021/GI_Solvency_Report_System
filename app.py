@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-# Incremented when Step7 filter state handling changes. Keeping the revision in
-# the entry point makes Streamlit reload the active session without restarting
-# the server or discarding the user's integrated data.
-STEP7_FILTER_RUNTIME_REVISION = 3
-
 import dataclasses
 import io
 import zipfile
@@ -607,48 +602,6 @@ def llm_credentials_ready() -> bool:
     return all(
         str(st.session_state.get(key, "")).strip()
         for key in ("llm_base_url", "llm_model", "llm_api_key")
-    )
-
-
-@st.cache_data(show_spinner=False)
-def read_companies(
-    source_path: str,
-    sheet_name: str,
-    header: int,
-    company_column: str,
-    company_type_column: str,
-    report_url_column: str,
-) -> pd.DataFrame:
-    companies = pd.read_excel(
-        source_path,
-        sheet_name=sheet_name,
-        header=header,
-    )
-    required = [company_column, company_type_column, report_url_column]
-    missing = [column for column in required if column not in companies.columns]
-    if missing:
-        raise ValueError(f"公司网址配置缺少字段：{', '.join(missing)}")
-    return _finalize_company_frame(
-        companies[required],
-        {
-            company_column: "公司",
-            company_type_column: "公司类别",
-            report_url_column: "报告披露地址",
-        },
-    )
-
-
-def prepare_embedded_companies(profile: ReportProfile) -> pd.DataFrame:
-    companies = profile.company_frame()
-    if companies.empty:
-        return companies
-    return _finalize_company_frame(
-        companies,
-        {
-            str(profile.monitoring["company_name_column"]): "公司",
-            str(profile.monitoring["company_type_column"]): "公司类别",
-            str(profile.monitoring["report_url_column"]): "报告披露地址",
-        },
     )
 
 
@@ -1742,7 +1695,7 @@ def render_locator_tab(active_profile: ReportProfile) -> None:
                     for _i in range(len(doc))
                 )
                 doc.close()
-            except Exception as e:
+            except Exception:
                 st.session_state.metadata["first_page_text"] = ""
             # ----------------------------------------------------------
             _clear_page_locations()
@@ -1978,8 +1931,6 @@ def build_tables_from_page_results(
 
         # ★ 先提取页码信息（供下方单位嗅探使用）
         extracted_pages_int = [item[0] for item in page_dfs]
-        extracted_pages_str = [str(p) for p in extracted_pages_int]
-        pages_concat = ",".join(extracted_pages_str)
 
         # ★ 修复：item[2] 是 AI 提取日志，不是 PDF 原文。
         raw_texts = []
@@ -2032,8 +1983,7 @@ def build_tables_from_page_results(
 
 
         header_row = [str(c).strip() for c in raw_rows[_header_idx]]
-        # 表头行之前的内容（说明文字、章节标题）另存，不进数据区
-        preamble_rows = raw_rows[:_header_idx]
+        # 表头行之前的内容（说明文字、章节标题）不进入数据区
         data_rows = raw_rows[_header_idx + 1:]
         # 去掉后续页重复的表头行
         data_rows = [row for row in data_rows if row != raw_rows[_header_idx]]
@@ -2175,7 +2125,7 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
     total = len(tasks)
     results = {}  # table_id -> list of DataFrames
     logs = []
-    with st.status("正在并发提取各页面...", expanded=True) as status:
+    with st.status("正在并发提取各页面...", expanded=True):
         # 根据是否强制图片模式选择引擎
         use_vision = st.session_state.force_vision_mode
         max_workers = 4  # 可调节
@@ -3909,7 +3859,6 @@ def render_analysis_tab(
         visualization_metric_frame(source),
         COMPANY_REPORT,
     )
-    available_metric_codes = navigation_metric_codes(navigation_source)
     industry_navigation_source = report_scope_frame(
         visualization_metric_frame(source),
         INDUSTRY_REPORT,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -120,11 +119,6 @@ def analyze_document_type(pdf_bytes: bytes) -> DocumentTypeProfile:
         recommendation=recommendation,
         notes=notes,
     )
-
-
-def load_page_features(path: str | Path) -> dict:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def extract_page_texts(pdf_bytes: bytes) -> list[str]:

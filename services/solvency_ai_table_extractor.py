@@ -12,8 +12,6 @@ import fitz
 import pandas as pd
 import pdfplumber
 import requests
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
 
 from .llm_config import model_request_parameters, normalize_model_id
 from .llm_http import post_json_with_retry
@@ -1293,17 +1291,6 @@ def recover_minimum_capital_terminal_rows_core(
     )
 
 
-def recover_minimum_capital_terminal_rows(
-    table_id: str,
-    rows: list[list[str]],
-    grids: list[PageGrid] | None,
-) -> tuple[list[list[str]], str]:
-    """Backward-compatible table-aware entry point."""
-    if table_id != "MINIMUM_CAPITAL":
-        return rows, ""
-    return recover_minimum_capital_terminal_rows_core(table_id, rows, grids)
-
-
 def _source_completeness_profile_core(
     table_id: str,
     grids: list[PageGrid] | None,
@@ -2380,44 +2367,3 @@ def extraction_logs_frame(logs: list[ExtractionLog]) -> pd.DataFrame:
     return pd.DataFrame([item.to_dict() for item in logs], columns=columns)
 
 
-def reconstructed_workbook_bytes(bundle: AIExtractionBundle) -> bytes:
-    output = io.BytesIO()
-    used: set[str] = {"提取日志"}
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        extraction_logs_frame(bundle.logs).to_excel(writer, sheet_name="提取日志", index=False)
-        unit_frames = [
-            table.units_frame() for table in bundle.tables if table.unit_records
-        ]
-        if unit_frames:
-            unit_sheet = "\u5355\u4f4d\u4fe1\u606f"
-            pd.concat(unit_frames, ignore_index=True).to_excel(writer, sheet_name=unit_sheet, index=False)
-            used.add(unit_sheet)
-        for table in bundle.tables:
-            pages = table.source_pages or [table.page]
-            page_label = str(pages[0]) if len(pages) == 1 else f"{pages[0]}-{pages[-1]}"
-            base = re.sub(r"[\\/*?:\[\]]", "", f"{table.table_name}_P{page_label}")[:31] or "Table"
-            name, suffix = base, 1
-            while name in used:
-                suffix += 1
-                name = f"{base[:27]}_{suffix}"
-            used.add(name)
-            table.to_frame(include_unit_footer=True).to_excel(writer, sheet_name=name, index=False, header=False)
-
-        fill = PatternFill("solid", fgColor="00338D")
-        font = Font(color="FFFFFF", bold=True)
-        unit_fill = PatternFill("solid", fgColor="FFF2CC")
-        unit_footer_label = "\u3010\u5355\u4f4d\u5907\u6ce8\u3011"
-        for sheet in writer.book.worksheets:
-            sheet.freeze_panes = "A2"
-            for cell in sheet[1]:
-                cell.fill, cell.font = fill, font
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            for row in sheet.iter_rows():
-                if row and row[0].value == unit_footer_label:
-                    for cell in row:
-                        cell.fill = unit_fill
-                        cell.alignment = Alignment(vertical="top", wrap_text=True)
-            for index, cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
-                length = max((len(str(cell.value or "")) for cell in cells), default=8)
-                sheet.column_dimensions[get_column_letter(index)].width = min(max(length + 2, 10), 42)
-    return output.getvalue()

@@ -1292,12 +1292,6 @@ def _parse_pipe_rows_with_shape(content: str) -> tuple[list[list[str]], float]:
     return padded, ragged_rows / max(len(rows), 1)
 
 
-def _parse_pipe_rows(content: str) -> list[list[str]]:
-    """Backward-compatible parser used by utility callers."""
-    rows, _ = _parse_pipe_rows_with_shape(content)
-    return rows
-
-
 def _row_text(row: list[str]) -> str:
     return _compact("".join(row))
 
