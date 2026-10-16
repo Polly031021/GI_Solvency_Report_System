@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from services.solvency_step7_charts import build_capital_efficiency_bubble_chart
-from services.solvency_step7_charts import capital_efficiency_bubble_default_domain
-from services.solvency_step7_charts import combine_capital_efficiency_bubble_charts
-from services.solvency_step7_charts import combine_linked_matrix_charts
-from services.solvency_step7_charts import build_matrix_chart
-from services.solvency_step7_charts import risk_ratio_scatter_default_domain
+from services.solvency_step7_charts import (
+    build_capital_efficiency_bubble_chart,
+    capital_efficiency_bubble_default_domain,
+    combine_capital_efficiency_bubble_charts,
+    combine_linked_matrix_charts,
+    build_matrix_chart,
+    risk_ratio_scatter_default_domain,
+)
 
 from .selection import bubble_company_color_map
 from .specs import (

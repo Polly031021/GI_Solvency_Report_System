@@ -5,8 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import requests
 import streamlit as st
-from services.llm_config import model_request_parameters
-from services.llm_config import normalize_model_id
+from services.llm_config import model_request_parameters, normalize_model_id
 from services.llm_http import post_json_with_retry
 from services.solvency_step6_analysis import format_chart_value
 
