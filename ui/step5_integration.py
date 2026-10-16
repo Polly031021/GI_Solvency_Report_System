@@ -82,6 +82,8 @@ def _preview_external_uploads(
 ) -> None:
     """STEP5：外部宽表精确映射并生成集成预览。"""
     try:
+        # 只用互斥的“公司类别”映射公司类型；“是否上市”是会与“前十大”重合的叠加标签，
+        # 一旦混入会让同一家公司在 STEP6/STEP8 的分组里被重复统计，故此处刻意排除。
         company_type_map = dict(zip(companies["公司"], companies["公司类别"]))
         company_type_items = tuple(sorted(company_type_map.items()))
         with st.spinner(f"正在转换 {len(uploads)} 个宽表文件…"):
