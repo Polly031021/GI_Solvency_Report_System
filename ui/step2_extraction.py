@@ -11,21 +11,37 @@ import fitz
 import pandas as pd
 import streamlit as st
 from services.report_profiles import ReportProfile
-from services.solvency_ai_table_extractor import extraction_logs_frame
+from services.solvency_ai_table_extractor import PageGrid, build_pdf_grids, extraction_logs_frame
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
 from services.solvency_normalizer import STANDARD_COLUMNS
 from services.batch_extraction import (
     FlexibleTable,
-    convert_table_rows_to_wan,
     detect_table_unit,
-    extract_single_page,
-    extract_single_page_vision,
     sanitize_scalar,
+)
+from services.solvency_rule_table_extractor import (
+    DEFAULT_METHOD,
+    ENGINE_LLM_TEXT,
+    ENGINE_LLM_VISION,
+    ENGINE_LABELS,
+    ENGINE_RULE,
+    METHOD_OPTIONS,
+    MODE_AUTO,
+    MODE_LLM,
+    MODE_RULE,
+    MODE_VISION,
+    extract_page_with_method,
+    page_has_searchable_text,
+    preview_page_engine,
 )
 
 from .cache import read_gold_manifest, render_pdf_page
 from .helpers import dedupe_column_names
 from .session import llm_credentials_ready
+
+
+# 逐页并发提取的线程数：规则法为纯本地解析，大模型法受平台限流约束。
+EXTRACTION_MAX_WORKERS = 4
 
 
 # ---- 跨页表格合并：表头识别与单位换算 ----
@@ -118,7 +134,12 @@ def normalize_table_unit(
     table_id: str,
     pages: list[int],
 ) -> tuple[list[list], str]:
-    """嗅探表格单位并换算为万元；单位不可识别时按数值量级兜底。"""
+    """嗅探并记录表格单位；数值保持原文不变，单位换算统一交给 STEP3。
+
+    STEP2 只忠实还原原文数值与单位：8,393,334,151.18 元就保留为
+    8,393,334,151.18（元），不再除以 10000。否则会把千分位丢光、小数点
+    左移四位，出现 839333.415118 这种看起来像识别错误的数字。
+    """
     table_unit = detect_table_unit(grid)
     # ★ 仅在原逻辑失败（table_unit 为空）时扩大到全文，避免被其他页的“万元”误命中
     if not table_unit and combined_raw_text:
@@ -133,38 +154,18 @@ def normalize_table_unit(
                     "detected": table_unit,
                 }
             )
-
-    if table_unit and table_unit != "万元":
-        grid = convert_table_rows_to_wan(grid, table_unit)
-        if table_unit in {"元", "千元"}:
-            table_unit = "万元"
-    elif grid and len(grid) > 1:
-        value_cols = [
-            index
-            for index, header in enumerate(grid[0])
-            if isinstance(header, str)
-            and any(
-                key in header
-                for key in ["本季度末", "上季度末", "期末", "期初", "本季度数", "本年累计"]
-            )
-        ]
-        for row in range(1, len(grid)):
-            for column in value_cols:
-                if column < len(grid[row]) and grid[row][column]:
-                    try:
-                        raw = str(grid[row][column]).replace(",", "")
-                        value = float(raw)
-                        if abs(value) > 1e12:
-                            grid[row][column] = str(value / 10000)
-                    except (ValueError, TypeError):
-                        pass
     return grid, table_unit
 
 
 def build_tables_from_page_results(
-    results: dict[str, list[tuple]], use_vision: bool
+    results: dict[str, list[tuple]],
+    mode_by_page: dict[int, str] | None = None,
 ) -> list[FlexibleTable]:
-    """把逐页提取结果按目标表拼接，并做表头归一、单位换算。"""
+    """把逐页提取结果按目标表拼接，并做表头归一、单位换算。
+
+    ``mode_by_page`` 记录每个物理页实际使用的引擎，仅用于中间表说明。
+    """
+    mode_by_page = dict(mode_by_page or {})
     raw_tables = []
     for table_id, page_dfs in results.items():
         if not page_dfs:
@@ -332,6 +333,34 @@ def build_tables_from_page_results(
         )
 
         # ---------- 创建 FlexibleTable ----------
+        # ★ 中间表说明：如实标注本表各页用到的引擎（规则法/大模型文本/大模型视觉）
+        table_modes = [
+            mode_by_page.get(page, "")
+            for page in extracted_pages_int
+            if mode_by_page.get(page)
+        ]
+        unique_modes = tuple(dict.fromkeys(table_modes))
+        if not unique_modes:
+            strategy_label = "并发提取"
+        elif len(unique_modes) == 1:
+            strategy_label = f"并发·{unique_modes[0]}"
+        else:
+            strategy_label = "并发·" + "+".join(unique_modes)
+
+        def captured_frame(
+            *_args,
+            _df=df_captured,
+            _unit=table_unit,
+            **_kwargs,
+        ) -> pd.DataFrame:
+            """STEP2 快照：可选附带单位备注行，避免数值换了单位却无标注。"""
+            if not _kwargs.get("include_unit_footer") or not _unit or _unit == "未识别":
+                return _df
+            width = _df.shape[1]
+            footer = ["【单位备注】", f"单位：{_unit}"] + [""] * max(0, width - 2)
+            footer_frame = pd.DataFrame([footer[:width]], columns=_df.columns)
+            return pd.concat([_df, footer_frame], ignore_index=True)
+
         table_obj = FlexibleTable(
             table_id=table_id,
             table_name=next(
@@ -341,8 +370,8 @@ def build_tables_from_page_results(
             page=extracted_pages_int[0] if extracted_pages_int else 1,
             source_pages=list(extracted_pages_int),
             rows=grid,
-            to_frame=lambda *args, df=df_captured, **kwargs: df,  # 使用 df_captured
-            strategy="并发" + ("视觉" if use_vision else "文本"),
+            to_frame=captured_frame,
+            strategy=strategy_label,
             quality_score=1.0,
             evidence="",
             table_config=safe_table_config,
@@ -371,7 +400,7 @@ def _store_extraction_result(logs: list[dict], raw_tables: list[FlexibleTable]) 
 
             # 2. 写入每个表格（独立 Sheet）
             for table in raw_tables:
-                df = table.to_frame()
+                df = table.to_frame(include_unit_footer=True)
                 if df.empty:
                     continue
                 # 清理表名
@@ -398,113 +427,523 @@ def _store_extraction_result(logs: list[dict], raw_tables: list[FlexibleTable]) 
         st.session_state.ai_workbook_bytes = b""
 
 
-def extraction_log_entry(task: dict, use_vision: bool, status: str, note: str) -> dict:
+def extraction_log_entry(task: dict, mode_label: str, status: str, note: str) -> dict:
     """构造一行逐页提取日志。"""
     return {
         "目标表": task["table_name"],
         "物理页码": task["page"],
-        "识别方式": "视觉" if use_vision else "文本",
+        "识别方式": mode_label,
         "状态": status,
         "说明": note,
     }
 
 
+def _cached_page_grids(pages: list[int]) -> dict[int, PageGrid]:
+    """按页取文字网格（带会话缓存）；网格既是规则法的质量门禁依据，
+    也是判断该页能否走规则法的信号。"""
+    cache: dict = st.session_state.extraction_grid_cache
+    lock: Lock = st.session_state.extraction_cache_lock
+    ordered = sorted({int(page) for page in pages})
+    with lock:
+        missing = [page for page in ordered if page not in cache]
+        if missing:
+            try:
+                for grid in build_pdf_grids(st.session_state.pdf_bytes, missing):
+                    cache.setdefault(grid.page_number, grid)
+            except Exception:
+                pass
+        return {page: cache[page] for page in ordered if page in cache}
+
+
+def _extraction_tasks(matches: list | None = None) -> list[dict]:
+    """把已确认页码展开成逐页任务；任务携带表的策略与配置供质量门禁使用。"""
+    tasks: list[dict] = []
+    for match in matches if matches is not None else st.session_state.page_matches:
+        table_config = match.table_config if isinstance(match.table_config, dict) else {}
+        for page_number in sorted({int(page) for page in match.pages}):
+            tasks.append(
+                {
+                    "table_id": match.table_id,
+                    "table_name": match.table_name,
+                    "page": page_number,
+                    "table_config": table_config,
+                    "strategy_id": getattr(match, "strategy_id", "") or "",
+                }
+            )
+    return tasks
+
+
+def page_text_flags(pages: list[int]) -> dict[int, bool]:
+    """判断每个物理页能否走规则法。
+
+    优先复用 STEP1 的文档类型结论（基于全文档文字层字符数）；没有结论时
+    退回本地文字网格的字数判断，保持与提取引擎同一口径。
+    """
+    ordered = sorted({int(page) for page in pages})
+    flags: dict[int, bool] = {}
+    profile = st.session_state.get("document_type_profile")
+    if profile is not None and int(getattr(profile, "total_pages", 0) or 0) > 0:
+        low_text = {int(page) for page in getattr(profile, "low_text_page_numbers", []) or []}
+        for page in ordered:
+            flags[page] = page not in low_text
+        return flags
+    grids = _cached_page_grids(ordered)
+    for page in ordered:
+        flags[page] = page_has_searchable_text(grids.get(page))
+    return flags
+
+
+def run_page_tasks(
+    tasks: list[dict],
+    method: str,
+    *,
+    progress_callback=None,
+    allow_llm_fallback: bool = True,
+) -> tuple[dict, list[dict], dict[int, str]]:
+    """并发执行逐页提取。
+
+    返回 ``(按目标表分组的结果, 日志行, 页码→引擎标签)``；结果结构保持与
+    历史实现一致，供 ``build_tables_from_page_results`` 直接消费。
+    """
+    grids = _cached_page_grids([task["page"] for task in tasks])
+    text_flags = page_text_flags([task["page"] for task in tasks])
+    regions: dict[str, tuple[float, float, float, float]] = {}
+    results: dict[str, list[tuple]] = {}
+    logs: list[dict] = []
+    mode_by_page: dict[int, str] = {}
+    total = len(tasks)
+    completed = 0
+    with ThreadPoolExecutor(max_workers=EXTRACTION_MAX_WORKERS) as executor:
+        future_to_task = {
+            executor.submit(
+                extract_page_with_method,
+                pdf_bytes=st.session_state.pdf_bytes,
+                page_number=task["page"],
+                table_id=task["table_id"],
+                table_name=task["table_name"],
+                method=method,
+                grid=grids.get(task["page"]),
+                has_text=text_flags.get(task["page"]),
+                table_config=task.get("table_config") or {},
+                strategy_id=task.get("strategy_id") or None,
+                api_key=st.session_state.llm_api_key,
+                base_url=st.session_state.llm_base_url,
+                model=st.session_state.llm_model,
+                auto_vision_retry=bool(st.session_state.auto_vision_retry),
+                allow_llm_fallback=allow_llm_fallback,
+            ): task
+            for task in tasks
+        }
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total, task)
+            try:
+                outcome = future.result()
+            except Exception as exc:
+                logs.append(
+                    extraction_log_entry(task, "未识别", "失败", f"逐页任务异常：{exc}")
+                )
+                continue
+            label = outcome.mode_label
+            mode_by_page[task["page"]] = label
+            if outcome.region is not None:
+                regions[f"{task['table_id']}:{task['page']}"] = outcome.region.bbox
+            if outcome.succeeded:
+                results.setdefault(task["table_id"], []).append(
+                    (task["page"], outcome.frame, outcome.note)
+                )
+                logs.append(extraction_log_entry(task, label, "成功", outcome.note[:400]))
+            else:
+                logs.append(extraction_log_entry(task, label, "失败", outcome.note[:400]))
+            if outcome.repairs:
+                st.session_state.extraction_number_repairs.extend(
+                    {
+                        "目标表": task["table_name"],
+                        "物理页码": task["page"],
+                        "修补": note,
+                    }
+                    for note in outcome.repairs
+                )
+            if outcome.reviews:
+                st.session_state.extraction_number_reviews.extend(
+                    {
+                        "目标表": task["table_name"],
+                        "物理页码": task["page"],
+                        "待核对": note,
+                    }
+                    for note in outcome.reviews
+                )
+    if regions:
+        st.session_state.extraction_regions.update(regions)
+    return results, logs, mode_by_page
+
+
+def _engine_summary(mode_by_page: dict[int, str]) -> str:
+    """把各页使用的引擎汇总成一句说明，突出节省的模型调用。"""
+    counts: dict[str, int] = {}
+    for label in mode_by_page.values():
+        counts[label] = counts.get(label, 0) + 1
+    parts = [f"{label} {count} 页" for label, count in counts.items()]
+    rule_pages = counts.get(ENGINE_LABELS[ENGINE_RULE], 0)
+    if rule_pages:
+        parts.append(f"规则法已为本次提取节省 {rule_pages} 次模型调用")
+    return "；".join(parts)
+
+
 def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
     """STEP2：并发提取各页、合并跨页表格并生成工作簿。"""
+    del active_profile  # Profile 已通过 task 内的表配置传入
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(tasks)
-    results = {}  # table_id -> list of DataFrames
-    logs = []
-    with st.status("正在并发提取各页面...", expanded=True):
-        # 根据是否强制图片模式选择引擎
-        use_vision = st.session_state.force_vision_mode
-        max_workers = 4  # 可调节
+    method = st.session_state.extraction_method or DEFAULT_METHOD
+    allow_llm_fallback = bool(st.session_state.allow_llm_fallback)
+    st.session_state.extraction_number_repairs = []
+    st.session_state.extraction_number_reviews = []
+    st.session_state.extraction_regions = {}
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_task = {}
-            for task in tasks:
-                if use_vision:
-                    future = executor.submit(
-                        extract_single_page_vision,
-                        st.session_state.pdf_bytes,
-                        task["page"],
-                        task["table_name"],
-                        st.session_state.llm_api_key,
-                        st.session_state.llm_base_url,
-                        st.session_state.llm_model,
-                    )
-                else:
-                    future = executor.submit(
-                        extract_single_page,
-                        st.session_state.pdf_bytes,
-                        task["page"],
-                        task["table_name"],
-                        st.session_state.llm_api_key,
-                        st.session_state.llm_base_url,
-                        st.session_state.llm_model,
-                    )
-                future_to_task[future] = task
+    def report(completed: int, total_pages: int, task: dict) -> None:
+        progress_bar.progress(completed / max(total_pages, 1))
+        status_text.text(
+            f"已处理 {completed}/{total_pages} 页：{task['table_name']} 第 {task['page']} 页"
+        )
 
-            completed = 0
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                df, log = future.result()
-                completed += 1
-                progress_bar.progress(completed / total)
-                status_text.text(
-                    f"已处理 {completed}/{total} 页：{task['table_name']} 第 {task['page']} 页"
-                )
-
-                if df is not None and not df.empty:
-                    table_id = task["table_id"]
-                    if table_id not in results:
-                        results[table_id] = []
-                    # ★ 把 raw_text 一起存进去，用于单位嗅探
-                    results[table_id].append((task["page"], df, log))
-                    logs.append(
-                        extraction_log_entry(task, use_vision, "成功", f"提取到 {len(df)} 行数据")
-                    )
-                else:
-                    logs.append(
-                        extraction_log_entry(
-                            task, use_vision, "失败", log[:200] if log else "无数据返回"
-                        )
-                    )
-        raw_tables = build_tables_from_page_results(results, use_vision)
+    with st.status("正在并发提取各页面...", expanded=True) as status_box:
+        status_box.write(f"提取方式：{method}")
+        results, logs, mode_by_page = run_page_tasks(
+            tasks,
+            method,
+            progress_callback=report,
+            allow_llm_fallback=allow_llm_fallback,
+        )
+        raw_tables = build_tables_from_page_results(results, mode_by_page)
         _store_extraction_result(logs, raw_tables)
+        status_box.write(_engine_summary(mode_by_page))
     failed_count = sum(1 for log in logs if log["状态"] == "失败")
     if failed_count:
-        st.warning(f"有 {failed_count} 页提取失败，请查看下方日志。")
+        st.warning(
+            f"有 {failed_count} 页提取失败，请查看下方日志；"
+            "可在“中间表编辑与重新提取”中单独重跑失败的表。"
+        )
     else:
         st.success("所有页面提取成功！")
+
+
+def method_requires_credentials(method: str) -> bool:
+    """纯大模型/纯图片方式必须有 AI 配置；规则法与智能模式可离线启动。"""
+    return method in {MODE_LLM, MODE_VISION}
 
 
 def _render_extraction_launcher(active_profile: ReportProfile) -> None:
     """STEP2：提取按钮、前置校验与任务编排。"""
     if st.button("开始智能提取", type="primary", key="extract_tables"):
-        if not llm_credentials_ready():
+        method = st.session_state.extraction_method or DEFAULT_METHOD
+        credentials_ready = llm_credentials_ready()
+        if method_requires_credentials(method) and not credentials_ready:
             st.error(
-                "当前登录会话的 AI 配置不完整。请退出登录，在登录页填写 "
-                "Base URL、模型名称和 API Key 后重新进入。"
+                "当前提取方式需要 AI 配置。请退出登录，在登录页填写 "
+                "Base URL、模型名称和 API Key 后重新进入；"
+                "或改用“智能模式/全部规则法”，文字版报告可完全离线提取。"
             )
+            return
+        if method == MODE_AUTO and not credentials_ready:
+            st.info(
+                "当前未配置 AI 接口：文字版页面将用规则法提取，"
+                "扫描版页面会被跳过并写入日志。"
+            )
+        tasks = _extraction_tasks()
+        if not tasks:
+            st.warning("没有需要提取的页面，请确认页码配置。")
         else:
-            # 准备任务列表
-            tasks = []
-            for match in st.session_state.page_matches:
-                for page_num in match.pages:
-                    tasks.append(
-                        {
-                            "table_id": match.table_id,
-                            "table_name": match.table_name,
-                            "page": page_num,
-                        }
-                    )
+            _run_extraction(active_profile, tasks)
 
-            if not tasks:
-                st.warning("没有需要提取的页面，请确认页码配置。")
-            else:
-                _run_extraction(active_profile, tasks)
+
+def _normalized_rows(rows) -> list[list[str]]:
+    """把任意二维数据规整为等宽字符串行，便于与编辑器结果比较。"""
+    width = max((len(row) for row in rows), default=0)
+    return [
+        ["" if cell is None else str(cell).strip() for cell in row]
+        + [""] * (width - len(row))
+        for row in rows
+    ]
+
+
+def rows_to_frame(rows) -> pd.DataFrame:
+    """首行作表头的网格 → DataFrame（列名沿用去重规则）。"""
+    grid = _normalized_rows(rows)
+    if not grid:
+        return pd.DataFrame()
+    columns = dedupe_column_names(grid[0])
+    return pd.DataFrame([list(row) for row in grid[1:]], columns=columns)
+
+
+def _frame_factory(rows: list[list[str]], unit: str = ""):
+    """为编辑后的中间表生成 to_frame 闭包，保持下游接口不变。"""
+    frame = rows_to_frame(rows)
+
+    def to_frame(*_args, _frame=frame, _unit=unit, **kwargs) -> pd.DataFrame:
+        if kwargs.get("include_unit_footer") and _unit and _unit != "未识别":
+            width = _frame.shape[1]
+            footer = ["【单位备注】", f"单位：{_unit}"] + [""] * max(0, width - 2)
+            footer_frame = pd.DataFrame([footer[:width]], columns=_frame.columns)
+            return pd.concat([_frame, footer_frame], ignore_index=True)
+        return _frame
+
+    return to_frame
+
+
+def persist_table_rows(table, rows: list[list[str]]) -> None:
+    """把编辑后的网格写回中间表对象，并刷新表格快照。"""
+    # 注意：FlexibleTable 对未知字段一律返回默认值，因此这里只能用 vars() 判断，
+    # 不能依赖 hasattr/getattr。
+    if "original_rows" not in vars(table):
+        table.original_rows = [list(row) for row in table.rows]
+    table.rows = [list(row) for row in rows]
+    table.to_frame = _frame_factory(table.rows, str(getattr(table, "unit", "") or ""))
+    table.edited = True
+
+
+def _table_snapshot(table) -> tuple[tuple[str, ...], ...]:
+    return tuple(tuple(row) for row in _normalized_rows(table.rows))
+
+
+def _editor_frame(rows) -> tuple[pd.DataFrame, int]:
+    """把网格（含表头行）转成等宽的编辑用 DataFrame。
+
+    列标签使用稳定的“列1/列2/…”，而不是把表头当列名：这样表头行本身也能在
+    网格里直接编辑，而且空/重复表头不会再引起列名变化、把编辑器状态重置掉。
+    """
+    grid = _normalized_rows(rows)
+    if not grid:
+        return pd.DataFrame(), 0
+    width = max(len(row) for row in grid)
+    columns = [f"列{index + 1}" for index in range(width)]
+    return pd.DataFrame(grid, columns=columns), width
+
+
+def _rows_from_editor(frame: pd.DataFrame) -> list[list[str]]:
+    """把编辑器的返回结果还原成字符串网格（列标签只用于定位，不写入数据）。"""
+    return [
+        ["" if value is None else str(value).strip() for value in row]
+        for row in frame.fillna("").astype(str).values.tolist()
+    ]
+
+
+def _add_column(rows: list[list[str]]) -> list[list[str]]:
+    """在表格最右侧追加一列空列。"""
+    return [list(row) + [""] for row in rows]
+
+
+def _delete_columns(rows: list[list[str]], indexes) -> list[list[str]]:
+    """删除指定列；至少保留一列，避免表格变成零列。"""
+    selected = {int(index) for index in indexes}
+    if not selected:
+        return rows
+    width = max((len(row) for row in rows), default=0)
+    keep = [index for index in range(width) if index not in selected]
+    if not keep:
+        return [[""] for _ in rows]
+    return [
+        [row[index] if index < len(row) else "" for index in keep]
+        for row in rows
+    ]
+
+
+def _record_edit_event(table, action: str, result: str) -> None:
+    """记录一次中间表人工操作，供下方日志展开查看。"""
+    st.session_state.extraction_edit_events.append(
+        {
+            "时间": pd.Timestamp.now().strftime("%H:%M:%S"),
+            "目标表": table.table_name,
+            "操作": action,
+            "结果": result,
+        }
+    )
+
+
+def _render_table_editor(tables: list, selected_index: int) -> None:
+    """中间表实时编辑：单元格、表头、行列都可改，改动立即写回会话状态。"""
+    table = tables[selected_index]
+    st.markdown("##### ✏️ 中间表编辑与重新提取")
+    st.caption(
+        "第一行是表头，可直接在表格里修改任意单元格、增删行；列数用下方的“添加一列/删除列”调整。"
+        "改动会立即保存并同步到下载文件；STEP3 标准填报请在本步修改完成后重新执行。"
+    )
+    if not st.session_state.standard_data.empty:
+        st.warning(
+            "检测到已经执行过 STEP3 标准填报：中间表修改后会与既有标准窄表不一致，"
+            "请回到 STEP3 重新执行标准填报。",
+            icon=":material/warning:",
+        )
+
+    editor_frame, _ = _editor_frame(table.rows)
+    if editor_frame.empty:
+        st.info("该表当前没有可编辑内容，可尝试“重新提取该表”。")
+        return
+
+    edited_frame = st.data_editor(
+        editor_frame,
+        key=f"table_editor_{table.table_id}",
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+    )
+    edited_rows = _rows_from_editor(edited_frame)
+    if _table_snapshot(table) != tuple(tuple(row) for row in _normalized_rows(edited_rows)):
+        persist_table_rows(table, edited_rows)
+        _record_edit_event(
+            table,
+            "人工编辑中间表",
+            f"当前{max(len(edited_rows) - 1, 0)}条数据行",
+        )
+        _store_extraction_result(st.session_state.ai_extraction_logs, tables)
+        st.success("已保存修改，下载文件已同步更新。", icon=":material/edit:")
+
+    # ---- 列管理：数据编辑器本身不支持增删列，这里提供独立入口 ----
+    current_rows = [list(row) for row in table.rows]
+    current_width = max((len(row) for row in current_rows), default=0)
+    header_labels = [
+        (
+            str(current_rows[0][index]).strip()
+            if current_rows and index < len(current_rows[0]) and str(current_rows[0][index]).strip()
+            else "（空）"
+        )
+        for index in range(current_width)
+    ]
+
+    col_actions = st.columns([1, 1.4, 1.2])
+    with col_actions[0]:
+        if st.button(
+            "添加一列",
+            key=f"add_col_{table.table_id}",
+            width="stretch",
+            help="在表格最右侧追加一列空列。",
+        ):
+            persist_table_rows(table, _add_column(current_rows))
+            _record_edit_event(table, "添加一列", f"当前{current_width + 1}列")
+            _store_extraction_result(st.session_state.ai_extraction_logs, tables)
+            st.session_state.pop(f"table_editor_{table.table_id}", None)
+            st.rerun()
+    with col_actions[1]:
+        delete_targets = st.multiselect(
+            "选择要删除的列",
+            options=list(range(current_width)),
+            format_func=lambda index: f"第{index + 1}列 {header_labels[index]}",
+            key=f"del_cols_{table.table_id}",
+        )
+    with col_actions[2]:
+        if st.button(
+            "删除选中列",
+            key=f"del_col_btn_{table.table_id}",
+            width="stretch",
+            disabled=not delete_targets,
+            help="删除左侧选中的列，至少保留一列。",
+        ):
+            remaining = _delete_columns(current_rows, delete_targets)
+            persist_table_rows(table, remaining)
+            _record_edit_event(
+                table,
+                "删除列",
+                f"剩余{max((len(row) for row in remaining), default=0)}列",
+            )
+            _store_extraction_result(st.session_state.ai_extraction_logs, tables)
+            st.session_state.pop(f"table_editor_{table.table_id}", None)
+            st.session_state.pop(f"del_cols_{table.table_id}", None)
+            st.rerun()
+
+    action_cols = st.columns([1.1, 1, 1.4])
+    with action_cols[1]:
+        if st.button(
+            "撤销全部修改",
+            key=f"revert_edits_{table.table_id}",
+            disabled="original_rows" not in vars(table),
+            help="把该中间表还原为最近一次自动提取的结果。",
+            width="stretch",
+        ):
+            table.rows = [list(row) for row in table.original_rows]
+            table.to_frame = _frame_factory(
+                table.rows,
+                str(getattr(table, "unit", "") or ""),
+            )
+            table.edited = False
+            del table.original_rows
+            st.session_state.pop(f"table_editor_{table.table_id}", None)
+            st.session_state.pop(f"del_cols_{table.table_id}", None)
+            _record_edit_event(table, "撤销修改", "已还原为自动提取结果")
+            _store_extraction_result(st.session_state.ai_extraction_logs, tables)
+            st.rerun()
+    with action_cols[2]:
+        reextract_method = st.selectbox(
+            "重新提取方式",
+            ("跟随全局设置", MODE_RULE, MODE_LLM, MODE_VISION),
+            key=f"reextract_method_{table.table_id}",
+            label_visibility="collapsed",
+        )
+        if st.button(
+            "重新提取该表",
+            key=f"reextract_table_{table.table_id}",
+            width="stretch",
+            help="按该表在 STEP1 确认的页码重新执行逐页提取，覆盖当前中间表（含人工修改）。",
+        ):
+            _reextract_table(tables, selected_index, reextract_method)
+
+
+def _reextract_table(tables: list, index: int, method_option: str) -> None:
+    """按 STEP1 确认的页码重新提取一张目标表并替换中间表。"""
+    table = tables[index]
+    match = next(
+        (item for item in st.session_state.page_matches if item.table_id == table.table_id),
+        None,
+    )
+    if match is None or not match.pages:
+        st.error("该目标表在 STEP1 没有确认页码，无法重新提取。")
+        return
+    if method_option == "跟随全局设置":
+        method = st.session_state.extraction_method or DEFAULT_METHOD
+    else:
+        method = method_option
+    if method_requires_credentials(method) and not llm_credentials_ready():
+        st.error("该提取方式需要 AI 配置，请改用规则法或先在登录页补齐 Base URL / 模型 / API Key。")
+        return
+    tasks = _extraction_tasks([match])
+    if not tasks:
+        st.error("该目标表没有有效页码。")
+        return
+    with st.spinner(f"正在用“{method}”重新提取 {table.table_name}…"):
+        results, logs, mode_by_page = run_page_tasks(
+            tasks,
+            method,
+            allow_llm_fallback=bool(st.session_state.allow_llm_fallback),
+        )
+        new_tables = build_tables_from_page_results(results, mode_by_page)
+    if not new_tables:
+        st.error(
+            "重新提取未获得数据，已保留原中间表；请核对页码，或改用其他提取方式（例如图片识别）。"
+        )
+        st.session_state.ai_extraction_logs.extend(logs)
+        return
+    replacement = new_tables[0]
+    tables[index] = replacement
+    st.session_state.raw_tables = tables
+    st.session_state.pop(f"table_editor_{table.table_id}", None)
+    st.session_state.extraction_edit_events.append(
+        {
+            "时间": pd.Timestamp.now().strftime("%H:%M:%S"),
+            "目标表": table.table_name,
+            "操作": f"重新提取（{method}）",
+            "结果": f"{replacement.strategy}，{max(len(replacement.rows) - 1, 0)}条数据行",
+        }
+    )
+    st.session_state.ai_extraction_logs.extend(
+        {"目标表": row["目标表"], "物理页码": row["物理页码"], "识别方式": row["识别方式"],
+         "状态": row["状态"], "说明": f"重新提取：{row['说明']}"}
+        for row in logs
+    )
+    _store_extraction_result(st.session_state.ai_extraction_logs, tables)
+    st.success(f"已重新提取 {replacement.table_name}（{replacement.strategy}）。")
+    st.rerun()
 
 
 def _render_extraction_results() -> None:
@@ -531,7 +970,8 @@ def _render_extraction_results() -> None:
             item = tables[index]
             pages = item.source_pages or [item.page]
             page_label = "、".join(map(str, pages))
-            return f"{item.table_name} - 第{page_label}页 - {item.strategy}"
+            edited_mark = "✏️ " if getattr(item, "edited", False) else ""
+            return f"{edited_mark}{item.table_name} - 第{page_label}页 - {item.strategy}"
 
         selected_table_index = st.selectbox(
             "标准化中间表预览",
@@ -548,6 +988,8 @@ def _render_extraction_results() -> None:
         metric_cols[2].metric("质量评分", f"{selected_table.quality_score:.1f}")
         if selected_table.evidence:
             st.caption(f"自动校验依据：{selected_table.evidence}")
+
+        _render_table_editor(tables, selected_table_index)
 
         table_col, pdf_col = st.columns([1.15, 1], gap="large")
         with table_col:
@@ -574,9 +1016,19 @@ def _render_extraction_results() -> None:
                 key=f"ai_source_page_{selected_table.table_id}",
             )
             try:
+                region_bbox = st.session_state.extraction_regions.get(
+                    f"{selected_table.table_id}:{selected_source_page}"
+                )
                 st.image(
-                    render_pdf_page(st.session_state.pdf_bytes, selected_source_page),
-                    caption=f"PDF物理第 {selected_source_page} 页",
+                    render_pdf_page(
+                        st.session_state.pdf_bytes,
+                        selected_source_page,
+                        highlight=region_bbox,
+                    ),
+                    caption=(
+                        f"PDF物理第 {selected_source_page} 页"
+                        + ("（红框=本次提取的表区域）" if region_bbox else "")
+                    ),
                     width="stretch",
                 )
             except Exception as exc:
@@ -595,8 +1047,9 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
     """STEP2 表格智能转换。"""
     st.subheader("表格智能转换")
     st.caption(
-        "采用逐页结构化提取：每个物理页独立处理，失败页单独进行图片扫描或网格纠错，"
-        "所有页面成功后再按人工确认的页码顺序确定性拼接；任何一页失败都不会输出残缺跨页表。"
+        "默认使用规则法离线重建表格：零模型调用、结果可复现，天然规避大模型把千分位"
+        "写成小数点的静默错误。扫描版页面或需要更强泛化时，可在下方切换智能模式或大模型。"
+        "所有页面成功后再按人工确认的页码顺序确定性拼接；提取结果支持直接修改或单独重提。"
     )
     if not st.session_state.page_matches or not st.session_state.pages_confirmed:
         st.info("请先在 STEP1 上传报告、完成页码定位并人工确认物理页码。")
@@ -605,6 +1058,11 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
         _render_extraction_launcher(active_profile)
     if st.session_state.ai_extraction_logs:
         st.markdown("##### 提取与重试日志")
+        st.caption(
+            "识别方式列写明每页实际使用的引擎；“说明”列如出现“页内区域定位”，"
+            "表示该页存在多张表、系统已按目标表的首尾项目裁切到目标区域，"
+            "可在下方 PDF 原页核实中看到红框标记。"
+        )
         logs = st.session_state.ai_extraction_logs
         if logs and isinstance(logs[0], dict):
             # 自定义列顺序，与原始日志列名保持一致
@@ -614,7 +1072,35 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
             # 兼容旧格式（对象列表）
             df = extraction_logs_frame(logs)
         st.dataframe(df, width="stretch", hide_index=True)
+        _render_number_quality_panel()
         _render_extraction_results()
+
+
+def _render_number_quality_panel() -> None:
+    """展示千分位修复记录与待人工核对的疑似误识别。"""
+    reviews = st.session_state.extraction_number_reviews
+    repairs = st.session_state.extraction_number_repairs
+    if reviews:
+        with st.expander(
+            f"疑似千分位误识别待核对（{len(reviews)}处）",
+            expanded=bool(reviews),
+        ):
+            st.caption(
+                "以下数值只出现一个三位小数段（如 1.234），原文中没有对应的千分位写法，"
+                "无法自动判定是金额还是小数，请在“中间表编辑”中核对后修改。"
+            )
+            st.dataframe(pd.DataFrame(reviews), width="stretch", hide_index=True)
+    if repairs:
+        with st.expander(f"千分位自动修复记录（{len(repairs)}处）", expanded=False):
+            st.caption(
+                "模型把千分位逗号写成了小数点（例如 1.234.567.89），"
+                "已按同一页原文证据确定为千分位并还原为逗号。"
+            )
+            st.dataframe(pd.DataFrame(repairs), width="stretch", hide_index=True)
+    events = st.session_state.extraction_edit_events
+    if events:
+        with st.expander(f"中间表修改与重新提取记录（{len(events)}条）", expanded=False):
+            st.dataframe(pd.DataFrame(events), width="stretch", hide_index=True)
 
 
 def clear_extraction_results(*, clear_caches: bool = False) -> None:
@@ -623,10 +1109,19 @@ def clear_extraction_results(*, clear_caches: bool = False) -> None:
         "raw_tables": [],
         "ai_extraction_logs": [],
         "ai_workbook_bytes": b"",
+        "extraction_edit_events": [],
+        "extraction_number_repairs": [],
+        "extraction_number_reviews": [],
+        "extraction_regions": {},
         "standard_data": pd.DataFrame(columns=STANDARD_COLUMNS),
         "validation_results": pd.DataFrame(),
         "normalization_diagnostics": pd.DataFrame(),
     }
+    # 编辑器的控件状态与旧中间表绑定，必须一并清空，否则会串到新结果。
+    for key in [
+        key for key in st.session_state if str(key).startswith("table_editor_")
+    ]:
+        del st.session_state[key]
     if clear_caches:
         values.update(
             {
@@ -642,24 +1137,71 @@ def clear_extraction_results(*, clear_caches: bool = False) -> None:
 
 
 def _render_extraction_settings() -> None:
-    """STEP2：逐页提取与重试设置。"""
-    with st.expander("逐页提取与重试设置", expanded=not bool(st.session_state.raw_tables)):
-        configured_model = st.session_state.get("llm_model", "") or "未设置"
-        st.caption(f"使用登录页中的 AI 设置，当前模型：{configured_model}")
+    """STEP2：逐页提取方式与重试设置。"""
+    if st.session_state.extraction_method not in METHOD_OPTIONS:
+        st.session_state.extraction_method = DEFAULT_METHOD
+    with st.expander("逐页提取方式与重试设置", expanded=not bool(st.session_state.raw_tables)):
+        profile = st.session_state.get("document_type_profile")
+        if profile is not None:
+            st.info(
+                f"**文档类型：{profile.label}**"
+                f"（可检索文本页 {profile.text_pages}/{profile.total_pages}）\n\n{profile.notes}"
+            )
+        method = st.radio(
+            "提取方式",
+            METHOD_OPTIONS,
+            key="extraction_method",
+            help=(
+                "推荐“全部规则法”：本地线框识别/文字对齐重建表格，零模型调用、"
+                "结果可复现；“智能”模式先对文字版页面走规则法，"
+                "未通过质量校验或扫描版页面才调用大模型。"
+            ),
+        )
+        _render_extraction_plan(method)
         option_cols = st.columns(2)
-        with option_cols[0]:
-            st.toggle(
-                "单页提取失败时自动图片扫描重试",
-                key="auto_vision_retry",
-                help="只重试失败的物理页；模型不支持图片时会改用该页的加强版文本纠错。",
-            )
-        with option_cols[1]:
-            st.toggle(
-                "所有页面直接使用图片扫描模式",
-                key="force_vision_mode",
-                help=(
-                    "系统已会自动识别无文字层页面；此开关用于文字层存在但排版异常、"
-                    "仍希望所有已选页强制走图片识别的情况。"
-                ),
-            )
-        st.caption("API Key仅保存在当前浏览器会话内，不会写入配置文件或导出的Excel。")
+        if method in {MODE_AUTO, MODE_LLM}:
+            with option_cols[0]:
+                st.toggle(
+                    "单页提取失败时自动图片扫描重试",
+                    key="auto_vision_retry",
+                    help="只重试失败的物理页；模型不支持图片时会改用该页的加强版文本纠错。",
+                )
+        if method == MODE_AUTO:
+            with option_cols[1]:
+                st.toggle(
+                    "规则法未通过校验时改用大模型",
+                    key="allow_llm_fallback",
+                    help=(
+                        "关闭后完全离线：规则法未通过的页面只记录失败，不调用模型，"
+                        "适合批量试跑或统计规则法覆盖率。"
+                    ),
+                )
+        configured_model = st.session_state.get("llm_model", "") or "未设置"
+        st.caption(
+            f"使用登录页中的 AI 设置，当前模型：{configured_model}。"
+            "API Key 仅保存在当前浏览器会话内，不会写入配置文件或导出的 Excel。"
+        )
+
+
+def _render_extraction_plan(method: str) -> None:
+    """按当前提取方式预估每页会用到的引擎，直观展示节省的模型调用。"""
+    tasks = _extraction_tasks()
+    if not tasks:
+        st.caption("尚未确认页码：请在 STEP1 完成定位并确认后再提取。")
+        return
+    pages = [task["page"] for task in tasks]
+    text_flags = page_text_flags(pages)
+    engine_pages: dict[str, list[int]] = {}
+    for page in sorted(set(pages)):
+        engine = preview_page_engine(method, has_text=bool(text_flags.get(page)))
+        engine_pages.setdefault(engine, []).append(page)
+    parts = [
+        f"{ENGINE_LABELS.get(engine, engine)} {len(engine_pages[engine])} 页"
+        for engine in (ENGINE_RULE, ENGINE_LLM_TEXT, ENGINE_LLM_VISION)
+        if engine_pages.get(engine)
+    ]
+    rule_pages = len(engine_pages.get(ENGINE_RULE, []))
+    caption = f"本次共 {len(set(pages))} 页：{'；'.join(parts) or '无'}。"
+    if rule_pages and method == MODE_AUTO:
+        caption += f" 规则法预计节省 {rule_pages} 次模型调用。"
+    st.caption(caption)

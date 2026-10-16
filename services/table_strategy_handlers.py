@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping
 
+from .table_number_repair import THOUSAND_SEPARATOR_PROMPT_RULE
+
 
 @dataclass(frozen=True)
 class PromptRequest:
@@ -199,6 +201,7 @@ def make_prompt_handler(
    只记录图片或文字网格中明确出现的单位，不得根据数值大小或常见口径猜测。
 6. 一旦遇到不得混入的内容或下一张表标题，立即停止；边界行及其后内容不得写入rows。
 7. 只输出JSON对象，不输出Markdown或解释文字。
+8. {THOUSAND_SEPARATOR_PROMPT_RULE}
 
 JSON格式：
 {{"table_id":"{request.table_id}","table_name":"{request.table_name}",
@@ -232,8 +235,9 @@ JSON格式：
 2. 如果本页下方开始下一张表，只提取边界之前属于目标表的内容。
 3. 每个单元格必须使用英文竖线“|”分隔；空单元格也必须用“|”占位。
 4. 保留全部科目、行次、数字、百分号、负号、逗号和括号，不得概括、删除或编造。
-5. 多级表头按原顺序保留；续页重复表头可以保留，系统会在拼接时去重。
-6. 只输出竖线分隔的纯文本，不输出Markdown代码块、说明或JSON。
+5. {THOUSAND_SEPARATOR_PROMPT_RULE}
+6. 多级表头按原顺序保留；续页重复表头可以保留，系统会在拼接时去重。
+7. 只输出竖线分隔的纯文本，不输出Markdown代码块、说明或JSON。
 """.strip()
 
     return build_prompt

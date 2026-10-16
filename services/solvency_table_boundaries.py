@@ -298,6 +298,23 @@ def item_hits_in_rows(rows: Sequence[Sequence[str]], items: Iterable[str]) -> tu
     return tuple(item for item in items if any(row_has_item(row, item) for row in rows))
 
 
+def _config_terms(
+    table_config: Mapping[str, Any] | None,
+    key: str,
+) -> tuple[str, ...]:
+    """把 Profile 配置里的词表字段统一成字符串元组。"""
+    value = (table_config or {}).get(key)
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return tuple(
+            item.strip()
+            for item in re.split(r"[|\n\r]+", value)
+            if item.strip()
+        )
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
 def boundary_variants(
     table_id: str,
     table_config: Mapping[str, Any] | None = None,
@@ -310,14 +327,30 @@ def boundary_variants(
         return configured_variants
     boundary = TABLE_ITEM_BOUNDARIES.get(table_id, {})
     configured = tuple(boundary.get("variants", ()))
-    if not configured:
-        return (boundary,) if boundary else ()
-    shared = {
-        key: value
-        for key, value in boundary.items()
-        if key != "variants"
-    }
-    return tuple({**shared, **variant} for variant in configured)
+    if configured:
+        shared = {
+            key: value
+            for key, value in boundary.items()
+            if key != "variants"
+        }
+        return tuple({**shared, **variant} for variant in configured)
+    if boundary:
+        return (boundary,)
+    # 财险等 Profile 未提供完整版式配置，但给了首尾项目词表时，
+    # 据此推导出等价边界，让一页多表时也能圈定并裁切目标表。
+    start_items = _config_terms(table_config, "start_item_terms")
+    end_items = _config_terms(table_config, "end_item_terms")
+    if start_items and end_items:
+        derived: dict[str, Any] = {
+            "name": "Profile 首尾项目版式",
+            "start_items": start_items,
+            "end_items": end_items,
+        }
+        exclude_items = _config_terms(table_config, "exclude_item_terms")
+        if exclude_items:
+            derived["exclude_items"] = exclude_items
+        return (derived,)
+    return ()
 
 
 def end_item_groups(

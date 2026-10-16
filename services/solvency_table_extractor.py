@@ -239,10 +239,33 @@ def _row_text(row: list[str]) -> str:
     return re.sub(r"\s+", "", "".join(row))
 
 
-def _slice_target_rows(table_id: str, rows: list[list[str]]) -> list[list[str]]:
-    """在同页多表或文字对齐结果中切出目标表边界。"""
+def _profile_terms(table_config: dict | None, key: str) -> tuple[str, ...]:
+    """读取 Profile 配置的词表字段；缺省时返回空元组。"""
+    value = (table_config or {}).get(key)
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return tuple(
+            item.strip()
+            for item in re.split(r"[|\n\r]+", value)
+            if item.strip()
+        )
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _slice_target_rows(
+    table_id: str,
+    rows: list[list[str]],
+    table_config: dict | None = None,
+) -> list[list[str]]:
+    """在同页多表或文字对齐结果中切出目标表边界。
+
+    优先使用 Profile 配置的首尾项目（start_item_terms / end_item_terms），
+    配置缺失时回退到内置的首尾标记表，避免把相邻表格读进目标表。
+    """
     if not rows:
         return []
+    config = dict(table_config or {})
     row_texts = [_row_text(row) for row in rows]
 
     start_index = 0
@@ -258,13 +281,22 @@ def _slice_target_rows(table_id: str, rows: list[list[str]]) -> list[list[str]]:
         if header_index is not None:
             start_index = header_index
         else:
+            start_terms = _profile_terms(config, "start_item_terms")
             metric_index = next(
-                (index for index, text in enumerate(row_texts) if "核心偿付能力充足率" in text),
+                (
+                    index
+                    for index, text in enumerate(row_texts)
+                    if any(term in text for term in start_terms)
+                    or "核心偿付能力充足率" in text
+                ),
                 0,
             )
             start_index = max(0, metric_index - 1)
     else:
-        start_markers = TABLE_START_MARKERS.get(table_id, ())
+        start_markers = _profile_terms(
+            config,
+            "start_item_terms",
+        ) or TABLE_START_MARKERS.get(table_id, ())
         marker_index = next(
             (
                 index
@@ -276,10 +308,13 @@ def _slice_target_rows(table_id: str, rows: list[list[str]]) -> list[list[str]]:
         start_index = max(0, marker_index - 1) if marker_index else 0
 
     end_index = len(rows)
-    end_markers = TABLE_END_MARKERS.get(table_id, ())
+    profile_end_markers = _profile_terms(config, "end_item_terms")
+    end_markers = profile_end_markers or TABLE_END_MARKERS.get(table_id, ())
     for index in range(start_index + 1, len(rows)):
         if any(marker in row_texts[index] for marker in end_markers):
-            end_index = index
+            # Profile 的 end_item_terms 是目标表的终止数据行，必须保留；
+            # 内置 TABLE_END_MARKERS 是相邻表的标题，应当排除。
+            end_index = index + 1 if profile_end_markers else index
             break
     return rows[start_index:end_index]
 
@@ -326,6 +361,121 @@ def _candidate_fingerprint(rows: list[list[str]]) -> str:
     return "|".join(_row_text(row) for row in rows)
 
 
+_PAGE_STRATEGIES = (
+    (
+        "线框识别",
+        {
+            "vertical_strategy": "lines",
+            "horizontal_strategy": "lines",
+            "snap_tolerance": 4,
+            "join_tolerance": 4,
+            "intersection_tolerance": 5,
+        },
+    ),
+    (
+        "文字对齐识别",
+        {
+            "vertical_strategy": "text",
+            "horizontal_strategy": "text",
+            "min_words_vertical": 2,
+            "min_words_horizontal": 1,
+        },
+    ),
+)
+
+
+def page_table_candidates(
+    page,
+    table_id: str,
+    table_name: str,
+    page_number: int,
+    table_config: dict | None = None,
+) -> list[ExtractedTable]:
+    """从一个 pdfplumber 页面对象提取并按质量排序候选表。
+
+    ``page`` 可以是整页，也可以是 ``page.crop(bbox)`` 得到的页内区域——
+    一页多表时先裁切再识别，可以避免选到相邻的表格。
+    """
+    config = dict(table_config or {})
+    title_terms = tuple(str(item) for item in (config.get("title_terms") or ()) if str(item).strip())
+    content_terms = tuple(
+        str(item)
+        for item in (config.get("content_terms") or config.get("completeness_terms") or ())
+        if str(item).strip()
+    )
+    header_terms = tuple(
+        str(item) for item in (config.get("header_terms") or ()) if str(item).strip()
+    )
+    exclude_terms = tuple(
+        dict.fromkeys(
+            [
+                *(str(item) for item in (config.get("exclude_item_terms") or ())),
+                *(str(item) for item in (config.get("profile_exclude_items") or ())),
+                *(str(item) for item in (config.get("stop_terms") or ())),
+            ]
+        )
+    )
+    fingerprints: dict[str, ExtractedTable] = {}
+    raw_index = 0
+    for strategy, settings in _PAGE_STRATEGIES:
+        try:
+            tables = page.extract_tables(table_settings=settings) or []
+        except Exception:
+            tables = []
+        for rows in tables:
+            raw_index += 1
+            cleaned = _slice_target_rows(table_id, _clean_rows(rows), config)
+            if len(cleaned) < 2:
+                continue
+            signatures = TABLE_SIGNATURES.get(table_id, ())
+            flat_text = re.sub(r"\s+", "", "".join("".join(row) for row in cleaned))
+            if signatures and not all(signature in flat_text for signature in signatures):
+                continue
+            if table_id == "SOLVENCY_MAIN" and max(map(len, cleaned)) >= 6:
+                cleaned = _repair_solvency_main(cleaned)
+            elif table_id == "OPERATING_METRICS":
+                cleaned = _repair_operating(cleaned)
+            if len(cleaned) < 2:
+                continue
+            score, evidence = _candidate_quality(table_id, cleaned, strategy)
+            if score < 0:
+                continue
+            # ★ Profile 配置加权：一页多表时用目标表自己的表名/内容词/表头词
+            #   把"真正的目标表"排在前面，并用排除项压掉相邻表的候选。
+            if config:
+                title_hits = [term for term in title_terms if term in flat_text]
+                content_hits = [term for term in content_terms if term in flat_text]
+                header_hits = [term for term in header_terms if term in flat_text]
+                exclusion_hits = [term for term in exclude_terms if term and term in flat_text]
+                score += (
+                    len(title_hits) * 6.0
+                    + len(content_hits) * 2.0
+                    + len(header_hits) * 1.5
+                    - len(exclusion_hits) * 10.0
+                )
+                evidence = "、".join(
+                    dict.fromkeys([*title_hits, *content_hits, *header_hits, evidence])
+                )
+            candidate = ExtractedTable(
+                table_id=table_id,
+                table_name=table_name,
+                page=page_number,
+                table_index=raw_index,
+                rows=cleaned,
+                strategy=strategy,
+                quality_score=score,
+                evidence=evidence,
+            )
+            fingerprint = _candidate_fingerprint(cleaned)
+            previous = fingerprints.get(fingerprint)
+            if previous is None or candidate.quality_score > previous.quality_score:
+                fingerprints[fingerprint] = candidate
+    return sorted(
+        fingerprints.values(),
+        key=lambda item: (-item.quality_score, item.strategy != "线框识别", item.table_index),
+    )
+
+
 def extract_table_candidates(
     pdf_bytes: bytes,
     matches: list[PageMatch],
@@ -337,61 +487,12 @@ def extract_table_candidates(
             for page_number in match.pages:
                 if page_number < 1 or page_number > len(pdf.pages):
                     continue
-                page = pdf.pages[page_number - 1]
-                strategies = (
-                    ("线框识别", page.extract_tables(table_settings={
-                        "vertical_strategy": "lines",
-                        "horizontal_strategy": "lines",
-                        "snap_tolerance": 4,
-                        "join_tolerance": 4,
-                        "intersection_tolerance": 5,
-                    }) or []),
-                    ("文字对齐识别", page.extract_tables(table_settings={
-                        "vertical_strategy": "text",
-                        "horizontal_strategy": "text",
-                        "min_words_vertical": 2,
-                        "min_words_horizontal": 1,
-                    }) or []),
-                )
-                fingerprints: dict[str, ExtractedTable] = {}
-                raw_index = 0
-                for strategy, tables in strategies:
-                    for rows in tables:
-                        raw_index += 1
-                        cleaned = _slice_target_rows(match.table_id, _clean_rows(rows))
-                        if len(cleaned) < 2:
-                            continue
-                        signatures = TABLE_SIGNATURES.get(match.table_id, ())
-                        flat_text = re.sub(r"\s+", "", "".join("".join(row) for row in cleaned))
-                        if signatures and not all(signature in flat_text for signature in signatures):
-                            continue
-                        if match.table_id == "SOLVENCY_MAIN" and max(map(len, cleaned)) >= 6:
-                            cleaned = _repair_solvency_main(cleaned)
-                        elif match.table_id == "OPERATING_METRICS":
-                            cleaned = _repair_operating(cleaned)
-                        if len(cleaned) < 2:
-                            continue
-                        score, evidence = _candidate_quality(match.table_id, cleaned, strategy)
-                        if score < 0:
-                            continue
-                        candidate = ExtractedTable(
-                            table_id=match.table_id,
-                            table_name=match.table_name,
-                            page=page_number,
-                            table_index=raw_index,
-                            rows=cleaned,
-                            strategy=strategy,
-                            quality_score=score,
-                            evidence=evidence,
-                        )
-                        fingerprint = _candidate_fingerprint(cleaned)
-                        previous = fingerprints.get(fingerprint)
-                        if previous is None or candidate.quality_score > previous.quality_score:
-                            fingerprints[fingerprint] = candidate
-
-                candidates = sorted(
-                    fingerprints.values(),
-                    key=lambda item: (-item.quality_score, item.strategy != "线框识别", item.table_index),
+                candidates = page_table_candidates(
+                    pdf.pages[page_number - 1],
+                    match.table_id,
+                    match.table_name,
+                    page_number,
+                    dict(match.table_config),
                 )
                 if candidates:
                     grouped[f"{match.table_id}:{page_number}"] = candidates
