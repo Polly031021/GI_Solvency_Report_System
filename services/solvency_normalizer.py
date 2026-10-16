@@ -47,7 +47,6 @@ NARROW_TABLE_COLUMNS = [
 ]
 
 LIFE_COMPANY_TYPES = ("寿险", "健康险", "养老险")
-NON_LIFE_COMPANY_TYPES = ("财险",)
 
 _COMPANY_TYPE_ALIASES = {
     "寿险": "寿险",
@@ -659,11 +658,6 @@ def resolve_metric_match(
         best_name,
         runner_name,
     )
-
-
-def match_metric(label: str, taxonomy: pd.DataFrame, candidates=None):
-    """Backward-compatible high-confidence metric matcher."""
-    return resolve_metric_match(label, taxonomy, candidates).metric
 
 
 _AUTO_COLUMN_RE = re.compile(r"^列\d+$")

@@ -12,7 +12,6 @@ from .batch_extraction import (
     detect_table_unit,
     extract_single_page,
     extract_single_page_vision,
-    sanitize_scalar,
     sanitize_tree,
     sniff_unit_from_text,
 )
@@ -379,7 +378,6 @@ def process_one_pdf_bytes(
 
         # ★ 去重：消除 S02/S05 明细表对核心指标的重复
         try:
-            from services.solvency_step3_standardizer import Step3StandardizationResult
             import dataclasses
             if dataclasses.is_dataclass(std_result):
                 std_result = dataclasses.replace(

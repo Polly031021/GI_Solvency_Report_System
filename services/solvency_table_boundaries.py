@@ -294,10 +294,6 @@ def text_has_item(text: str, item: str, *, require_value: bool = False) -> bool:
     )
 
 
-def item_hits_in_text(text: str, items: Iterable[str]) -> tuple[str, ...]:
-    return tuple(item for item in items if text_has_item(text, item))
-
-
 def item_hits_in_rows(rows: Sequence[Sequence[str]], items: Iterable[str]) -> tuple[str, ...]:
     return tuple(item for item in items if any(row_has_item(row, item) for row in rows))
 

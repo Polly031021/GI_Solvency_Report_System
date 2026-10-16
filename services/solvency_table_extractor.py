@@ -403,20 +403,3 @@ def extract_tables(pdf_bytes: bytes, matches: list[PageMatch]) -> list[Extracted
     groups = extract_table_candidates(pdf_bytes, matches)
     return [candidates[0] for candidates in groups.values() if candidates]
 
-def extracted_tables_to_workbook_bytes(tables: list[ExtractedTable]) -> bytes:
-    output = io.BytesIO()
-    used: set[str] = set()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for item in tables:
-            pages = item.source_pages or [item.page]
-            page_label = str(pages[0]) if len(pages) == 1 else f"{pages[0]}-{pages[-1]}"
-            base = re.sub(r"[\\/*?:\[\]]", "", f"{item.table_name}_P{page_label}")[:31] or "Table"
-            name = base
-            suffix = 1
-            while name in used:
-                suffix += 1
-                name = f"{base[:27]}_{suffix}"
-            used.add(name)
-            item.to_frame().to_excel(writer, sheet_name=name, index=False, header=False)
-    return output.getvalue()
-

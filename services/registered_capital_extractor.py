@@ -1,5 +1,4 @@
 import re
-from decimal import Decimal, InvalidOperation
 
 # ★ 新增这两个 import：append_registered_capital 需要 pandas，extract_registered_capital_from_pdf 需要 fitz
 import fitz
