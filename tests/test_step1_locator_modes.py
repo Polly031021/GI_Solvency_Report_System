@@ -164,12 +164,84 @@ def test_rule_mode_llm_verify_disagree():
     print(f"PASS 复核不一致: 置信度={match.confidence}% review_reason={match.review_reason}")
 
 
+
+
+# ============================================================
+# 回归：S05-最低资本表“中间子行含终止词 + 单行跨页”场景
+# 复现安盛天平季度报告的真实版式：
+#   第2页表格的中间子行“1.2 非寿险业务保险风险最低资本合计”
+#   包含终止词“最低资本合计”的子串；真正的终止行“4 最低资本”
+#   单独跨到下一页，且该页页首有大量空白行。
+# ============================================================
+S05_FEATURE_CONFIG = {
+    "tables": [
+        {
+            "table_id": "MINIMUM_CAPITAL",
+            "table_name": "S05-最低资本表",
+            "title_terms": ["S05-最低资本表", "最低资本表"],
+            "content_terms": ["量化风险最低资本", "控制风险最低资本", "附加资本"],
+            "header_terms": ["行次", "期末数", "期初数"],
+            "continuation_terms": ["控制风险最低资本", "附加资本", "最低资本合计"],
+            "stop_terms": ["风险综合评级"],
+            "terminal_terms": ["最低资本合计", "最低资本总额"],
+            "minimum_score": 8,
+            "max_pages": 2,
+            "include_continuation": True,
+            "continuation_min_score": 5.0,
+            "continuation_min_structure_hits": 2,
+            "continuation_min_numeric_lines": 2,
+            "allow_single_row_tail": True,
+        }
+    ]
+}
+
+
+def build_s05_pdf() -> bytes:
+    """第2页表格主体，第3页单行续表（页首空白行），第4页下一节。"""
+    doc = fitz.open()
+    pages = [
+        "中国某财产保险股份有限公司2025年第4季度偿付能力报告摘要\n"
+        "公司经营稳健，各项偿付能力指标符合监管要求。",
+        "S05-最低资本表\n行次 项目 期末数 期初数\n"
+        "1 量化风险最低资本 100.00 90.00\n"
+        "1.2 非寿险业务保险风险最低资本合计 80.00 70.00\n"
+        "2 控制风险最低资本 10.00 9.00\n"
+        "3 附加资本 0.00 0.00",
+        "   \n   \n   \n4 最低资本 110.00 99.00\n",
+        "风险综合评级\n公司最近两次风险综合评级均为B类，"
+        "评级结果保持稳定，公司持续完善全面风险管理体系。",
+    ]
+    for text in pages:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 550, 780), text, fontname="china-s", fontsize=12)
+    return doc.tobytes()
+
+
+def test_s05_single_row_tail_with_terminal_substring():
+    """中间子行含终止词时不得截断跨页；页首空白行不得阻断单行续表识别。"""
+    pdf = build_s05_pdf()
+    matches, message = locate_tables_hybrid(
+        pdf,
+        S05_FEATURE_CONFIG,
+        api_key="",
+        base_url="",
+        model="",
+        mode="rule",
+    )
+    match = matches[0]
+    assert match.pages == [2, 3], (match.pages, match.evidence)
+    assert "页首单行续表" in match.evidence, match.evidence
+    assert "未调用大模型" in message, message
+    print(f"PASS S05单行跨页: pages={match.pages} 置信度={match.confidence}%")
+
+
 if __name__ == "__main__":
     test_document_type_text()
     test_document_type_scanned()
     test_rule_mode_offline()
     test_rule_mode_llm_verify_agree()
     test_rule_mode_llm_verify_disagree()
+    test_s05_single_row_tail_with_terminal_substring()
     print("全部通过")
 
 
