@@ -22,7 +22,8 @@ streamlit run app.py
   STEP0–STEP5 与 STEP8 为项目组成员功能。
 - AI 功能（STEP1 大模型定位复核、STEP2 图片识别、STEP7 一键 AI 点评）共用登录页配置的
   Base URL / 模型 / API Key；**API Key 只存在于当前浏览器会话，不落盘、不出现在导出文件里**。
-  不填 API Key 时，规则法定位、数据合并与本地图表分析仍然可用。
+  不填 API Key 时，STEP1 规则法定位、STEP2 规则法提取（文字版报告零 token）、
+  数据合并与本地图表分析仍然可用。
 
 ---
 
@@ -32,7 +33,7 @@ streamlit run app.py
 | --- | --- | --- |
 | STEP0 报告监控 | 读取本地财险公司清单，单家或并发检查披露页面是否已更新目标报告期 | `ui/step0_monitor.py`、`services/solvency_pdf_locator.py` |
 | STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览 | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
-| STEP2 表格提取 | 按确认页码逐页并发提取，失败页自动图片扫描/网格纠错，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
+| STEP2 表格提取 | 按确认页码逐页并发提取：先按目标表首尾项目在页内定位表格区域（一页多表时只取目标表），文字版页面走规则法（离线零 token），扫描版页面或规则法未通过校验的页面走大模型并同样按区域裁切；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
 | STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；批量：定位→核对页码→提取三阶段处理多家公司 | `ui/step3_standardization.py`、`services/solvency_step3_standardizer.py`、`services/batch_processor.py` |
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；输出待处理事项工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
@@ -104,6 +105,9 @@ tests/                    回归测试
 | `solvency_pdf_locator.py` | 文本层分析、目录换算、文档类型识别、报告元数据提取 |
 | `solvency_table_boundaries.py` | 目标表起止边界与版式变体（含 S05 单行跨页等真实版式） |
 | `solvency_ai_table_extractor/` | STEP2 逐页提取包：`models` 模型与文本工具、`units` 单位记录、`grid` 文本网格、`source_profile` 源PDF完整性、`llm` 模型调用、`extract` 主流程 |
+| `solvency_rule_table_extractor.py` | STEP2 提取方式路由：文字版页面用 pdfplumber 线框/文字对齐规则法离线提取并做完整性门禁，扫描版页面或未通过校验时才调用大模型 |
+| `solvency_table_region.py` | 页内表格区域定位：用目标表首尾项目在一页多表时圈定目标表的纵向范围，规则法按区域识别、图片模式按区域裁切，界面用红框标出 |
+| `table_number_repair.py` | 数值格式修复：以同页原文为准校正金额分隔符（千分位被写成小数点、丢逗号、全角逗号等），并输出待人工核对清单 |
 | `table_strategy_registry.py` / `table_strategy_handlers.py` | 各目标表的专用提取策略 |
 | `solvency_normalizer.py` | 指标匹配、期间口径归一、单位换算、标准窄表 schema |
 | `solvency_step3_standardizer.py` | 目标指标清单填报与派生指标计算 |
@@ -157,6 +161,7 @@ tests/                    回归测试
 ```bash
 cd tests
 python test_step1_locator_modes.py    # STEP1 定位：文档类型、离线规则法、大模型复核、S05 单行跨页
+python test_step2_extraction_modes.py # STEP2 提取：千分位修复、规则法离线提取、提取方式路由、中间表编辑
 python test_app_smoke.py              # 登录后首页渲染
 python test_workflow_smoke.py         # 注入合成数据，逐页渲染 STEP0–STEP8（含全部内置图表）
 python test_step7_excel_modules.py    # Excel 配置驱动的 29 种 STEP7 图表类型

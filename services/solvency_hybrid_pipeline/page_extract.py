@@ -35,6 +35,7 @@ from ..solvency_table_boundaries import (
     item_hits_in_rows,
 )
 from ..solvency_disclosure_normalizer import normalize_three_year_return_rows_core
+from ..table_number_repair import repair_thousand_separators
 from ..solvency_table_extractor import (
     TABLE_EXCLUSIONS,
     TABLE_HEADERS,
@@ -223,6 +224,21 @@ def _prepare_page_rows(
             recover_minimum_capital=recover_minimum_capital_terminal_rows_core,
         )
     )
+    # ★ 数值修复：模型常把千分位逗号写成小数点（1.234.567.89），
+    #   这里用同一页的原文网格做佐证做一次确定性还原。
+    repair = repair_thousand_separators(
+        rows,
+        "\n".join(
+            str(getattr(grid, "grid_text", "") or "")
+            for grid in (source_grids or [])
+        ),
+    )
+    if repair.changed:
+        rows = repair.rows
+        postprocess_notes = (
+            *postprocess_notes,
+            f"已修复{len(repair.repairs)}处千分位误读",
+        )
     if any("归一化" in note for note in postprocess_notes):
         ragged_ratio = 0.0
     note = "；".join(postprocess_notes)

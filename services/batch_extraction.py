@@ -14,6 +14,16 @@ import pandas as pd
 import pdfplumber
 from openai import OpenAI
 
+from .table_number_repair import THOUSAND_SEPARATOR_PROMPT_RULE, repair_thousand_separators
+
+
+# 逐页提示词共用的数值格式要求：把千分位逗号改写成小数点是高频静默错误，
+# 提示词里给出反例比只说“保留逗号”更有效。
+_NUMBER_FORMAT_RULE = (
+    f"\n【数值格式硬约束】{THOUSAND_SEPARATOR_PROMPT_RULE}"
+    "若某位数字看不清，宁可保留原文写法也不要改写千分位。"
+)
+
 
 # ============================================================
 # 通用文本工具
@@ -235,18 +245,46 @@ def sanitize_tree(obj):
 # ============================================================
 # PDF 视觉提取引擎
 # ============================================================
-def extract_single_page_vision(pdf_bytes, page_num, expected_name, api_key, base_url, model_name):
-    """将 PDF 页面转为高清图片，使用视觉大模型提取表格"""
+def extract_single_page_vision(
+    pdf_bytes,
+    page_num,
+    expected_name,
+    api_key,
+    base_url,
+    model_name,
+    *,
+    bbox=None,
+    region_note="",
+    zoom=3.0,
+):
+    """将 PDF 页面转为高清图片，使用视觉大模型提取表格。
+
+    ``bbox`` 为 (x0, top, x1, bottom)（PDF 点、左上原点）：一页多表时先把
+    图片裁切到目标表所在区域，模型只会看到目标表，避免把相邻表读进来。
+    """
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
             return None, ""
         page = doc.load_page(page_num - 1)
 
-        zoom_matrix = fitz.Matrix(3.0, 3.0)
-        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
+        clip = None
+        if bbox is not None:
+            try:
+                rect = fitz.Rect(*[float(value) for value in bbox])
+                if rect.is_valid and not rect.is_empty and rect.intersects(page.rect):
+                    clip = rect
+            except (TypeError, ValueError):
+                clip = None
+        zoom_matrix = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False, clip=clip)
         img_data = pix.tobytes("png")
         base64_image = base64.b64encode(img_data).decode('utf-8')
+        # 文字层原文仅用于千分位修复佐证；扫描页通常为空字符串。
+        try:
+            evidence_text = page.get_text() or ""
+        except Exception:
+            evidence_text = ""
         doc.close()
 
         prompt = f"""你是一个四大会计师事务所的资深财险数字化审计专家。
@@ -257,6 +295,14 @@ def extract_single_page_vision(pdf_bytes, page_num, expected_name, api_key, base
 2. 精准对齐多级表头！如果有留白单元格，必须用 "|" 占位补齐！
 3. 绝不能漏掉任何一行数据，保留金额里的逗号和括号。
 4. 纯文本输出，不要使用 Markdown 代码块。不需要输出 SHEET_NAME 标签，直接排版。"""
+        prompt += _NUMBER_FORMAT_RULE
+        if clip is not None:
+            prompt += (
+                "\n【重要】本图已按目标表的首尾项目预先裁切，图上可能没有表名或完整页眉，"
+                "请只提取图中可见的目标表内容，不要把裁切边界外的内容补进来。"
+            )
+            if region_note:
+                prompt += f"\n裁切依据：{region_note}"
 
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
@@ -297,7 +343,11 @@ def extract_single_page_vision(pdf_bytes, page_num, expected_name, api_key, base
             if len(row) < max_cols:
                 row.extend([''] * (max_cols - len(row)))
 
-        return pd.DataFrame(parsed_data), "【提示：该页已使用 OCR 视觉引擎处理，原文本为图片结构】"
+        repair = repair_thousand_separators(parsed_data, evidence_text)
+        log = "【提示：该页已使用 OCR 视觉引擎处理，原文本为图片结构】"
+        if repair.note:
+            log += f"；{repair.note}"
+        return pd.DataFrame(repair.rows), log
 
     except Exception as e:
         return None, f"图像处理失败: {str(e)}"
@@ -329,6 +379,7 @@ def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, m
 
 以下是原始文本，请开始输出：
 {raw_text}"""
+        prompt += _NUMBER_FORMAT_RULE
 
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
@@ -365,7 +416,11 @@ def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, m
             if len(row) < max_cols:
                 row.extend([''] * (max_cols - len(row)))
 
-        return pd.DataFrame(parsed_data), raw_text
+        repair = repair_thousand_separators(parsed_data, raw_text)
+        log = raw_text
+        if repair.note:
+            log = f"{raw_text}\n【数值修复】{repair.note}"
+        return pd.DataFrame(repair.rows), log
 
     except Exception as e:
         return None, f"提取失败: {str(e)}"

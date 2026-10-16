@@ -112,13 +112,31 @@ def cached_analyze_document_type(pdf_bytes: bytes):
 
 
 @st.cache_data(show_spinner=False)
-def render_pdf_page(pdf_bytes: bytes, page_number: int, zoom: float = 1.8) -> bytes:
-    """将指定物理页渲染为PNG，用于人工核实。"""
+def render_pdf_page(
+    pdf_bytes: bytes,
+    page_number: int,
+    zoom: float = 1.8,
+    highlight: tuple[float, float, float, float] | None = None,
+) -> bytes:
+    """将指定物理页渲染为PNG，用于人工核实。
+
+    ``highlight`` 为 (x0, top, x1, bottom)（PDF 点）：会画上红框，用于直观确认
+    一页多表时系统实际提取的是哪一块区域。
+    """
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         if page_number < 1 or page_number > len(document):
             raise ValueError(f"页码 {page_number} 超出文档范围。")
         page = document.load_page(page_number - 1)
+        if highlight:
+            try:
+                page.draw_rect(
+                    fitz.Rect(*[float(value) for value in highlight]),
+                    color=(0.92, 0.11, 0.18),
+                    width=2,
+                )
+            except Exception:
+                pass
         pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
         return pixmap.tobytes("png")
     finally:

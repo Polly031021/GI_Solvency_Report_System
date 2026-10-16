@@ -30,6 +30,13 @@ def new_state_defaults() -> dict[str, object]:
         "llm_api_key": "",
         "auto_vision_retry": True,
         "force_vision_mode": False,
+        # STEP2 提取方式（文字版页面走规则法，扫描版页面走大模型）
+        "extraction_method": "",
+        "allow_llm_fallback": True,
+        "extraction_edit_events": [],
+        "extraction_number_repairs": [],
+        "extraction_number_reviews": [],
+        "extraction_regions": {},
         "standard_data": pd.DataFrame(columns=STANDARD_COLUMNS),
         "standard_workbook_bytes": b"",
         "standard_target_catalog": pd.DataFrame(),
