@@ -14,7 +14,17 @@ from services.report_profiles import ReportProfile
 from services.solvency_pdf_locator import extract_report_metadata
 
 from .cache import dataframe_to_xlsx
-from .helpers import finalize_company_frame, target_period_terms
+from .helpers import (
+    finalize_company_frame,
+    keep_valid_widget_state,
+    target_period_terms,
+)
+
+# “是否上市”是清单里的叠加标签列：一家公司可以同时属于“前十大”和“上市公司”。
+# 因此它不写回“公司类别”，只在 STEP0 作为一个虚拟筛选项参与并集筛选。
+LISTED_FLAG_COLUMN = "是否上市"
+LISTED_CATEGORY_LABEL = "上市公司"
+LISTED_TRUE_VALUES = {"是", "上市", "已上市", "y", "yes", "true", "1"}
 
 
 def _load_monitor_companies() -> pd.DataFrame:
@@ -26,7 +36,7 @@ def _load_monitor_companies() -> pd.DataFrame:
         st.warning("未找到 财险公司列表.xlsx，STEP0 公司清单为空。")
 
     # 兼容“公司名称 / 披露地址”等历史列名；其余清理逻辑与其他入口共用
-    return finalize_company_frame(
+    companies = finalize_company_frame(
         companies,
         {
             "公司名称": "公司",
@@ -34,6 +44,54 @@ def _load_monitor_companies() -> pd.DataFrame:
             "披露地址": "报告披露地址",
         },
         fill_missing=False,
+    )
+    # 旧版清单没有“是否上市”列时补空列，保证下游取列不报错（等价于全部未上市）
+    if LISTED_FLAG_COLUMN not in companies.columns:
+        companies[LISTED_FLAG_COLUMN] = ""
+    companies[LISTED_FLAG_COLUMN] = (
+        companies[LISTED_FLAG_COLUMN].fillna("").astype(str).str.strip()
+    )
+    return companies
+
+
+def listed_flag_series(companies: pd.DataFrame) -> pd.Series:
+    """返回“是否上市公司”布尔序列；清单缺少标记列时全部为 False。"""
+    if LISTED_FLAG_COLUMN not in companies.columns or companies.empty:
+        return pd.Series(False, index=companies.index, dtype=bool)
+    return (
+        companies[LISTED_FLAG_COLUMN]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(LISTED_TRUE_VALUES)
+    )
+
+
+def category_options(companies: pd.DataFrame) -> list[str]:
+    """公司类别选项 = 清单中的互斥类别 + 叠加标签“上市公司”。"""
+    if companies.empty:
+        return []
+    values = companies["公司类别"].fillna("").astype(str).str.strip()
+    options = sorted({value for value in values.unique().tolist() if value})
+    if listed_flag_series(companies).any():
+        # 与“前十大”等类别天然重合，作为叠加标签固定放在末尾
+        options.append(LISTED_CATEGORY_LABEL)
+    return options
+
+
+def filter_companies_by_categories(
+    companies: pd.DataFrame,
+    selected_categories: list[str],
+) -> pd.DataFrame:
+    """按类别筛选；“上市公司”与其他类别取并集并按公司去重，避免重复检查。"""
+    if companies.empty or not selected_categories:
+        return companies.iloc[0:0].reset_index(drop=True)
+    mask = companies["公司类别"].astype(str).str.strip().isin(selected_categories)
+    if LISTED_CATEGORY_LABEL in selected_categories:
+        mask = mask | listed_flag_series(companies)
+    return (
+        companies[mask].drop_duplicates(subset=["公司"], keep="first").reset_index(drop=True)
     )
 
 
@@ -212,19 +270,26 @@ def render_monitor_tab(active_profile: ReportProfile) -> pd.DataFrame:
             ["Q1", "Q2", "Q3", "Q4"],
         )
 
-    all_categories = sorted(companies["公司类别"].dropna().unique().tolist())
+    all_categories = category_options(companies)
+    # 清单类别调整后（例如“前八大”改名“前十大”），清掉会话里已失效的历史勾选
+    keep_valid_widget_state("monitor_company_categories", all_categories, multiple=True)
     selected_categories = st.multiselect(
         "公司类别",
         all_categories,
-        default=all_categories,
+        default=(
+            all_categories if "monitor_company_categories" not in st.session_state else None
+        ),
         key="monitor_company_categories",
+        help=(
+            f"“{LISTED_CATEGORY_LABEL}”是叠加标签，会与“前十大”等类别重合；"
+            "同时勾选时按公司取并集去重，不会重复检查同一家公司。"
+        ),
     )
-    filtered_companies = companies[companies["公司类别"].isin(selected_categories)].reset_index(
-        drop=True
-    )
+    filtered_companies = filter_companies_by_categories(companies, selected_categories)
 
     st.caption(
-        f"系统公司范围共 {len(companies)} 家；当前筛选 {len(filtered_companies)} 家。"
+        f"系统公司范围共 {len(companies)} 家；当前筛选 {len(filtered_companies)} 家"
+        f"（含“{LISTED_CATEGORY_LABEL}”叠加标签，已按公司去重）。"
         f"运行时使用 {active_profile.profile_id} 的公司来源配置。"
     )
     st.dataframe(
