@@ -51,10 +51,6 @@ def _clean_text(value: object) -> str:
     return "" if text.lower() in {"nan", "none", "null"} else text
 
 
-def clean_note_text(value: object) -> str:
-    return _clean_text(value)
-
-
 def _navigation_template(
     entries: Iterable[object],
     *,

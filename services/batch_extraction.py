@@ -18,37 +18,6 @@ from openai import OpenAI
 # ============================================================
 # 通用文本工具
 # ============================================================
-_LABEL_NOISE_RE = re.compile(r"[\d,，.。%％:：;；()（）\[\]【】\s\-—_*+=/\\|]+")
-
-
-def clean_label(s) -> str:
-    """剥离标签里的数字、标点、空白，只留中文字符，用于匹配。"""
-    return _LABEL_NOISE_RE.sub("", str(s or "")).strip()
-
-
-def get_report_unit(text):
-    """从文本中嗅探金额单位"""
-    if not text:
-        return None
-    m1 = re.search(r'(?:金额)?单位[：:\s]*((?:人民币)?[元十百千万亿]+)', text)
-    if m1:
-        return m1.group(1).strip()
-    m2 = re.search(r'(人民币[十百千万亿]+元)', text)
-    if m2:
-        return m2.group(1).strip()
-    if "人民币元" in text:
-        return "人民币元"
-    return None
-
-
-def normalize_field(s):
-    if not isinstance(s, str):
-        return ""
-    s = s.replace('\xa0', '').replace('\u3000', '').replace(' ', '').strip()
-    s = s.replace('（', '(').replace('）', ')')
-    return s
-
-
 # ============================================================
 # 兜底表格对象
 # ============================================================

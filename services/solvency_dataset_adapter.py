@@ -630,18 +630,6 @@ def supported_metric_catalog(
     ]).reset_index(drop=True)
 
 
-def _external_value(raw_value: Any, metric: dict) -> Any:
-    if metric["数据类型"] in {"文本", "评级", "布尔"}:
-        return "" if pd.isna(raw_value) else str(raw_value).strip()
-    numeric = _number(raw_value)
-    if numeric is None:
-        return np.nan
-    if metric["指标编码"] in PERCENT_FROM_RATIO_CODES:
-        text = str(raw_value).strip()
-        return numeric if text.endswith(("%", "％")) else numeric * 100
-    return numeric
-
-
 def _company_type(value: Any) -> str:
     text = str(value or "").strip()
     return {"养老": "养老险", "健康": "健康险"}.get(text, text or "未分类")

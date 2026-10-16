@@ -317,10 +317,6 @@ def resolve_table_strategy(
     return TABLE_STRATEGIES.resolve(table_id, strategy_id, table_config)
 
 
-def registered_table_strategies() -> tuple[TableStrategy, ...]:
-    return TABLE_STRATEGIES.all()
-
-
 def active_table_strategy(table_id: str) -> ResolvedTableStrategy:
     active = _ACTIVE_TABLE_STRATEGY.get()
     if active is not None and active.table_id == str(table_id or "").strip():

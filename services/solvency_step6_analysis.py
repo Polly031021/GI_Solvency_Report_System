@@ -24,33 +24,6 @@ CHART_TYPES = (
     "横向条形图",
 )
 
-# ============================================================================
-# 公司名称归一化：去掉披露口径后缀（如"（偿付能力）"、"（财险）"等）
-# ============================================================================
-
-# 只匹配"明确是披露口径后缀"的词，不做泛化，避免误伤真实公司名。
-_COMPANY_NAME_SUFFIX_PATTERN = re.compile(
-    r"[（(]\s*(?:偿付能力|财险|寿险|合并|母公司|集团)\s*[)）]\s*$"
-)
-
-
-def normalize_company_name(value: object) -> str:
-    """去掉公司名末尾的披露口径后缀。"""
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return _COMPANY_NAME_SUFFIX_PATTERN.sub("", text).strip()
-
-
-def normalize_company_series(series: pd.Series) -> pd.Series:
-    """向量化版本，用于 DataFrame 列。"""
-    return (
-        series.fillna("").astype(str).str.strip()
-        .str.replace(_COMPANY_NAME_SUFFIX_PATTERN, "", regex=True)
-        .str.strip()
-    )
-
-
 def format_chart_value(
     value: object,
     unit: object = "",
@@ -250,17 +223,6 @@ def sort_report_periods(values: Iterable[object]) -> list[str]:
     return sorted(unique, key=_period_sort_key)
 
 
-def default_companies(report_mode: str, companies: Iterable[str]) -> list[str]:
-    options = [str(company) for company in companies if str(company).strip()]
-    if report_mode == COMPANY_REPORT:
-        return options[:1]
-    actual = [company for company in options if company != INDUSTRY_TOTAL]
-    selected = actual[:5]
-    if INDUSTRY_TOTAL in options:
-        selected.append(INDUSTRY_TOTAL)
-    return selected
-
-
 def default_periods(periods: Iterable[str], limit: int = 8) -> list[str]:
     ordered = sort_report_periods(periods)
     return ordered[-limit:]
@@ -297,33 +259,6 @@ def filter_analysis_frame(
     for column, values in collection_filters.items():
         if values:
             result = result[result[column].isin(values)]
-    return result.copy()
-
-
-def navigation_scope_frame(
-    frame: pd.DataFrame,
-    level_one: str = "",
-    level_two: str = "全部",
-    *,
-    print_all_label: str = "一键显示全部（打印/导出）",
-) -> pd.DataFrame:
-    """Limit visual metrics to the current report-navigation scope.
-
-    The print-all entry intentionally means the full visualization dataset.  The
-    synthetic ``全部`` second level likewise keeps every metric under the selected
-    first-level module.
-    """
-    if frame.empty:
-        return frame.copy()
-    first = str(level_one or "").strip()
-    second = str(level_two or "").strip()
-    if not first or first == print_all_label:
-        return frame.copy()
-    result = frame
-    if "一级模块" in result.columns:
-        result = result[result["一级模块"].fillna("").astype(str).str.strip().eq(first)]
-    if second and second != "全部" and "二级模块" in result.columns:
-        result = result[result["二级模块"].fillna("").astype(str).str.strip().eq(second)]
     return result.copy()
 
 
