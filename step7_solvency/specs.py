@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.solvency_navigation import CREDIT_RISK_ASSET_SCATTER
-from services.solvency_navigation import INSURANCE_RISK_LIABILITY_SCATTER
-from services.solvency_navigation import KPMG_BRIGHT_CHART_COLORS
-from services.solvency_navigation import KPMG_QUANT_RISK_COLORS
-from services.solvency_navigation import MARKET_RISK_ASSET_SCATTER
+from services.solvency_navigation import (
+    CREDIT_RISK_ASSET_SCATTER,
+    INSURANCE_RISK_LIABILITY_SCATTER,
+    KPMG_BRIGHT_CHART_COLORS,
+    KPMG_QUANT_RISK_COLORS,
+    MARKET_RISK_ASSET_SCATTER,
+)
 from services.solvency_step7_charts import CAPITAL_STRUCTURE_COLORS
 
 # 图片资源目录位于项目根目录（本文件在包内，需要多上一级）

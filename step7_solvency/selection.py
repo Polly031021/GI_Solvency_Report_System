@@ -7,10 +7,12 @@ from collections.abc import Iterable
 import colorsys
 import pandas as pd
 import streamlit as st
-from services.solvency_navigation import COMPANY_NAVIGATION
-from services.solvency_navigation import KPMG_CHART_COLORS
-from services.solvency_navigation import PRINT_ALL_LABEL
-from services.solvency_navigation import resolve_chart_selection
+from services.solvency_navigation import (
+    COMPANY_NAVIGATION,
+    KPMG_CHART_COLORS,
+    PRINT_ALL_LABEL,
+    resolve_chart_selection,
+)
 from services.step7_excel_config import Step7Module
 
 from .specs import (

@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from html import escape
 
 import altair as alt
 import pandas as pd
 import streamlit as st
-from services.solvency_step6_analysis import filter_analysis_frame
-from services.solvency_step6_analysis import format_chart_value
-from services.solvency_step6_analysis import sort_report_periods
-from services.solvency_step7_charts import build_company_bar_trend_chart
-from services.solvency_step7_charts import build_company_period_bar_chart
-from services.solvency_step7_charts import build_single_metric_trend_charts
-from services.solvency_step7_charts import convert_multiple_units_to_percent
-from services.solvency_step7_charts import metric_bar_axis_domain
-from services.solvency_step7_charts import report_period_color_map
+from services.solvency_step6_analysis import (
+    filter_analysis_frame,
+    format_chart_value,
+    sort_report_periods,
+)
+from services.solvency_step7_charts import (
+    build_company_bar_trend_chart,
+    build_company_period_bar_chart,
+    build_single_metric_trend_charts,
+    convert_multiple_units_to_percent,
+    metric_bar_axis_domain,
+    report_period_color_map,
+)
 
 from .ai_analysis import ai_analysis_for_latest_period
 from .selection import company_color_map, metric_title, ordered_companies

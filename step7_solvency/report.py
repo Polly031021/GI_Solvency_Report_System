@@ -6,27 +6,35 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
-from dashboard_components import company_detail_rows
-from dashboard_components import render_report_analysis
-from dashboard_components import render_report_back_cover
-from dashboard_components import render_report_cover
-from dashboard_components import render_report_footnote
-from dashboard_components import render_report_notes_editor
-from services.solvency_navigation import COMPANY_NAVIGATION
-from services.solvency_navigation import PRINT_ALL_LABEL
-from services.solvency_navigation import metric_codes_for_chart
+from dashboard_components import (
+    company_detail_rows,
+    render_report_analysis,
+    render_report_back_cover,
+    render_report_cover,
+    render_report_footnote,
+    render_report_notes_editor,
+)
+from services.solvency_navigation import (
+    COMPANY_NAVIGATION,
+    PRINT_ALL_LABEL,
+    metric_codes_for_chart,
+)
 from services.step7_excel_config import Step7Module
-from services.solvency_step6_analysis import filter_analysis_frame
-from services.solvency_step6_analysis import nonblank_values
-from services.solvency_step6_analysis import sort_report_periods
-from services.solvency_step7_chart_plans import COMPANY_BAR_TREND
-from services.solvency_step7_chart_plans import CAPABILITY_RADAR
-from services.solvency_step7_chart_plans import UNDERWRITING_EFFICIENCY_SCATTER
-from services.solvency_step7_chart_plans import STRUCTURE_CHANGE_CHART
-from services.solvency_step7_chart_plans import SINGLE_METRIC_TREND
-from services.solvency_step7_chart_plans import TREND_WITH_COMPANY_BARS
-from services.solvency_step7_chart_plans import chart_plan_for
-from services.solvency_step7_chart_plans import PERFORMANCE_PATTERN_GRID
+from services.solvency_step6_analysis import (
+    filter_analysis_frame,
+    nonblank_values,
+    sort_report_periods,
+)
+from services.solvency_step7_chart_plans import (
+    COMPANY_BAR_TREND,
+    CAPABILITY_RADAR,
+    UNDERWRITING_EFFICIENCY_SCATTER,
+    STRUCTURE_CHANGE_CHART,
+    SINGLE_METRIC_TREND,
+    TREND_WITH_COMPANY_BARS,
+    chart_plan_for,
+    PERFORMANCE_PATTERN_GRID,
+)
 from services.solvency_report_notes import company_notes_template
 
 from .plans import render_combination_analysis
