@@ -59,6 +59,8 @@ def new_state_defaults() -> dict[str, object]:
         "active_profile_id": DEFAULT_PROFILE_ID,
         "active_profile_runtime": "",
     }
+
+
 def initialize_state() -> None:
     for key, value in new_state_defaults().items():
         if key not in st.session_state:
@@ -67,6 +69,8 @@ def initialize_state() -> None:
         for key in ("standard_data", "integrated_data", "integration_preview"):
             st.session_state[key] = upgrade_standard_frame(st.session_state.get(key))
         st.session_state.standard_schema_version = STANDARD_SCHEMA_VERSION
+
+
 def reset_profile_results() -> None:
     """Clear report-specific state when the user switches Profile."""
     empty_values = new_state_defaults()
@@ -87,6 +91,8 @@ def reset_profile_results() -> None:
     for key in list(st.session_state):
         if str(key).startswith("page_edit_"):
             del st.session_state[key]
+
+
 def llm_credentials_ready() -> bool:
     """判断登录页配置的 Base URL / 模型 / API Key 是否齐全。"""
     return all(

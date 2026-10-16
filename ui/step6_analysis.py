@@ -80,12 +80,11 @@ def _render_step6_source_selector(
                 st.error(f"集成表读取失败：{exc}")
 
     if skipped_profiles:
-        st.warning(
-            "已跳过不属于当前报告 Profile 的记录："
-            + "、".join(skipped_profiles)
-        )
+        st.warning("已跳过不属于当前报告 Profile 的记录：" + "、".join(skipped_profiles))
     st.session_state.step6_analysis_source = source.copy()
     return source, source_label, skipped_profiles, source_mode
+
+
 def _render_step6_sidebar(
     active_profile: ReportProfile,
     is_project_member: bool,
@@ -109,6 +108,8 @@ def _render_step6_sidebar(
                     industry=True,
                 )
             render_major_financing_upload(active_profile.profile_id)
+
+
 def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
     """STEP6：核心配置面板；返回图表渲染所需的全部设置。"""
     with st.expander(
@@ -125,13 +126,17 @@ def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
                 CHART_TYPES,
                 key="step6_chart_type",
             )
-            selected_metric = st.selectbox(
-                "选择显示指标",
-                metric_labels,
-                key="step6_metric",
-                disabled=not metric_labels,
-                placeholder="暂无可用指标",
-            ) if metric_labels else ""
+            selected_metric = (
+                st.selectbox(
+                    "选择显示指标",
+                    metric_labels,
+                    key="step6_metric",
+                    disabled=not metric_labels,
+                    placeholder="暂无可用指标",
+                )
+                if metric_labels
+                else ""
+            )
 
             peer_group_options = nonblank_values(module_frame, "同业分类")
             company_type_filter_options = [
@@ -161,18 +166,12 @@ def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
                 if selected_company_type == NO_COMPANY_TYPE_FILTER:
                     current_companies = st.session_state.get("step6_companies", [])
                     retained_companies = [
-                        company
-                        for company in current_companies
-                        if company in all_company_options
+                        company for company in current_companies if company in all_company_options
                     ]
-                    st.session_state.step6_companies = (
-                        retained_companies or all_company_options[:2]
-                    )
+                    st.session_state.step6_companies = retained_companies or all_company_options[:2]
                 else:
                     st.session_state.step6_companies = selected_type_companies
-                st.session_state._step6_previous_company_type_quick_select = (
-                    selected_company_type
-                )
+                st.session_state._step6_previous_company_type_quick_select = selected_company_type
             elif "step6_companies" not in st.session_state:
                 st.session_state.step6_companies = all_company_options[:2]
             keep_valid_widget_state(
@@ -188,9 +187,7 @@ def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
             )
 
         comparison_frame = (
-            module_frame[
-                module_frame["公司"].isin(selected_comparison_companies)
-            ].copy()
+            module_frame[module_frame["公司"].isin(selected_comparison_companies)].copy()
             if selected_comparison_companies
             else module_frame.iloc[0:0].copy()
         )
@@ -279,22 +276,24 @@ def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
             )
 
         period_frame = (
-            comparison_frame[
-                comparison_frame["报告期"].isin(selected_periods)
-            ].copy()
+            comparison_frame[comparison_frame["报告期"].isin(selected_periods)].copy()
             if selected_periods
             else comparison_frame.iloc[0:0].copy()
         )
         scope_options = nonblank_values(period_frame, "期间口径")
         keep_valid_widget_state("step6_period_scope", scope_options)
         with scope_col:
-            period_scope = st.selectbox(
-                "期间口径",
-                scope_options,
-                key="step6_period_scope",
-                disabled=not scope_options,
-                placeholder="暂无期间口径",
-            ) if scope_options else ""
+            period_scope = (
+                st.selectbox(
+                    "期间口径",
+                    scope_options,
+                    key="step6_period_scope",
+                    disabled=not scope_options,
+                    placeholder="暂无期间口径",
+                )
+                if scope_options
+                else ""
+            )
         scoped_frame = filter_analysis_frame(
             period_frame,
             period_scope=period_scope,
@@ -313,6 +312,8 @@ def _render_step6_config_panel(module_frame: pd.DataFrame) -> SimpleNamespace:
         average_color=average_color,
         comparison_companies=list(selected_comparison_companies),
     )
+
+
 def _render_step6_chart_panel(settings: SimpleNamespace, source_label: str) -> None:
     """STEP6：按配置渲染对比图与图表明细。"""
     selected_metric_code = settings.metric_code
@@ -440,6 +441,8 @@ def _render_step6_chart_panel(settings: SimpleNamespace, source_label: str) -> N
                 width="stretch",
                 hide_index=True,
             )
+
+
 def render_analysis_tab(
     active_profile: ReportProfile,
     is_project_member: bool,
@@ -448,8 +451,8 @@ def render_analysis_tab(
 ) -> None:
     """STEP6 自定义偿付能力对标分析。"""
     st.subheader("自定义偿付能力对标分析")
-    source, source_label, skipped_profiles, source_mode = (
-        _render_step6_source_selector(active_profile)
+    source, source_label, skipped_profiles, source_mode = _render_step6_source_selector(
+        active_profile
     )
     navigation_source = report_scope_frame(
         visualization_metric_frame(source),
@@ -459,9 +462,7 @@ def render_analysis_tab(
         visualization_metric_frame(source),
         INDUSTRY_REPORT,
     )
-    industry_available_metric_codes = navigation_metric_codes(
-        industry_navigation_source
-    )
+    industry_available_metric_codes = navigation_metric_codes(industry_navigation_source)
 
     _render_step6_sidebar(
         active_profile,
@@ -487,11 +488,13 @@ def render_analysis_tab(
                 selected_level_two,
                 st.session_state.get("company_nav_chart", ""),
             )
-            selected_codes = list(dict.fromkeys(
-                code
-                for chart_name in selected_charts
-                for code in metric_codes_for_chart(chart_name)
-            ))
+            selected_codes = list(
+                dict.fromkeys(
+                    code
+                    for chart_name in selected_charts
+                    for code in metric_codes_for_chart(chart_name)
+                )
+            )
             module_frame = module_frame[
                 module_frame["指标编码"].astype(str).str.strip().isin(selected_codes)
             ]

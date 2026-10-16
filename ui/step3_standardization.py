@@ -40,9 +40,7 @@ from .helpers import parse_page_numbers
 from .session import llm_credentials_ready
 
 
-def _render_step3_single_tab(
-    active_profile: ReportProfile, taxonomy: pd.DataFrame
-) -> None:
+def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFrame) -> None:
     """STEP3：单份 PDF 目标表标准填报。"""
     st.subheader(f"{active_profile.profile_name}目标表标准填报")
     with st.container(border=True):
@@ -100,8 +98,7 @@ def _render_step3_single_tab(
         type="primary",
         icon=":material/auto_fix_high:",
         disabled=(
-            not st.session_state.raw_tables
-            or (not use_default_target and target_upload is None)
+            not st.session_state.raw_tables or (not use_default_target and target_upload is None)
         ),
         key="step3_standardize_target",
     )
@@ -142,18 +139,20 @@ def _render_step3_single_tab(
                     template_label = target_upload.name
 
                 status_box.write("正在匹配披露指标、识别期间口径并统一计量单位…")
-                metadata = sanitize_tree({
-                    **st.session_state.metadata,
-                    "来源文件": st.session_state.pdf_name,
-                    # ★ 兜底：把 first_page_text 显式带过来
-                    "first_page_text": str(
-                        st.session_state.metadata.get("first_page_text", "")
-                    ),
-                    "导入批次": (
-                        f"{Path(st.session_state.pdf_name).stem}:"
-                        f"{st.session_state.metadata.get('报告期', '')}"
-                    ),
-                })
+                metadata = sanitize_tree(
+                    {
+                        **st.session_state.metadata,
+                        "来源文件": st.session_state.pdf_name,
+                        # ★ 兜底：把 first_page_text 显式带过来
+                        "first_page_text": str(
+                            st.session_state.metadata.get("first_page_text", "")
+                        ),
+                        "导入批次": (
+                            f"{Path(st.session_state.pdf_name).stem}:"
+                            f"{st.session_state.metadata.get('报告期', '')}"
+                        ),
+                    }
+                )
                 result = standardize_to_target(
                     st.session_state.raw_tables,
                     taxonomy,
@@ -224,6 +223,7 @@ def _render_step3_single_tab(
                 )
                 st.error(f"标准填报失败：{exc}")
                 import traceback
+
                 st.exception(exc)
                 st.code(traceback.format_exc())
 
@@ -256,9 +256,7 @@ def _render_step3_single_tab(
             )
 
     if not st.session_state.standard_data.empty:
-        derived_count = int(
-            st.session_state.standard_data["指标属性"].isin(["计算", "校验"]).sum()
-        )
+        derived_count = int(st.session_state.standard_data["指标属性"].isin(["计算", "校验"]).sum())
         converted_rows = int(
             st.session_state.standard_data["备注"]
             .astype(str)
@@ -288,6 +286,8 @@ def _render_step3_single_tab(
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             icon=":material/download:",
         )
+
+
 def _render_batch_prerequisites(is_project_member: bool) -> bool:
     """STEP3 批处理：权限与 AI 配置检查。"""
     _batch_ready = True
@@ -302,6 +302,8 @@ def _render_batch_prerequisites(is_project_member: bool) -> bool:
         )
         _batch_ready = False
     return _batch_ready
+
+
 def _render_batch_upload(active_profile: ReportProfile, ready: bool) -> list:
     """STEP3 批处理：多份 PDF 上传区。"""
     _batch_ready = ready
@@ -319,19 +321,23 @@ def _render_batch_upload(active_profile: ReportProfile, ready: bool) -> list:
         _dup_names = sorted({n for n in _names if _names.count(n) > 1})
         if _dup_names:
             st.warning(
-                "以下公司名重复，请确保文件名唯一："
-                + "、".join(_dup_names),
+                "以下公司名重复，请确保文件名唯一：" + "、".join(_dup_names),
                 icon=":material/warning:",
             )
         st.success(f"已选择 {len(uploaded_pdfs)} 份 PDF。")
     return uploaded_pdfs
+
+
 def _render_batch_settings() -> SimpleNamespace:
     """STEP3 批处理：并发数、图片识别与跳过策略设置。"""
     with st.expander("批处理设置", expanded=True):
         _c1, _c2, _c3 = st.columns(3)
         with _c1:
             _batch_workers = st.slider(
-                "并发数", min_value=1, max_value=5, value=3,
+                "并发数",
+                min_value=1,
+                max_value=5,
+                value=3,
                 key="batch_workers",
                 help="越高越快，但可能触发平台限流。",
             )
@@ -354,6 +360,8 @@ def _render_batch_settings() -> SimpleNamespace:
         vision=bool(_batch_vision),
         only_new=bool(_batch_only_new),
     )
+
+
 def _prepare_batch_context(active_profile: ReportProfile, use_vision: bool):
     """构建批处理上下文；失败时提示并中断本次渲染。"""
     with st.status("正在准备批处理上下文…", expanded=False) as status_box:
@@ -372,22 +380,26 @@ def _prepare_batch_context(active_profile: ReportProfile, use_vision: bool):
             st.error(f"上下文准备失败：{exc}")
             st.stop()
     return context
-def batch_summary_frame(
-    results: list[dict], *, note_limit: int | None = None
-) -> pd.DataFrame:
+
+
+def batch_summary_frame(results: list[dict], *, note_limit: int | None = None) -> pd.DataFrame:
     """把批处理结果整理成汇总表；note_limit 用于限制说明列长度。"""
     rows = []
     for item in results:
         note = str(item.get("说明", ""))
-        rows.append({
-            "公司": item["公司"],
-            "状态": item["状态"],
-            "定位表数": item.get("定位表数", 0),
-            "提取表数": item.get("提取表数", 0),
-            "窄表记录数": item.get("窄表记录数", 0),
-            "说明": note[:note_limit] if note_limit else note,
-        })
+        rows.append(
+            {
+                "公司": item["公司"],
+                "状态": item["状态"],
+                "定位表数": item.get("定位表数", 0),
+                "提取表数": item.get("提取表数", 0),
+                "窄表记录数": item.get("窄表记录数", 0),
+                "说明": note[:note_limit] if note_limit else note,
+            }
+        )
     return pd.DataFrame(rows)
+
+
 def _render_batch_locate(
     active_profile: ReportProfile,
     uploaded_pdfs: list,
@@ -434,13 +446,14 @@ def _render_batch_locate(
 
         # ★ 新增：缓存每份 PDF 的原始 bytes，供阶段 2 页面预览使用
         st.session_state["batch_pdf_bytes"] = {
-            Path(_f.name).stem: _f.getvalue()
-            for _f in uploaded_pdfs
+            Path(_f.name).stem: _f.getvalue() for _f in uploaded_pdfs
         }
 
         st.session_state["batch_located"] = _locate_results
         st.session_state.pop("batch_last_results", None)  # 清上一轮结果
         st.success(f"已完成 {len(_locate_results)} 家公司的定位，请核对页码。")
+
+
 def _render_batch_page_review() -> None:
     """STEP3 批处理阶段 2：核对并修正页码（含页面预览）。"""
     # ============================================================
@@ -482,10 +495,7 @@ def _render_batch_page_review() -> None:
 
                     _col1, _col2 = st.columns([1, 2])
                     with _col1:
-                        st.markdown(
-                            f"**{_m.table_name}**"
-                            + (" 🔴" if _is_conflict else "")
-                        )
+                        st.markdown(f"**{_m.table_name}**" + (" 🔴" if _is_conflict else ""))
                         if _is_conflict:
                             st.caption(f"⚠ {_m.review_reason}")
                     with _col2:
@@ -542,9 +552,7 @@ def _render_batch_page_review() -> None:
                     _pdf_bytes_cache = st.session_state.get("batch_pdf_bytes", {})
                     if _company in _pdf_bytes_cache:
                         try:
-                            _img = render_pdf_page(
-                                _pdf_bytes_cache[_company], _sel_page
-                            )
+                            _img = render_pdf_page(_pdf_bytes_cache[_company], _sel_page)
                             st.image(
                                 _img,
                                 caption=f"{_company} — 第 {_sel_page} 页",
@@ -564,6 +572,8 @@ def _render_batch_page_review() -> None:
             st.success("✅ 所有目标表定位无冲突，可直接提取。")
 
         st.session_state["batch_page_overrides"] = _edited_overrides
+
+
 def _render_batch_extract(
     active_profile: ReportProfile,
     uploaded_pdfs: list,
@@ -590,9 +600,7 @@ def _render_batch_extract(
 
     if _extract_clicked and uploaded_pdfs:
         _prev_results = st.session_state.get("batch_last_results", {})
-        _prev_success_names = {
-            n for n, r in _prev_results.items() if r.get("状态") == "成功"
-        }
+        _prev_success_names = {n for n, r in _prev_results.items() if r.get("状态") == "成功"}
 
         _ctx2 = _prepare_batch_context(active_profile, _batch_vision)
 
@@ -606,9 +614,7 @@ def _render_batch_extract(
             _todo.append((_name, _f.getvalue()))
 
         if _skipped:
-            st.info(
-                f"跳过 {len(_skipped)} 家已成功的公司：{'、'.join(_skipped)}"
-            )
+            st.info(f"跳过 {len(_skipped)} 家已成功的公司：{'、'.join(_skipped)}")
 
         if not _todo:
             st.warning("没有需要处理的文件。")
@@ -663,10 +669,10 @@ def _render_batch_extract(
             _progress.empty()
             _progress_text.empty()
 
-            st.session_state["batch_last_results"] = {
-                _r["公司"]: _r for _r in _results
-            }
+            st.session_state["batch_last_results"] = {_r["公司"]: _r for _r in _results}
             st.session_state["batch_last_active_profile"] = active_profile.profile_id
+
+
 def _render_batch_results(active_profile: ReportProfile) -> None:
     """STEP3 批处理：结果汇总、打包下载与清空。"""
     # ============================================================
@@ -708,8 +714,7 @@ def _render_batch_results(active_profile: ReportProfile) -> None:
                         f"📦 下载全部结果（{_ok} 家，ZIP）",
                         _zip_bytes,
                         file_name=(
-                            f"{active_profile.profile_id}_批量提取"
-                            f"_{len(_res_list)}家.zip"
+                            f"{active_profile.profile_id}_批量提取" f"_{len(_res_list)}家.zip"
                         ),
                         mime="application/zip",
                         type="primary",
@@ -722,8 +727,7 @@ def _render_batch_results(active_profile: ReportProfile) -> None:
                         dataframe_to_xlsx(_summary_df, "批处理汇总"),
                         file_name=f"{active_profile.profile_id}_批处理汇总.xlsx",
                         mime=(
-                            "application/vnd.openxmlformats-officedocument"
-                            ".spreadsheetml.sheet"
+                            "application/vnd.openxmlformats-officedocument" ".spreadsheetml.sheet"
                         ),
                         width="stretch",
                         key="batch_dl_summary",
@@ -743,9 +747,9 @@ def _render_batch_results(active_profile: ReportProfile) -> None:
                 st.session_state.pop("batch_located", None)
                 st.session_state.pop("batch_page_overrides", None)
                 st.rerun()
-def _render_step3_batch_tab(
-    active_profile: ReportProfile, is_project_member: bool
-) -> None:
+
+
+def _render_step3_batch_tab(active_profile: ReportProfile, is_project_member: bool) -> None:
     """STEP3：批量处理多家公司。"""
     st.subheader("🗂️ 批量提取多家公司偿付能力数据")
     st.caption(
@@ -763,6 +767,8 @@ def _render_step3_batch_tab(
     _render_batch_page_review()
     _render_batch_extract(active_profile, uploaded_pdfs, settings, batch_ready)
     _render_batch_results(active_profile)
+
+
 def render_standardization_tab(
     active_profile: ReportProfile,
     taxonomy: pd.DataFrame,

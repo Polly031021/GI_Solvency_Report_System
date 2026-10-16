@@ -33,12 +33,16 @@ def initialize_login_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+
+
 def _provider_name_from_base_url(base_url: str) -> str:
     normalized_url = str(base_url or "").strip().rstrip("/").lower()
     for provider, (provider_url, _) in LOGIN_AI_PROVIDERS.items():
         if normalized_url == provider_url.strip().rstrip("/").lower():
             return provider
     return "自定义私有化节点"
+
+
 def _expected_login_code(role: str) -> str:
     """Allow deployments to override the reference platform's two access codes."""
     env_name = (
@@ -48,6 +52,8 @@ def _expected_login_code(role: str) -> str:
     )
     fallback = "KPMG666" if role == PROJECT_MEMBER_ROLE else "KPMG1234"
     return os.getenv(env_name, fallback)
+
+
 def logout() -> None:
     st.session_state.logged_in = False
     st.session_state.user_role = None
@@ -56,6 +62,8 @@ def logout() -> None:
     st.session_state.login_security_code = ""
     st.session_state.pop("workflow_main_tab", None)
     st.session_state.pop("profile_settings_tabs", None)
+
+
 def render_login_page() -> None:
     st.markdown(
         """
@@ -161,18 +169,12 @@ def render_login_page() -> None:
             else:
                 st.session_state.logged_in = True
                 st.session_state.user_role = selected_role
-                st.session_state.llm_base_url = str(
-                    st.session_state.login_base_url_input
-                ).strip()
+                st.session_state.llm_base_url = str(st.session_state.login_base_url_input).strip()
                 st.session_state.llm_provider = _provider_name_from_base_url(
                     st.session_state.llm_base_url
                 )
-                st.session_state.llm_model = str(
-                    st.session_state.login_model_input
-                ).strip()
-                st.session_state.llm_api_key = str(
-                    st.session_state.login_api_key_input
-                ).strip()
+                st.session_state.llm_model = str(st.session_state.login_model_input).strip()
+                st.session_state.llm_api_key = str(st.session_state.login_api_key_input).strip()
                 st.session_state.pop("workflow_main_tab", None)
                 st.session_state.pop("profile_settings_tabs", None)
                 st.rerun()

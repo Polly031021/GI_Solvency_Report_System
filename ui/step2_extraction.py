@@ -39,18 +39,41 @@ _HEADER_ALIAS = {
     "本年累计": "本年度累计数",
 }
 _HEADER_HINT_TOKENS = (
-    "指标名称", "项目", "行次", "本季度", "上季度",
-    "本年累计", "期末", "期初", "下季度", "本期", "上期",
+    "指标名称",
+    "项目",
+    "行次",
+    "本季度",
+    "上季度",
+    "本年累计",
+    "期末",
+    "期初",
+    "下季度",
+    "本期",
+    "上期",
 )
 _HEADER_HINTS = (
-    "指标名称", "项目", "行次", "本季度", "上季度",
-    "本年累计", "期末", "期初", "下季度",
-    "保费风险", "准备金风险", "本期", "上期",
+    "指标名称",
+    "项目",
+    "行次",
+    "本季度",
+    "上季度",
+    "本年累计",
+    "期末",
+    "期初",
+    "下季度",
+    "保费风险",
+    "准备金风险",
+    "本期",
+    "上期",
 )
+
+
 def canonical_header_cell(cell: object) -> str:
     """把表头别名（本期/上期/本年累计等）归一到统一写法。"""
     text = str(cell).strip()
     return _HEADER_ALIAS.get(text, text)
+
+
 def looks_like_header(row) -> bool:
     """判断某一行是否像表头；纯括号说明行（如“（审计后）”）不算表头。"""
     text = "".join(str(c) for c in row)
@@ -60,12 +83,16 @@ def looks_like_header(row) -> bool:
     if not stripped:
         return False
     return any(token in text for token in _HEADER_HINT_TOKENS)
+
+
 def header_richness(row: list) -> int:
     """表头丰富度 = 命中关键词数 × 10 + 非空单元格数，越大越像表头。"""
     text = "".join(str(c) for c in row)
     hits = sum(1 for token in _HEADER_HINT_TOKENS if token in text)
     nonempty = sum(1 for cell in row if str(cell).strip())
     return hits * 10 + nonempty
+
+
 def locate_header_row_index(raw_rows: list[list]) -> int:
     """在合并后的原始行中定位表头行。
 
@@ -83,6 +110,8 @@ def locate_header_row_index(raw_rows: list[list]) -> int:
             best_hits = hits
             header_index = index
     return header_index if best_hits else 0
+
+
 def normalize_table_unit(
     grid: list[list],
     combined_raw_text: str,
@@ -93,17 +122,17 @@ def normalize_table_unit(
     table_unit = detect_table_unit(grid)
     # ★ 仅在原逻辑失败（table_unit 为空）时扩大到全文，避免被其他页的“万元”误命中
     if not table_unit and combined_raw_text:
-        raw_lines = [
-            line for line in str(combined_raw_text).splitlines() if line.strip()
-        ]
+        raw_lines = [line for line in str(combined_raw_text).splitlines() if line.strip()]
         fallback_unit = detect_table_unit([[line] for line in raw_lines])
         if fallback_unit:
             table_unit = fallback_unit
-            st.session_state.setdefault("_unit_fallback_events", []).append({
-                "table_id": table_id,
-                "page": pages,
-                "detected": table_unit,
-            })
+            st.session_state.setdefault("_unit_fallback_events", []).append(
+                {
+                    "table_id": table_id,
+                    "page": pages,
+                    "detected": table_unit,
+                }
+            )
 
     if table_unit and table_unit != "万元":
         grid = convert_table_rows_to_wan(grid, table_unit)
@@ -130,6 +159,8 @@ def normalize_table_unit(
                     except (ValueError, TypeError):
                         pass
     return grid, table_unit
+
+
 def build_tables_from_page_results(
     results: dict[str, list[tuple]], use_vision: bool
 ) -> list[FlexibleTable]:
@@ -207,9 +238,7 @@ def build_tables_from_page_results(
                 )
                 for _p in extracted_pages_int:
                     if 1 <= _p <= len(_doc):
-                        raw_texts.append(
-                            _doc.load_page(_p - 1).get_text() or ""
-                        )
+                        raw_texts.append(_doc.load_page(_p - 1).get_text() or "")
                 _doc.close()
             except Exception:
                 raw_texts = []
@@ -225,13 +254,19 @@ def build_tables_from_page_results(
         # 如果缺页，添加备注行
         if expected_pages and len(extracted_pages_int) < len(expected_pages):
             missing_pages = [p for p in expected_pages if p not in extracted_pages_int]
-            note_row = pd.DataFrame([{
-                "注意": f"仅提取了 {len(extracted_pages_int)}/{len(expected_pages)} 页，缺失页码：{missing_pages}"
-            }])
+            note_row = pd.DataFrame(
+                [
+                    {
+                        "注意": f"仅提取了 {len(extracted_pages_int)}/{len(expected_pages)} 页，缺失页码：{missing_pages}"
+                    }
+                ]
+            )
             merged_df = pd.concat([merged_df, note_row], ignore_index=True).copy()
 
         # 查找对应的 table 配置
-        table_match = next((m for m in st.session_state.page_matches if m.table_id == table_id), None)
+        table_match = next(
+            (m for m in st.session_state.page_matches if m.table_id == table_id), None
+        )
 
         safe_table_config = (
             {k: sanitize_scalar(v) for k, v in table_match.table_config.items()}
@@ -245,10 +280,9 @@ def build_tables_from_page_results(
 
         _header_idx = locate_header_row_index(raw_rows)
 
-
         header_row = [str(c).strip() for c in raw_rows[_header_idx]]
         # 表头行之前的内容（说明文字、章节标题）不进入数据区
-        data_rows = raw_rows[_header_idx + 1:]
+        data_rows = raw_rows[_header_idx + 1 :]
         # 去掉后续页重复的表头行
         data_rows = [row for row in data_rows if row != raw_rows[_header_idx]]
 
@@ -259,13 +293,9 @@ def build_tables_from_page_results(
         #   适用条件：至少 1 列仍是未知（空或纯括号），且列数 >= 3
         _header_text = "".join(str(c) for c in header_row)
         _has_quarter_hint = any(
-            tok in _header_text
-            for tok in ("本季度", "本季", "上季度", "上季", "下季度")
+            tok in _header_text for tok in ("本季度", "本季", "上季度", "上季", "下季度")
         )
-        if (
-            not _has_quarter_hint
-            and len(header_row) >= 3
-        ):
+        if not _has_quarter_hint and len(header_row) >= 3:
             # 只在第 1/2/3 列按经验回填（其他列保持原样）
             _period_by_index = {
                 1: "本季度末",
@@ -276,9 +306,7 @@ def build_tables_from_page_results(
                 if _pos >= len(header_row):
                     break
                 _cell = str(header_row[_pos]).strip()
-                _stripped = re.sub(
-                    r"[（(][^）)]*[）)]", "", _cell
-                ).strip()
+                _stripped = re.sub(r"[（(][^）)]*[）)]", "", _cell).strip()
                 if not _stripped:
                     header_row[_pos] = _fallback
 
@@ -306,11 +334,14 @@ def build_tables_from_page_results(
         # ---------- 创建 FlexibleTable ----------
         table_obj = FlexibleTable(
             table_id=table_id,
-            table_name=next((m.table_name for m in st.session_state.page_matches if m.table_id == table_id), table_id),
+            table_name=next(
+                (m.table_name for m in st.session_state.page_matches if m.table_id == table_id),
+                table_id,
+            ),
             page=extracted_pages_int[0] if extracted_pages_int else 1,
             source_pages=list(extracted_pages_int),
             rows=grid,
-            to_frame=lambda *args, df=df_captured, **kwargs: df,   # 使用 df_captured
+            to_frame=lambda *args, df=df_captured, **kwargs: df,  # 使用 df_captured
             strategy="并发" + ("视觉" if use_vision else "文本"),
             quality_score=1.0,
             evidence="",
@@ -322,9 +353,9 @@ def build_tables_from_page_results(
         )
         raw_tables.append(table_obj)
     return raw_tables
-def _store_extraction_result(
-    logs: list[dict], raw_tables: list[FlexibleTable]
-) -> None:
+
+
+def _store_extraction_result(logs: list[dict], raw_tables: list[FlexibleTable]) -> None:
     """保存提取结果并生成 STEP2 标准化提取工作簿。"""
     st.session_state.raw_tables = raw_tables
     st.session_state.ai_extraction_logs = logs
@@ -332,7 +363,7 @@ def _store_extraction_result(
     # 生成 Excel 数据（确保每个表独立写入）
     output = io.BytesIO()
     try:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             # 1. 写入提取日志
             log_df = pd.DataFrame(logs)
             if not log_df.empty:
@@ -344,7 +375,7 @@ def _store_extraction_result(
                 if df.empty:
                     continue
                 # 清理表名
-                sheet_name = re.sub(r'[\\/*?:\[\]]', '', table.table_name)[:31]
+                sheet_name = re.sub(r"[\\/*?:\[\]]", "", table.table_name)[:31]
                 if not sheet_name:
                     sheet_name = "Sheet"
                 # 避免重名
@@ -365,9 +396,9 @@ def _store_extraction_result(
     except Exception as e:
         st.warning(f"生成 Excel 文件失败：{e}")
         st.session_state.ai_workbook_bytes = b""
-def extraction_log_entry(
-    task: dict, use_vision: bool, status: str, note: str
-) -> dict:
+
+
+def extraction_log_entry(task: dict, use_vision: bool, status: str, note: str) -> dict:
     """构造一行逐页提取日志。"""
     return {
         "目标表": task["table_name"],
@@ -376,6 +407,8 @@ def extraction_log_entry(
         "状态": status,
         "说明": note,
     }
+
+
 def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
     """STEP2：并发提取各页、合并跨页表格并生成工作簿。"""
     progress_bar = st.progress(0)
@@ -399,7 +432,7 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
                         task["table_name"],
                         st.session_state.llm_api_key,
                         st.session_state.llm_base_url,
-                        st.session_state.llm_model
+                        st.session_state.llm_model,
                     )
                 else:
                     future = executor.submit(
@@ -409,7 +442,7 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
                         task["table_name"],
                         st.session_state.llm_api_key,
                         st.session_state.llm_base_url,
-                        st.session_state.llm_model
+                        st.session_state.llm_model,
                     )
                 future_to_task[future] = task
 
@@ -419,7 +452,9 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
                 df, log = future.result()
                 completed += 1
                 progress_bar.progress(completed / total)
-                status_text.text(f"已处理 {completed}/{total} 页：{task['table_name']} 第 {task['page']} 页")
+                status_text.text(
+                    f"已处理 {completed}/{total} 页：{task['table_name']} 第 {task['page']} 页"
+                )
 
                 if df is not None and not df.empty:
                     table_id = task["table_id"]
@@ -428,9 +463,7 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
                     # ★ 把 raw_text 一起存进去，用于单位嗅探
                     results[table_id].append((task["page"], df, log))
                     logs.append(
-                        extraction_log_entry(
-                            task, use_vision, "成功", f"提取到 {len(df)} 行数据"
-                        )
+                        extraction_log_entry(task, use_vision, "成功", f"提取到 {len(df)} 行数据")
                     )
                 else:
                     logs.append(
@@ -445,6 +478,8 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
         st.warning(f"有 {failed_count} 页提取失败，请查看下方日志。")
     else:
         st.success("所有页面提取成功！")
+
+
 def _render_extraction_launcher(active_profile: ReportProfile) -> None:
     """STEP2：提取按钮、前置校验与任务编排。"""
     if st.button("开始智能提取", type="primary", key="extract_tables"):
@@ -458,16 +493,20 @@ def _render_extraction_launcher(active_profile: ReportProfile) -> None:
             tasks = []
             for match in st.session_state.page_matches:
                 for page_num in match.pages:
-                    tasks.append({
-                        "table_id": match.table_id,
-                        "table_name": match.table_name,
-                        "page": page_num
-                    })
+                    tasks.append(
+                        {
+                            "table_id": match.table_id,
+                            "table_name": match.table_name,
+                            "page": page_num,
+                        }
+                    )
 
             if not tasks:
                 st.warning("没有需要提取的页面，请确认页码配置。")
             else:
                 _run_extraction(active_profile, tasks)
+
+
 def _render_extraction_results() -> None:
     """STEP2：中间表预览、金标准对比与下载。"""
     if st.session_state.raw_tables:
@@ -513,14 +552,20 @@ def _render_extraction_results() -> None:
         table_col, pdf_col = st.columns([1.15, 1], gap="large")
         with table_col:
             st.markdown("##### 网格化重构结果")
-            st.dataframe(selected_table.to_frame(include_unit_footer=True), width="stretch", hide_index=True)
+            st.dataframe(
+                selected_table.to_frame(include_unit_footer=True), width="stretch", hide_index=True
+            )
         with pdf_col:
             # 将 source_pages 从字符串还原为整数列表
             source_pages_raw = selected_table.source_pages
             if isinstance(source_pages_raw, str):
-                source_pages_list = [int(p.strip()) for p in source_pages_raw.split(',') if p.strip().isdigit()]
+                source_pages_list = [
+                    int(p.strip()) for p in source_pages_raw.split(",") if p.strip().isdigit()
+                ]
             else:
-                source_pages_list = source_pages_raw if isinstance(source_pages_raw, list) else [source_pages_raw]
+                source_pages_list = (
+                    source_pages_raw if isinstance(source_pages_raw, list) else [source_pages_raw]
+                )
 
             selected_source_page = st.selectbox(
                 "PDF原页核实",
@@ -544,6 +589,8 @@ def _render_extraction_results() -> None:
                 "偿付能力报告_STEP2标准化提取.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+
 def render_extraction_tab(active_profile: ReportProfile) -> None:
     """STEP2 表格智能转换。"""
     st.subheader("表格智能转换")
@@ -568,6 +615,8 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
             df = extraction_logs_frame(logs)
         st.dataframe(df, width="stretch", hide_index=True)
         _render_extraction_results()
+
+
 def clear_extraction_results(*, clear_caches: bool = False) -> None:
     """清空提取结果与下游标准化结果；clear_caches 同时重置提取缓存。"""
     values = {
@@ -579,15 +628,19 @@ def clear_extraction_results(*, clear_caches: bool = False) -> None:
         "normalization_diagnostics": pd.DataFrame(),
     }
     if clear_caches:
-        values.update({
-            "table_candidates": {},
-            "selected_table_candidates": {},
-            "extraction_grid_cache": {},
-            "extraction_image_cache": {},
-            "extraction_cache_lock": Lock(),
-        })
+        values.update(
+            {
+                "table_candidates": {},
+                "selected_table_candidates": {},
+                "extraction_grid_cache": {},
+                "extraction_image_cache": {},
+                "extraction_cache_lock": Lock(),
+            }
+        )
     for key, value in values.items():
         st.session_state[key] = value
+
+
 def _render_extraction_settings() -> None:
     """STEP2：逐页提取与重试设置。"""
     with st.expander("逐页提取与重试设置", expanded=not bool(st.session_state.raw_tables)):
