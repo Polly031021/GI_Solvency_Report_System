@@ -227,9 +227,12 @@ def _numeric_table_lines(text: str) -> int:
 
 
 def _leading_numeric_table_lines(text: str, limit: int = 14) -> int:
+    # 与 _single_row_tail_continuation 保持一致：跳过空白行再统计。
+    # 稀疏文字层 PDF 页首常有十几行空白，按原始行序会把窗口耗在空行上。
+    lines = [line for line in (text or "").splitlines() if line.strip()]
     return sum(
         len(re.findall(r"(?<!\d)[(（\-]?\d[\d,，.％%]*[)）]?", line)) >= 2
-        for line in (text or "").splitlines()[:limit]
+        for line in lines[:limit]
     )
 
 def _numeric_widths(text: str, *, leading_only: bool = False, limit: int = 14) -> list[int]:
@@ -313,6 +316,137 @@ def _anchor_profile(text: str, table: dict) -> tuple[float, list[str]]:
     return score, [*title_hits, *content_hits, *header_hits]
 
 
+# 监管报表编号表题模式：S05-最低资本表、IR02-巨灾风险、S02-实际资本明细表等。
+# 编号 + 连字符 + 表名，是偿付能力报告的全国统一格式。
+FORM_CODE_TITLE_PATTERN = re.compile(r"^([A-Za-z]{1,4}\d{1,3})\s*[-－—]")
+
+
+def _own_form_codes(table: dict) -> set[str]:
+    """收集本表自己的报表编号（如 S05），用于排除自身表题。
+
+    续页可能重复本表表题（续表场景），只有“其他编号”的表题才代表
+    本表已经结束。
+    """
+    codes: set[str] = set()
+    for term in [
+        *table.get("title_terms", []),
+        *table.get("continuation_terms", []),
+    ]:
+        match = FORM_CODE_TITLE_PATTERN.match(str(term).strip())
+        if match:
+            codes.add(match.group(1).upper())
+    section = str(table.get("section_code", "")).upper().replace("-", "")
+    if section:
+        codes.add(section)
+    return codes
+
+
+def _foreign_form_titles(text: str, table: dict) -> list[str]:
+    """识别页面上的其他监管报表编号表题（S02-、IR02- 等）。
+
+    这是跨公司通用的表格边界信号：任何一张偿付能力报告的表题都带
+    统一编号，续页出现其他编号的表题说明本表已结束。相比按公司
+    配置终止词，该信号不依赖各公司措辞差异。
+    """
+    own_codes = _own_form_codes(table)
+    titles: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = str(line).strip()
+        match = FORM_CODE_TITLE_PATTERN.match(stripped)
+        if not match:
+            continue
+        if match.group(1).upper() in own_codes:
+            continue
+        titles.append(stripped)
+    return titles
+
+
+# 一级章节标题模式：如“四、风险管理能力”“十一、最低资本”。
+LEVEL_ONE_HEADING_PATTERN = re.compile(r"^([一二三四五六七八九十百]+)、")
+
+
+def _is_value_only_line(line: str) -> bool:
+    """判断是否为“纯数值行”（换行排版时单独成行的表格值）。
+
+    单元格式排版的 PDF 常把行标签和数值拆成两行：标签行不含数字，
+    数值行只有数值和少量单位文字（如“0.00%    0.00%”）。识别数值行
+    可以避免把上一行的行标签误判为章节标题。
+    """
+    stripped = str(line or "").strip()
+    if not stripped:
+        return False
+    tokens = re.findall(r"(?<!\d)[(（\-]?\d[\d,，.％%]*[)）]?", stripped)
+    if len(tokens) < 2:
+        return False
+    residue = re.sub(r"(?<!\d)[(（\-]?\d[\d,，.％%]*[)）]?", "", stripped)
+    residue = re.sub(r"[\s，,。．%％\-—：:（）()元万亿]", "", residue)
+    # 允许残留“指标值”“单位”等少量说明文字。
+    return len(residue) <= 6
+
+
+def _follower_indicates_table_row(follower: str) -> bool:
+    """判断标题候选行的下一非空行是否属于“表格行上下文”。
+
+    用于区分三种容易误判成章节标题的表格行：
+    1. 换行排版的行标签：下一行是纯数值行；
+    2. 大类行（本身无数值、子行在下方）：下一行是带数值的阿拉伯
+       编号子行（如“1.综合成本率 102.49%”）；
+    3. 连续编号的行序列：下一行又是一个中文编号行。
+    真正的章节标题后面跟的是（一）级子标题或叙述文字，都不满足上述
+    任何一条。注意纯文字的阿拉伯编号叙述项（如“1.风险管理制度的
+    建设与完善”，只有编号没有数值）不算表格行。
+    """
+    stripped = str(follower or "").strip()
+    if not stripped:
+        return False
+    if _is_value_only_line(stripped):
+        return True
+    tokens = re.findall(r"(?<!\d)[(（\-]?\d[\d,，.％%]*[)）]?", stripped)
+    if re.match(r"^\d+[.．、]", stripped) and len(tokens) >= 2:
+        return True
+    # 注意：不把“下一个中文编号行”本身当作表格行上下文——真实报告里
+    # 两个一级章节标题可能相邻（如“四、风险管理”后接“十一、…”），
+    # 误杀标题的代价高于漏检；连续编号行序列已被前两条规则覆盖
+    # （换行值的行→规则一，大类行下挂阿拉伯编号子行→规则二）。
+    return False
+
+
+def _level_one_heading_terms(text: str) -> list[str]:
+    """收集页面内的一级章节标题行，作为通用表格边界信号。
+
+    报告的一级标题（一、二、三…）是全国统一的章节骨架。续页内容若从
+    一级标题开始、且本表内容位于标题之后，说明已进入下一章节。二级
+    标题（（一）（二）…）不能作为边界：经营指标表内部就用二级标题
+    给行分组（如“（十一）效益类指标”“（十二）规模类指标”）。
+
+    与表格行标签的区分（行标签可能本身无数值——大类行下挂子行，
+    或数值被换行排版到下一行）：
+    1. 行内含数值/占位值 → 数据行；
+    2. 下一非空行属于表格行上下文（纯数值行/带值阿拉伯子行/又一
+       中文编号行）→ 本行是表格行标签；
+    其余才认定为章节标题。
+    """
+    nonblank = [
+        (index, str(line).strip())
+        for index, line in enumerate((text or "").splitlines())
+        if str(line).strip()
+    ]
+    headings: list[str] = []
+    for index, stripped in nonblank:
+        if not LEVEL_ONE_HEADING_PATTERN.match(stripped):
+            continue
+        if re.search(r"\d|％|%|--|—|指标值", stripped):
+            continue
+        follower = next(
+            (value for line_number, value in nonblank if line_number > index),
+            "",
+        )
+        if _follower_indicates_table_row(follower):
+            continue
+        headings.append(stripped)
+    return headings
+
+
 def _continuation_profile(
     previous_text: str,
     text: str,
@@ -339,7 +473,19 @@ def _continuation_profile(
         section_codes.discard(own_section)
 
     compact_text = _compact(text)
-    boundary_terms = [*stop_hits, *other_title_hits, *sorted(section_codes)]
+    # 外来报表编号表题（如 IR02-巨灾风险）是最通用的表格边界：
+    # 出现其他编号表题即本表结束，与公司措辞无关。
+    foreign_form_titles = _foreign_form_titles(text, table)
+    # 一级章节标题（如“四、风险管理能力”）是报告结构骨架：
+    # 本表内容若全部位于一级标题之后，说明已进入新章节。
+    level_one_headings = _level_one_heading_terms(text)
+    boundary_terms = [
+        *stop_hits,
+        *other_title_hits,
+        *foreign_form_titles,
+        *level_one_headings,
+        *sorted(section_codes),
+    ]
     boundary_positions = [
         compact_text.find(_compact(term))
         for term in boundary_terms
@@ -348,7 +494,12 @@ def _continuation_profile(
     single_row_tail = bool(table.get("allow_single_row_tail", True)) and _single_row_tail_continuation(
         previous_text, text, table, boundary_positions
     )
-    own_markers = [*title_hits, *content_hits, *header_hits, *continuation_hits]
+    # 通用表头（“指标名称”“本季度数”“行次”“期末数”等）在同一份报告的多张
+    # 表里都会出现，本身不能证明本表内容跨过了章节边界。判断“本表内容是否
+    # 延伸到边界之前”时只认标题词/内容词/续表词这类本表专属证据，否则紧接
+    # 本表之后的另一张表（如“主要经营指标”）会在下一页重复表头，把本表错误
+    # 地延长到下一个章节页。
+    own_markers = [*title_hits, *content_hits, *continuation_hits]
     own_positions = [
         compact_text.find(_compact(term))
         for term in own_markers
@@ -715,10 +866,12 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
                 # S05 等表格的中间子行（如“非寿险业务保险风险最低资本合计”）
                 # 会包含终止词子串，但并不是表格真正的终止行；只有当终止项
                 # 作为独立行标签出现时，才允许据此停止续页扫描。
+                # 终止项是辅助信号：必须命中“带数值的数据行”。
+                # 章节标题（如“十、最低资本”）不含数值，不应视为终止行。
                 terminal_hits = [
                     term
                     for term in table.get("terminal_terms", [])
-                    if text_has_item(previous_text, str(term))
+                    if text_has_item(previous_text, str(term), require_value=True)
                 ]
                 if len(selected) > 1:
                     # 停止词和其他表标题是页面级边界信号，仍按子串匹配。

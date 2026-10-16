@@ -235,6 +235,341 @@ def test_s05_single_row_tail_with_terminal_substring():
     print(f"PASS S05单行跨页: pages={match.pages} 置信度={match.confidence}%")
 
 
+
+
+# ============================================================
+# 回归：S05 表后紧跟 IR02 明细表（安华农业真实版式）
+# 第3页是 IR02-巨灾风险明细表，行内容与 S05 共享大量关键词
+# （巨灾风险、风险分散效应、行次、期末数），但没有终止行。
+# 依靠“外来报表编号表题”这一通用边界信号将其排除。
+# ============================================================
+def test_foreign_form_code_boundary():
+    doc = fitz.open()
+    pages = [
+        "中国某财产保险股份有限公司2025年第4季度偿付能力报告摘要\n"
+        "公司经营稳健，各项偿付能力指标符合监管要求。",
+        "S05-最低资本表\n行次 项目 期末数 期初数\n"
+        "1 量化风险最低资本 100.00 90.00\n"
+        "2 控制风险最低资本 10.00 9.00\n"
+        "4 最低资本 110.00 99.00",
+        "IR02-财险和人身险公司非寿险业务保险风险-巨灾风险\n"
+        "单位：元\n行次 项目 期末数\n"
+        "1 国内车险巨灾风险最低资本 4,171,929.70\n"
+        "2 巨灾风险分散效应 4,329,666.62\n"
+        "7 非寿险业务巨灾风险最低资本 9,434,960.30",
+    ]
+    for text in pages:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 550, 780), text, fontname="china-s", fontsize=12)
+    pdf = doc.tobytes()
+
+    matches, message = locate_tables_hybrid(
+        pdf,
+        S05_FEATURE_CONFIG,
+        api_key="",
+        base_url="",
+        model="",
+        mode="rule",
+    )
+    match = matches[0]
+    assert match.pages == [2], (match.pages, match.evidence)
+    print(f"PASS 外来表号边界: pages={match.pages}（IR02明细页已排除）")
+
+
+
+
+# ============================================================
+# 回归：续页以一级章节标题开头（比亚迪保险真实版式）
+# 经营指标表跨到第3页结束；第4页以“四、风险管理能力”开头，
+# 叙述文字恰好提及“签单保费”“总资产”（经营指标内容词）且有数字行，
+# 依靠一级章节标题边界将其排除。
+# ============================================================
+OPERATING_HEADING_CONFIG = {
+    "tables": [
+        {
+            "table_id": "NON_LIFE_OPERATING_METRICS",
+            "table_name": "主要经营指标（财险）",
+            "title_terms": ["主要经营指标"],
+            "content_terms": ["签单保费", "总资产", "车险车均保费"],
+            "header_terms": ["指标名称", "本季度数"],
+            "continuation_terms": ["签单保费"],
+            "stop_terms": [],
+            "terminal_terms": ["其他渠道", "其他渠道签单保费"],
+            "minimum_score": 8,
+            "max_pages": 4,
+            "include_continuation": True,
+            "continuation_min_score": 5.0,
+            "continuation_min_structure_hits": 2,
+            "continuation_min_numeric_lines": 2,
+            "allow_single_row_tail": True,
+        }
+    ]
+}
+
+
+def build_operating_heading_pdf() -> bytes:
+    doc = fitz.open()
+    pages = [
+        "某财产保险公司2025年第4季度偿付能力报告摘要",
+        "主要经营指标\n指标名称 本季度数 本年度累计数\n"
+        "（一）保险业务收入 100.00 300.00\n"
+        "（二）净利润 10.00 30.00",
+        "5.各渠道签单保费 100.00 300.00\n"
+        "5.4 其他渠道签单保费 -- --",
+        "四、风险管理能力\n"
+        "（一）公司分类标准的情况\n"
+        "最近会计年度的签单保费 28.97 亿元\n"
+        "最近会计年度的总资产 64.27 亿元\n"
+        "公司成立于2016年2月16日，属于II类保险公司。",
+    ]
+    for text in pages:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 550, 780), text, fontname="china-s", fontsize=12)
+    return doc.tobytes()
+
+
+def test_level_one_heading_boundary():
+    """新章节页即使共享内容词和数字行，也不得并入上一张表。"""
+    pdf = build_operating_heading_pdf()
+    matches, _ = locate_tables_hybrid(
+        pdf,
+        OPERATING_HEADING_CONFIG,
+        api_key="",
+        base_url="",
+        model="",
+        mode="rule",
+    )
+    match = matches[0]
+    assert match.pages == [2, 3], (match.pages, match.evidence)
+    print(f"PASS 一级标题边界: pages={match.pages}（新章节页已排除）")
+
+
+def test_numeric_row_not_heading():
+    """以中文数字开头的表格数据行（带数值）不得被误判为章节标题。"""
+    from services.solvency_pdf_locator import _level_one_heading_terms
+
+    text = (
+        "五、现金及流动性管理工具占比    指标值    4.68%\n"
+        "六、季均融资杠杆比例           指标值    0.00%\n"
+        "四、风险管理能力\n"
+        "十一、最低资本\n"
+    )
+    headings = _level_one_heading_terms(text)
+    assert headings == ["四、风险管理能力", "十一、最低资本"], headings
+    print(f"PASS 数字行判别: {headings}")
+
+
+
+
+# ============================================================
+# 回归：稀疏文字层续页（比亚迪保险真实版式）
+# 流动性表第2页结束；第3页页首有14行空白，数据行均不在
+# 配置的内容词里，依靠“结构续表”（数值行+无边界）兜底纳入。
+# ============================================================
+LIQUIDITY_SPARSE_CONFIG = {
+    "tables": [
+        {
+            "table_id": "LIQUIDITY_MONITORING",
+            "table_name": "流动性风险监测指标",
+            "title_terms": ["流动性风险监测指标"],
+            "content_terms": ["规模保费同比增速", "季均融资杠杆比例"],
+            "header_terms": ["指标名称", "本季度数"],
+            "continuation_terms": ["续表"],
+            "stop_terms": [],
+            "terminal_terms": [],
+            "minimum_score": 8,
+            "max_pages": 2,
+            "include_continuation": True,
+            "continuation_min_score": 4.0,
+            "continuation_min_structure_hits": 1,
+            "continuation_min_numeric_lines": 1,
+            "continuation_generic_numeric_lines": 2,
+            "allow_single_row_tail": True,
+        }
+    ]
+}
+
+
+def build_sparse_tail_pdf() -> bytes:
+    doc = fitz.open()
+    pages = [
+        "某财产保险公司2025年第4季度偿付能力报告摘要",
+        "流动性风险监测指标\n指标名称 本季度数\n"
+        "规模保费同比增速 10.07%\n季均融资杠杆比例 0.00%",
+        "\n" * 14 + "AA级以下境内固定收益类资产占比 1.38% 1.52%\n"
+        "应收款项占比 25.31% 33.66%\n持有关联方资产占比 0.00% 0.00%",
+    ]
+    for text in pages:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 550, 780), text, fontname="china-s", fontsize=12)
+    return doc.tobytes()
+
+
+def test_sparse_tail_generic_continuation():
+    """页首大量空白且尾行不在内容词配置中时，结构续表兜底必须生效。"""
+    pdf = build_sparse_tail_pdf()
+    matches, _ = locate_tables_hybrid(
+        pdf,
+        LIQUIDITY_SPARSE_CONFIG,
+        api_key="",
+        base_url="",
+        model="",
+        mode="rule",
+    )
+    match = matches[0]
+    assert match.pages == [2, 3], (match.pages, match.evidence)
+    print(f"PASS 稀疏续页: pages={match.pages}")
+
+
+def test_wrapped_label_not_heading():
+    """换行排版：中文数字行标签后跟纯数值行，不得判为章节标题。"""
+    from services.solvency_pdf_locator import _level_one_heading_terms
+
+    text = (
+        "五、现金及流动性管理工具占比\n"
+        "4.68%  0.00%\n"
+        "六、季均融资杠杆比例\n"
+        "0.00%  0.00%\n"
+        "四、风险管理能力\n"
+        "（一）公司分类标准的情况\n"
+    )
+    headings = _level_one_heading_terms(text)
+    assert headings == ["四、风险管理能力"], headings
+    print(f"PASS 换行行标签判别: {headings}")
+
+
+def test_consecutive_numeral_group_rows_not_heading():
+    """大类行无数值（子行在下方）且编号连续时，不得判为章节标题。"""
+    from services.solvency_pdf_locator import _level_one_heading_terms
+
+    text = (
+        "一、效益类指标\n"
+        "1.综合成本率 102.49%\n"
+        "2.综合费用率 5.21%\n"
+        "二、规模类指标\n"
+        "1.签单保费 961,400,344.73\n"
+    )
+    headings = _level_one_heading_terms(text)
+    assert headings == [], headings
+    print(f"PASS 连续编号大类行判别: {headings}")
+
+
+
+
+# ============================================================
+# 回归：紧邻其后的一张表在续页重复通用表头（安华农业真实版式）
+# 摘要第10页依次排布“（三）流动性风险监测指标”（末行为持有关联方资产
+# 占比）与“（六）主要经营指标”；第11页继续主要经营指标的行，并在页内
+# 出现一级标题“四、风险管理能力”。
+# 第11页只重复了通用表头“指标名称/本季度数”，没有监测指标的任何内容词，
+# 该表头属于后一张表，不得据此把流动性监测指标延长到第11页。
+# 同页的两张表互为对照：主要经营指标在第11页有真实内容词，必须保留。
+# ============================================================
+ADJACENT_TABLE_CONFIG = {
+    "tables": [
+        {
+            "table_id": "LIQUIDITY_MONITORING",
+            "table_name": "流动性风险监测指标",
+            "title_terms": ["流动性风险监测指标", "流动性风险监管指标"],
+            "content_terms": [
+                "规模保费同比增速",
+                "现金及流动性管理工具占比",
+                "季均融资杠杆比例",
+                "经营活动净现金流",
+            ],
+            "header_terms": ["指标名称", "本季度数", "上季度数"],
+            "continuation_terms": ["续表"],
+            "stop_terms": ["偿付能力风险管理能力", "风险综合评级"],
+            "terminal_terms": [],
+            "minimum_score": 6.0,
+            "anchor_min_structure_hits": 1,
+            "max_pages": 2,
+            "minimum_rows": 3,
+            "include_continuation": True,
+            "continuation_min_structure_hits": 1,
+            "continuation_min_numeric_lines": 1,
+            "continuation_min_score": 4.0,
+            "continuation_generic_numeric_lines": 2,
+            "allow_single_row_tail": True,
+        },
+        {
+            "table_id": "NON_LIFE_OPERATING_METRICS",
+            "table_name": "主要经营指标（财险）",
+            "title_terms": ["主要经营指标", "经营指标"],
+            "content_terms": ["签单保费", "总资产", "车险车均保费"],
+            "header_terms": ["指标名称", "本季度数"],
+            "continuation_terms": ["签单保费"],
+            "stop_terms": [],
+            "terminal_terms": ["其他渠道签单保费"],
+            "minimum_score": 7.0,
+            "max_pages": 4,
+            "minimum_rows": 3,
+            "include_continuation": True,
+            "continuation_min_structure_hits": 2,
+            "continuation_min_numeric_lines": 2,
+            "continuation_min_score": 4.0,
+            "allow_single_row_tail": True,
+        },
+    ]
+}
+
+
+def build_adjacent_table_pdf() -> bytes:
+    doc = fitz.open()
+    pages = [
+        "某财产保险公司2025年第4季度偿付能力报告摘要",
+        "三、主要指标\n"
+        "（二）流动性风险监管指标\n"
+        "指标名称 本季度数 上季度可比数\n"
+        "其中：基本情景 LCR1（％） 111.47% 105.83%\n"
+        "（三）流动性风险监测指标\n"
+        "指标名称 本季度末数 上季度末可比数\n"
+        "经营活动净现金流（元） 718,430,831.15 847,841,117.53\n"
+        "规模保费同比增速（％） 10.07% 9.71%\n"
+        "现金及流动性管理工具占比（％） 18.51% 16.68%\n"
+        "季均融资杠杆比例（％） 0.00 0.00\n"
+        "应收款项占比（％） 25.31% 33.66%\n"
+        "持有关联方资产占比（％） 0.00 0.00\n"
+        "（六）主要经营指标\n"
+        "指标名称 本季度数 本年度累计数\n"
+        "保险业务收入（元） 964,379,502.91 7,362,400,072.66\n"
+        "净利润（元） 61,793,719.10 274,176,547.39",
+        "指标名称 本季度数 本年度累计数\n"
+        "手续费及佣金占比（％） -- 4.94%\n"
+        "签单保费（元） 961,400,344.73 7,339,853,702.59\n"
+        "车险签单保费（元） 566,168,968.61 2,343,987,842.30\n"
+        "四、风险管理能力\n"
+        "（一）公司基本情况\n"
+        "公司成立于2004年12月，属于I类保险公司。",
+    ]
+    for text in pages:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 550, 780), text, fontname="china-s", fontsize=12)
+    return doc.tobytes()
+
+
+def test_repeated_generic_header_does_not_extend_previous_table():
+    """后一张表在续页重复的通用表头，不得把前一张表延长到该页。"""
+    pdf = build_adjacent_table_pdf()
+    matches, _ = locate_tables_hybrid(
+        pdf,
+        ADJACENT_TABLE_CONFIG,
+        api_key="",
+        base_url="",
+        model="",
+        mode="rule",
+    )
+    by_id = {match.table_id: match for match in matches}
+    liquidity = by_id["LIQUIDITY_MONITORING"]
+    operating = by_id["NON_LIFE_OPERATING_METRICS"]
+    assert liquidity.pages == [2], (liquidity.pages, liquidity.evidence)
+    assert operating.pages == [2, 3], (operating.pages, operating.evidence)
+    print(
+        f"PASS 相邻表重复表头: 流动性监测指标={liquidity.pages}，"
+        f"主要经营指标={operating.pages}"
+    )
+
+
 if __name__ == "__main__":
     test_document_type_text()
     test_document_type_scanned()
@@ -242,6 +577,13 @@ if __name__ == "__main__":
     test_rule_mode_llm_verify_agree()
     test_rule_mode_llm_verify_disagree()
     test_s05_single_row_tail_with_terminal_substring()
+    test_foreign_form_code_boundary()
+    test_level_one_heading_boundary()
+    test_numeric_row_not_heading()
+    test_sparse_tail_generic_continuation()
+    test_wrapped_label_not_heading()
+    test_consecutive_numeral_group_rows_not_heading()
+    test_repeated_generic_header_does_not_extend_previous_table()
     print("全部通过")
 
 
