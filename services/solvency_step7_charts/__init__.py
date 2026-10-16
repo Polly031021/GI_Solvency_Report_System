@@ -1,0 +1,177 @@
+"""STEP7/STEP8 图表库。
+
+按图表族拆分为子模块（primitives 原语、trend 趋势、capital 资本、bubble 气泡、
+matrix 矩阵散点、radar 雷达、structure 结构变化、performance 业绩模式），
+本模块负责重新导出，保持 `services.solvency_step7_charts` 的调用方式不变。
+"""
+
+from __future__ import annotations
+
+from .primitives import (
+    TRANSPARENT,
+    ANNUAL_REPORT_FONT,
+    REGULATORY_LIMITS,
+    CAPITAL_AMOUNT_CODES,
+    COMPONENT_LABELS,
+    COMPONENT_COLORS,
+    CAPITAL_STRUCTURE_COLORS,
+    CAPITAL_COMPONENT_ORDER,
+    MIN_INSIDE_LABEL_SHARE,
+    TREND_LABEL_FORMATS,
+    TREND_AXIS_FORMATS,
+    TREND_LABEL_THRESHOLDS,
+    COMPACT_TREND_SCALE_CODES,
+    report_period_color_map,
+    label_color_for_fill,
+    whole_number_label,
+    whole_percent_label,
+    clean_numeric,
+    apply_report_theme,
+    metric_title,
+    _axis_title,
+    convert_multiple_units_to_percent,
+    with_metric_value_labels,
+    company_scale,
+    facet_layout,
+    _panel_density_count,
+    panel_typography,
+    responsive_bar_width,
+    _responsive_grouped_bar_width,
+    compact_period_scale,
+    hidden_value_axis,
+    _capital_stack_positions,
+    _signed_stack_positions,
+    metric_rows,
+)
+
+from .trend import (
+    trend_y_domain,
+    build_metric_trend_group,
+    prepare_metric_trend,
+    build_single_metric_trend_chart,
+    build_single_metric_trend_charts,
+    build_company_bar_trend_chart,
+    build_company_period_bar_chart,
+    metric_bar_axis_domain,
+)
+
+from .capital import (
+    solvency_ratio_axis_domain,
+    build_solvency_ratio_combo_chart,
+    build_capital_ratio_combo_chart,
+    capital_ratio_amount_axis_domain,
+    component_stack_axis_domain,
+    attach_component_stack_ratios,
+    component_stack_proportion_axis_domain,
+    build_component_stack_chart,
+    build_capital_amount_combo,
+    build_effect_diverging_chart,
+)
+
+from .bubble import (
+    build_capital_efficiency_bubble_chart,
+    capital_efficiency_bubble_chart_domain,
+    capital_efficiency_bubble_default_domain,
+    combine_capital_efficiency_bubble_charts,
+)
+
+from .matrix import (
+    compact_scatter_axis,
+    ratio_axis_display_scale,
+    scatter_zoom_source,
+    scatter_padded_domain,
+    scatter_domain_override,
+    build_matrix_chart,
+    matrix_chart_domain,
+    risk_ratio_scatter_default_domain,
+    combine_linked_matrix_charts,
+)
+
+from .radar import (
+    build_capability_radar_chart,
+)
+
+from .structure import (
+    display_period_label,
+    build_structure_change_chart,
+)
+
+from .performance import (
+    PERFORMANCE_PATTERN_ORDER,
+    classify_performance_pattern,
+    build_performance_pattern_trajectory,
+)
+
+__all__ = [
+    "TRANSPARENT",
+    "ANNUAL_REPORT_FONT",
+    "REGULATORY_LIMITS",
+    "CAPITAL_AMOUNT_CODES",
+    "COMPONENT_LABELS",
+    "COMPONENT_COLORS",
+    "CAPITAL_STRUCTURE_COLORS",
+    "CAPITAL_COMPONENT_ORDER",
+    "MIN_INSIDE_LABEL_SHARE",
+    "TREND_LABEL_FORMATS",
+    "TREND_AXIS_FORMATS",
+    "TREND_LABEL_THRESHOLDS",
+    "COMPACT_TREND_SCALE_CODES",
+    "report_period_color_map",
+    "label_color_for_fill",
+    "whole_number_label",
+    "whole_percent_label",
+    "clean_numeric",
+    "apply_report_theme",
+    "metric_title",
+    "_axis_title",
+    "convert_multiple_units_to_percent",
+    "with_metric_value_labels",
+    "company_scale",
+    "facet_layout",
+    "_panel_density_count",
+    "panel_typography",
+    "responsive_bar_width",
+    "_responsive_grouped_bar_width",
+    "compact_period_scale",
+    "hidden_value_axis",
+    "_capital_stack_positions",
+    "_signed_stack_positions",
+    "metric_rows",
+    "trend_y_domain",
+    "build_metric_trend_group",
+    "prepare_metric_trend",
+    "build_single_metric_trend_chart",
+    "build_single_metric_trend_charts",
+    "build_company_bar_trend_chart",
+    "build_company_period_bar_chart",
+    "metric_bar_axis_domain",
+    "solvency_ratio_axis_domain",
+    "build_solvency_ratio_combo_chart",
+    "build_capital_ratio_combo_chart",
+    "capital_ratio_amount_axis_domain",
+    "component_stack_axis_domain",
+    "attach_component_stack_ratios",
+    "component_stack_proportion_axis_domain",
+    "build_component_stack_chart",
+    "build_capital_amount_combo",
+    "build_effect_diverging_chart",
+    "build_capital_efficiency_bubble_chart",
+    "capital_efficiency_bubble_chart_domain",
+    "capital_efficiency_bubble_default_domain",
+    "combine_capital_efficiency_bubble_charts",
+    "compact_scatter_axis",
+    "ratio_axis_display_scale",
+    "scatter_zoom_source",
+    "scatter_padded_domain",
+    "scatter_domain_override",
+    "build_matrix_chart",
+    "matrix_chart_domain",
+    "risk_ratio_scatter_default_domain",
+    "combine_linked_matrix_charts",
+    "build_capability_radar_chart",
+    "display_period_label",
+    "build_structure_change_chart",
+    "PERFORMANCE_PATTERN_ORDER",
+    "classify_performance_pattern",
+    "build_performance_pattern_trajectory",
+]
