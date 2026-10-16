@@ -29,9 +29,7 @@ def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> No
         edited_pages: dict[str, list[int]] = {}
         updated_matches: list[PageMatch] = []
         conflict_matches = [
-            item
-            for item in st.session_state.auto_page_matches
-            if item.review_required
+            item for item in st.session_state.auto_page_matches if item.review_required
         ]
         if conflict_matches:
             st.warning(
@@ -67,9 +65,7 @@ def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> No
             auto_text = ", ".join(map(str, match.pages)) if match.pages else "未自动找到"
             evidence_text = match.evidence or "无明确关键词证据"
             confidence = int(getattr(match, "confidence", 0) or 0)
-            confidence_basis = (
-                getattr(match, "confidence_basis", "") or "未评估"
-            )
+            confidence_basis = getattr(match, "confidence_basis", "") or "未评估"
             manual_override = bool(valid_pages) and valid_pages != match.pages
             confidence_status = (
                 f"置信度 {confidence}%（{confidence_basis}）"
@@ -113,15 +109,14 @@ def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> No
         ):
             st.session_state.pages_confirmed = True
             valid_count = sum(bool(item.pages) for item in updated_matches)
-            conflict_note = (
-                "；定位冲突已由人工确认"
-                if conflict_matches else ""
-            )
+            conflict_note = "；定位冲突已由人工确认" if conflict_matches else ""
             st.success(
                 f"页码已确认：{len(updated_matches)}类目标中有"
                 f" {valid_count} 类配置了有效页码{conflict_note}。"
                 "请前往 STEP2 提取表格。"
             )
+
+
 def _render_locator_target_panel(
     active_profile: ReportProfile,
     feature_config: dict,
@@ -135,9 +130,7 @@ def _render_locator_target_panel(
     st.markdown("#### 检索目标设定")
     all_table_names = [item["table_name"] for item in table_configs]
     required_table_names = [
-        item["table_name"]
-        for item in table_configs
-        if item.get("required", True)
+        item["table_name"] for item in table_configs if item.get("required", True)
     ]
     selected_table_names = st.multiselect(
         "请选择需要定位的报表：",
@@ -146,9 +139,7 @@ def _render_locator_target_panel(
         key="solvency_target_tables",
     )
     selected_configs = [
-        table_config_by_name[name]
-        for name in selected_table_names
-        if name in table_config_by_name
+        table_config_by_name[name] for name in selected_table_names if name in table_config_by_name
     ]
 
     # --- 文档类型识别与定位方法推荐 ---
@@ -174,12 +165,7 @@ def _render_locator_target_panel(
             "规则法（离线，零模型调用）",
             "大模型法（语义+视觉混合）",
         ],
-        index=(
-            0
-            if doc_profile is None
-            or doc_profile.recommended_method == "RULE"
-            else 1
-        ),
+        index=(0 if doc_profile is None or doc_profile.recommended_method == "RULE" else 1),
         key=f"locator_method_{active_profile.profile_id}",
         help=(
             "规则法只使用本地边界分析、表格雷达和目录换算，结果确定可复现；"
@@ -267,8 +253,7 @@ def _render_locator_target_panel(
                 st.session_state.page_matches = matches
                 st.session_state.pages_confirmed = False
                 st.session_state.edited_pages = {
-                    item.table_id: list(item.pages)
-                    for item in matches
+                    item.table_id: list(item.pages) for item in matches
                 }
                 for item in matches:
                     st.session_state[f"page_edit_{item.table_id}"] = ", ".join(map(str, item.pages))
@@ -285,6 +270,8 @@ def _render_locator_target_panel(
             else:
                 st.info(locator_message)
     _render_locator_review_panel(total_pages, gold_case)
+
+
 def _render_locator_preview_panel(incoming: bytes, total_pages: int) -> None:
     """STEP1：右侧 PDF 原页预览。"""
     st.markdown("#### 页面预览")
@@ -299,8 +286,7 @@ def _render_locator_preview_panel(incoming: bytes, total_pages: int) -> None:
             key="solvency_preview_table",
         )
         selected_match = next(
-            item for item in preview_matches
-            if item.table_id == selected_preview_id
+            item for item in preview_matches if item.table_id == selected_preview_id
         )
         pages_to_preview = selected_match.pages
 
@@ -328,6 +314,8 @@ def _render_locator_preview_panel(incoming: bytes, total_pages: int) -> None:
                 st.warning(f"页面预览失败：{exc}")
     else:
         st.info("启动智能定位后，此处将显示对应PDF页面。")
+
+
 def _clear_page_locations() -> None:
     """清空页码定位结果（保留已上传的 PDF）。"""
     for key, value in (
@@ -337,14 +325,20 @@ def _clear_page_locations() -> None:
         ("pages_confirmed", False),
     ):
         st.session_state[key] = value
+
+
 def _drop_page_edit_widgets(table_configs: list[dict]) -> None:
     """移除逐表页码输入框的会话状态，避免残留上一次的页码。"""
     for item in table_configs:
         st.session_state.pop(f"page_edit_{item['table_id']}", None)
+
+
 def render_locator_tab(active_profile: ReportProfile) -> None:
     """STEP1 智能页码定位。"""
     st.subheader("📑 智能页码定位")
-    st.caption("系统结合页面语义推断与表格结构雷达定位目标表；跨页页码可在左侧人工修改，右侧同步显示PDF原页。")
+    st.caption(
+        "系统结合页面语义推断与表格结构雷达定位目标表；跨页页码可在左侧人工修改，右侧同步显示PDF原页。"
+    )
 
     feature_config = dict(active_profile.feature_config)
     table_configs = feature_config.get("tables", [])
@@ -371,9 +365,7 @@ def render_locator_tab(active_profile: ReportProfile) -> None:
             st.session_state.pdf_name = uploaded_pdf.name
             st.session_state.metadata = extract_report_metadata(incoming)
             try:
-                st.session_state.document_type_profile = (
-                    cached_analyze_document_type(incoming)
-                )
+                st.session_state.document_type_profile = cached_analyze_document_type(incoming)
             except Exception:
                 st.session_state.document_type_profile = None
             # --- 提取整份 PDF 文本，用于抓取注册资本等公司信息 ---
@@ -383,8 +375,7 @@ def render_locator_tab(active_profile: ReportProfile) -> None:
             try:
                 doc = fitz.open(stream=incoming, filetype="pdf")
                 st.session_state.metadata["first_page_text"] = "\n".join(
-                    (doc.load_page(_i).get_text() or "")
-                    for _i in range(len(doc))
+                    (doc.load_page(_i).get_text() or "") for _i in range(len(doc))
                 )
                 doc.close()
             except Exception:
@@ -413,8 +404,13 @@ def render_locator_tab(active_profile: ReportProfile) -> None:
         col_left, col_spacer, col_right = st.columns([1, 0.05, 1.2])
         with col_left:
             _render_locator_target_panel(
-                active_profile, feature_config, table_configs, table_config_by_name,
-                incoming, total_pages, gold_case,
+                active_profile,
+                feature_config,
+                table_configs,
+                table_config_by_name,
+                incoming,
+                total_pages,
+                gold_case,
             )
         with col_right:
             _render_locator_preview_panel(incoming, total_pages)

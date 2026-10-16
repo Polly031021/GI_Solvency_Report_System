@@ -21,6 +21,8 @@ def dedupe_column_names(columns) -> list[str]:
             seen[name] = 1
         names.append(name)
     return names
+
+
 def parse_page_numbers(raw_value: str, total_pages: int) -> tuple[list[int], list[str]]:
     """解析逗号、分号或空格分隔的物理页码。"""
     valid_pages: list[int] = []
@@ -40,6 +42,8 @@ def parse_page_numbers(raw_value: str, total_pages: int) -> tuple[list[int], lis
         else:
             invalid_values.append(token)
     return valid_pages, invalid_values
+
+
 def keep_valid_widget_state(
     key: str,
     options: list[str],
@@ -54,10 +58,14 @@ def keep_valid_widget_state(
         st.session_state[key] = [value for value in current if value in options]
     elif st.session_state.get(key) not in options:
         del st.session_state[key]
+
+
 def navigation_metric_codes(frame: pd.DataFrame) -> list[str]:
     if "指标编码" not in frame.columns:
         return []
     return frame["指标编码"].dropna().astype(str).str.strip().tolist()
+
+
 def finalize_company_frame(
     frame: pd.DataFrame,
     rename_map: dict[str, str] | None = None,
@@ -76,6 +84,8 @@ def finalize_company_frame(
         .drop_duplicates(subset=["公司"], keep="last")
         .reset_index(drop=True)
     )
+
+
 def target_period_terms(
     year: int,
     period: str,

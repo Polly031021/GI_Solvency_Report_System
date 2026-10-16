@@ -38,7 +38,9 @@ def render_validation_tab(
         )
     validation_results = st.session_state.validation_results
     required_result_columns = {"check_type", "rule_name", "status", "severity"}
-    if not validation_results.empty and not required_result_columns.issubset(validation_results.columns):
+    if not validation_results.empty and not required_result_columns.issubset(
+        validation_results.columns
+    ):
         st.info("Step4 规则已升级，请重新点击“执行勾稽检查”生成新版结果。")
     elif not validation_results.empty:
         status_counts = validation_results["status"].astype(str).value_counts().to_dict()
@@ -54,8 +56,7 @@ def render_validation_tab(
         )
 
         blocking_count = sum(
-            status_counts.get(status, 0)
-            for status in ("未通过", "缺失", "执行错误")
+            status_counts.get(status, 0) for status in ("未通过", "缺失", "执行错误")
         )
         if blocking_count:
             st.warning(
@@ -68,11 +69,13 @@ def render_validation_tab(
             st.success("第一阶段勾稽检查已通过，可以继续进入 STEP5 数据集成。")
 
         available_statuses = [
-            status for status in ("未通过", "缺失", "需复核", "执行错误", "通过", "不适用")
+            status
+            for status in ("未通过", "缺失", "需复核", "执行错误", "通过", "不适用")
             if status_counts.get(status, 0)
         ]
         issue_statuses = [
-            status for status in ("未通过", "缺失", "需复核", "执行错误")
+            status
+            for status in ("未通过", "缺失", "需复核", "执行错误")
             if status in available_statuses
         ]
         filter_columns = st.columns(2)

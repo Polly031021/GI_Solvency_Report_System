@@ -28,7 +28,7 @@ def render_all_chart_navigation(chart_options: list[str]) -> None:
         (
             '<div class="kpmg-nav-all-item">'
             '<span class="kpmg-nav-all-dot" aria-hidden="true"></span>'
-            f'<span>{html.escape(str(name))}</span>'
+            f"<span>{html.escape(str(name))}</span>"
             "</div>"
         )
         for name in chart_options
@@ -41,6 +41,8 @@ def render_all_chart_navigation(chart_options: list[str]) -> None:
         ),
         unsafe_allow_html=True,
     )
+
+
 def render_report_navigation(
     *,
     title: str,
@@ -54,9 +56,7 @@ def render_report_navigation(
         st.markdown(f"### {title}")
 
     first_options = (
-        first_levels_for_codes(available_codes, industry=True)
-        if industry
-        else COMPANY_FIRST_LEVELS
+        first_levels_for_codes(available_codes, industry=True) if industry else COMPANY_FIRST_LEVELS
     )
     level_one_key = f"{state_prefix}_level_one"
     keep_valid_widget_state(level_one_key, first_options)
@@ -79,9 +79,7 @@ def render_report_navigation(
     previous_level_one_key = f"_{state_prefix}_previous_level_one"
     if st.session_state.get(previous_level_one_key) != main_nav:
         st.session_state[previous_level_one_key] = main_nav
-        st.session_state[level_two_key] = (
-            second_options[1] if len(second_options) > 1 else "全部"
-        )
+        st.session_state[level_two_key] = second_options[1] if len(second_options) > 1 else "全部"
         st.session_state.pop(chart_key, None)
     keep_valid_widget_state(level_two_key, second_options)
     second_nav = st.radio("📂 二级模块", second_options, key=level_two_key)
@@ -98,10 +96,14 @@ def render_report_navigation(
         keep_valid_widget_state(chart_key, chart_options)
     if chart_options and second_nav != "全部":
         st.radio("具体图表", chart_options, key=chart_key)
+
+
 def sync_analysis_navigation_from_tab() -> None:
     target = st.session_state.get("workflow_main_tab", "")
     if target in ANALYSIS_TAB_LABELS:
         st.session_state.analysis_page_navigation = target
+
+
 def render_step7_excel_navigation(profile_id: str) -> None:
     """用 Step7 注释表构建侧边栏一级/二级/图表导航。"""
     st.markdown("### 公司报告导航")
@@ -149,6 +151,8 @@ def render_step7_excel_navigation(profile_id: str) -> None:
         st.radio("具体图表", chart_options, key="company_nav_chart")
     elif chart_options:
         st.session_state["company_nav_chart"] = chart_options[0]
+
+
 def render_major_financing_upload(profile_id: str) -> None:
     st.markdown("### 补充数据")
     financing_upload = st.file_uploader(
@@ -164,8 +168,6 @@ def render_major_financing_upload(profile_id: str) -> None:
             financing_upload.getvalue(),
             financing_upload.name,
         )
-        st.caption(
-            f"已读取 {len(st.session_state.major_financing_data):,} 条融资事件。"
-        )
+        st.caption(f"已读取 {len(st.session_state.major_financing_data):,} 条融资事件。")
     except Exception as exc:
         st.error(f"重大融资信息读取失败：{exc}")

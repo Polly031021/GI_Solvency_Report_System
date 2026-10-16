@@ -35,6 +35,8 @@ def _load_monitor_companies() -> pd.DataFrame:
         },
         fill_missing=False,
     )
+
+
 def _render_monitor_single_company(
     active_profile: ReportProfile,
     filtered_companies: pd.DataFrame,
@@ -51,9 +53,7 @@ def _render_monitor_single_company(
             filtered_companies["公司"].tolist(),
             key="monitor_selected_company",
         )
-        selected_row = filtered_companies[
-            filtered_companies["公司"] == selected_company
-        ].iloc[0]
+        selected_row = filtered_companies[filtered_companies["公司"] == selected_company].iloc[0]
 
         link_col, check_col = st.columns(2)
         link_col.link_button(
@@ -74,9 +74,7 @@ def _render_monitor_single_company(
                     target_period,
                     frequency=active_profile.frequency,
                     report_name=active_profile.profile_name,
-                    report_terms=tuple(
-                        active_profile.monitoring.get("report_terms", [])
-                    ),
+                    report_terms=tuple(active_profile.monitoring.get("report_terms", [])),
                 )
 
         if st.session_state.monitor_single_result:
@@ -99,6 +97,8 @@ def _render_monitor_single_company(
                     )
                 },
             )
+
+
 def _render_monitor_batch_check(
     active_profile: ReportProfile,
     filtered_companies: pd.DataFrame,
@@ -141,9 +141,7 @@ def _render_monitor_batch_check(
                     target_period,
                     frequency=active_profile.frequency,
                     report_name=active_profile.profile_name,
-                    report_terms=tuple(
-                        active_profile.monitoring.get("report_terms", [])
-                    ),
+                    report_terms=tuple(active_profile.monitoring.get("report_terms", [])),
                     timeout=request_timeout,
                 ): order
                 for order, (_, row) in enumerate(records)
@@ -197,6 +195,8 @@ def _render_monitor_batch_check(
             f"{target_year}{'' if target_period == 'ANNUAL' else target_period}.xlsx",
             width="stretch",
         )
+
+
 def render_monitor_tab(active_profile: ReportProfile) -> pd.DataFrame:
     """STEP0 报告监控；返回公司清单，供 STEP5 映射公司类型。"""
     st.subheader(f"{active_profile.profile_name}监控")
@@ -219,9 +219,9 @@ def render_monitor_tab(active_profile: ReportProfile) -> pd.DataFrame:
         default=all_categories,
         key="monitor_company_categories",
     )
-    filtered_companies = companies[
-        companies["公司类别"].isin(selected_categories)
-    ].reset_index(drop=True)
+    filtered_companies = companies[companies["公司类别"].isin(selected_categories)].reset_index(
+        drop=True
+    )
 
     st.caption(
         f"系统公司范围共 {len(companies)} 家；当前筛选 {len(filtered_companies)} 家。"
@@ -241,6 +241,8 @@ def render_monitor_tab(active_profile: ReportProfile) -> pd.DataFrame:
     _render_monitor_single_company(active_profile, filtered_companies, target_year, target_period)
     _render_monitor_batch_check(active_profile, filtered_companies, target_year, target_period)
     return companies
+
+
 def check_company_report(
     row: pd.Series,
     year: int,
@@ -300,20 +302,14 @@ def check_company_report(
         soup = BeautifulSoup(response.text, "html.parser")
         visible_text = soup.get_text(" ", strip=True)
         link_text = " ".join(
-            f"{tag.get_text(' ', strip=True)} {tag.get('href', '')}"
-            for tag in soup.find_all("a")
+            f"{tag.get_text(' ', strip=True)} {tag.get('href', '')}" for tag in soup.find_all("a")
         )
         searchable = re.sub(r"\s+", "", f"{visible_text} {link_text}")
         terms = target_period_terms(year, period, frequency)
         matched_terms = [term for term in terms if term.lower() in searchable.lower()]
-        normalized_report_terms = tuple(
-            item for item in report_terms if str(item).strip()
-        )
+        normalized_report_terms = tuple(item for item in report_terms if str(item).strip())
         has_report_term = (
-            any(
-                str(term).lower() in searchable.lower()
-                for term in normalized_report_terms
-            )
+            any(str(term).lower() in searchable.lower() for term in normalized_report_terms)
             if normalized_report_terms
             else True
         )

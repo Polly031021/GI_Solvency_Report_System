@@ -18,6 +18,8 @@ def render_company_report_workspace(
         st.session_state.major_financing_data,
         step7_modules=step7_modules,
     )
+
+
 def render_industry_report_workspace(
     data: pd.DataFrame,
 ) -> None:

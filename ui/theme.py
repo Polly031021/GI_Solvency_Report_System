@@ -71,6 +71,8 @@ def render_app_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
 def render_analysis_tab_styles() -> None:
     """STEP6-STEP8 侧边栏与导航样式。"""
     st.markdown(

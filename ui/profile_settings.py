@@ -123,6 +123,8 @@ def render_profile_settings(
                     width="stretch",
                 )
     return active_profile
+
+
 def resolve_profile_paths(active_profile: ReportProfile) -> tuple[Path | None, Path]:
     """解析当前 Profile 的指标字典与勾稽规则文件路径。"""
     taxonomy_path = (
@@ -137,6 +139,8 @@ def resolve_profile_paths(active_profile: ReportProfile) -> tuple[Path | None, P
 
     rules_path = active_profile.resource_path("validation", "validation_rules_file")
     return taxonomy_path, rules_path
+
+
 def resolve_profile_taxonomy(
     active_profile: ReportProfile,
     taxonomy_path: Path | None,
@@ -154,12 +158,14 @@ def resolve_profile_taxonomy(
     if active_profile.profile_id == "LIFE_SOLVENCY":
         taxonomy = extend_taxonomy(taxonomy)
     return taxonomy
+
+
 def render_page_heading(active_profile: ReportProfile) -> None:
     """页面主标题与当前 Profile 说明。"""
     st.markdown(
         (
             '<section class="platform-page-heading">'
-            '<h1>保险报告处理与分析平台</h1>'
+            "<h1>保险报告处理与分析平台</h1>"
             '<p class="platform-profile-caption">'
             f"当前 profile：{active_profile.profile_name}（{active_profile.profile_id}）｜"
             "支持同一报告类型内跨公司、跨期比较"

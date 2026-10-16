@@ -22,18 +22,14 @@ from .cache import (
 )
 
 
-def _preview_standard_uploads(
-    active_profile: ReportProfile, uploads: list
-) -> None:
+def _preview_standard_uploads(active_profile: ReportProfile, uploads: list) -> None:
     """STEP5：读取标准窄表并生成集成预览。"""
     try:
         frames = []
         summaries = []
         skipped_profiles: set[str] = set()
         for upload in uploads:
-            standardized = cached_read_standard_workbook(
-                upload.getvalue(), upload.name
-            )
+            standardized = cached_read_standard_workbook(upload.getvalue(), upload.name)
             standardized["报告类型"] = (
                 standardized["报告类型"]
                 .fillna("")
@@ -48,16 +44,16 @@ def _preview_standard_uploads(
                 ].astype(str)
             )
             skipped_profiles.update(mismatched)
-            standardized = standardized[
-                standardized["报告类型"] == active_profile.profile_id
-            ]
+            standardized = standardized[standardized["报告类型"] == active_profile.profile_id]
             if not standardized.empty:
                 frames.append(standardized)
-            summaries.append({
-                "来源文件": upload.name,
-                "数据类型": "标准窄表",
-                "记录数": len(standardized),
-            })
+            summaries.append(
+                {
+                    "来源文件": upload.name,
+                    "数据类型": "标准窄表",
+                    "记录数": len(standardized),
+                }
+            )
         integration_preview = (
             pd.concat(frames, ignore_index=True)
             if frames
@@ -76,6 +72,8 @@ def _preview_standard_uploads(
         st.session_state.integration_preview_mode = "标准窄表"
     except Exception as exc:
         st.error(f"标准窄表读取失败：{exc}")
+
+
 def _preview_external_uploads(
     active_profile: ReportProfile,
     companies: pd.DataFrame,
@@ -97,12 +95,8 @@ def _preview_external_uploads(
                 )
                 for upload in uploads
             ]
-        integration_preview = pd.concat(
-            [item.data for item in converted], ignore_index=True
-        )
-        st.session_state.integration_preview = cached_complete_step5_metrics(
-            integration_preview
-        )
+        integration_preview = pd.concat([item.data for item in converted], ignore_index=True)
+        st.session_state.integration_preview = cached_complete_step5_metrics(integration_preview)
         st.session_state.integration_sheet_summary = pd.concat(
             [item.sheet_summary for item in converted], ignore_index=True
         )
@@ -118,6 +112,8 @@ def _preview_external_uploads(
         st.session_state.integration_preview_mode = "外部宽表转窄表"
     except Exception as exc:
         st.error(f"外部宽表转换失败：{exc}")
+
+
 def render_integration_tab(
     active_profile: ReportProfile,
     companies: pd.DataFrame,
@@ -143,9 +139,7 @@ def render_integration_tab(
             accept_multiple_files=True,
             key="integrated_standard_uploads",
         )
-        if uploads and st.button(
-            "读取并预览标准窄表", type="primary", key="preview_standard_data"
-        ):
+        if uploads and st.button("读取并预览标准窄表", type="primary", key="preview_standard_data"):
             _preview_standard_uploads(active_profile, uploads)
     else:
         if active_profile.profile_id != "LIFE_SOLVENCY":
@@ -162,11 +156,11 @@ def render_integration_tab(
                 "转换时将同步生成“行业合计”窄表记录：金额指标按有效公司求和，"
                 "比率和倍数按行业合计分子、分母重新计算；行业风险构成采用底稿中的展示名称。"
             )
-        if uploads and st.button(
-            "精确映射并转换预览", type="primary", key="preview_external_data"
-        ):
+        if uploads and st.button("精确映射并转换预览", type="primary", key="preview_external_data"):
             _preview_external_uploads(active_profile, companies, taxonomy, uploads)
     return integration_mode
+
+
 def render_step5_review(
     preview: pd.DataFrame,
     integration_mode: str,
@@ -182,59 +176,59 @@ def render_step5_review(
         and not preview.empty
         and st.session_state.integration_preview_mode == integration_mode
     ):
-            st.markdown("#### 集成前预览")
-            identity_changes = preview.loc[
-                preview["原始公司名称"].astype(str).str.strip()
-                != preview["标准公司名称"].astype(str).str.strip(),
-                ["原始公司名称", "标准公司名称", "公司统一编码", "公司类型"],
-            ].drop_duplicates()
-            if not identity_changes.empty:
-                st.info(
-                    f"已识别 {len(identity_changes):,} 组历史公司名称，"
-                    "后续跨期分析将按标准公司名称和统一编码归集。"
-                )
-                with st.expander("查看公司历史名称映射"):
-                    st.dataframe(identity_changes, width="stretch", hide_index=True)
-            if not st.session_state.integration_sheet_summary.empty:
-                st.dataframe(
-                    st.session_state.integration_sheet_summary,
-                    width="stretch",
-                    hide_index=True,
-                )
-            for warning in st.session_state.integration_warnings:
-                st.warning(warning)
-            if not st.session_state.integration_mapping_summary.empty:
-                with st.expander("查看指标精确映射"):
-                    st.dataframe(
-                        st.session_state.integration_mapping_summary,
-                        width="stretch",
-                        hide_index=True,
-                    )
-            if not st.session_state.integration_logic_checks.empty:
-                with st.expander("查看派生指标逻辑校验", expanded=True):
-                    st.dataframe(
-                        st.session_state.integration_logic_checks,
-                        width="stretch",
-                        hide_index=True,
-                    )
-            st.caption(
-                f"转换后共 {len(preview):,} 条窄表记录。确认后将替换当前集成数据，"
-                "不与其他接入方式并行合并。"
+        st.markdown("#### 集成前预览")
+        identity_changes = preview.loc[
+            preview["原始公司名称"].astype(str).str.strip()
+            != preview["标准公司名称"].astype(str).str.strip(),
+            ["原始公司名称", "标准公司名称", "公司统一编码", "公司类型"],
+        ].drop_duplicates()
+        if not identity_changes.empty:
+            st.info(
+                f"已识别 {len(identity_changes):,} 组历史公司名称，"
+                "后续跨期分析将按标准公司名称和统一编码归集。"
             )
+            with st.expander("查看公司历史名称映射"):
+                st.dataframe(identity_changes, width="stretch", hide_index=True)
+        if not st.session_state.integration_sheet_summary.empty:
             st.dataframe(
-                narrow_table_view(preview).head(1000),
+                st.session_state.integration_sheet_summary,
                 width="stretch",
                 hide_index=True,
             )
-            if st.button(
-                "确认采用该数据集",
-                type="primary",
-                key="confirm_integrated_data",
-            ):
-                # 确认时强制补全派生指标，确保集成数据包含所有派生行
-                enriched_data = add_missing_derived_metrics(preview)
-                st.session_state.integrated_data = enriched_data.copy()
-                st.success("已更新集成数据（含派生指标），STEP6-STEP8 将使用本次确认的数据集。")
+        for warning in st.session_state.integration_warnings:
+            st.warning(warning)
+        if not st.session_state.integration_mapping_summary.empty:
+            with st.expander("查看指标精确映射"):
+                st.dataframe(
+                    st.session_state.integration_mapping_summary,
+                    width="stretch",
+                    hide_index=True,
+                )
+        if not st.session_state.integration_logic_checks.empty:
+            with st.expander("查看派生指标逻辑校验", expanded=True):
+                st.dataframe(
+                    st.session_state.integration_logic_checks,
+                    width="stretch",
+                    hide_index=True,
+                )
+        st.caption(
+            f"转换后共 {len(preview):,} 条窄表记录。确认后将替换当前集成数据，"
+            "不与其他接入方式并行合并。"
+        )
+        st.dataframe(
+            narrow_table_view(preview).head(1000),
+            width="stretch",
+            hide_index=True,
+        )
+        if st.button(
+            "确认采用该数据集",
+            type="primary",
+            key="confirm_integrated_data",
+        ):
+            # 确认时强制补全派生指标，确保集成数据包含所有派生行
+            enriched_data = add_missing_derived_metrics(preview)
+            st.session_state.integrated_data = enriched_data.copy()
+            st.success("已更新集成数据（含派生指标），STEP6-STEP8 将使用本次确认的数据集。")
     if step5_is_open and not st.session_state.integrated_data.empty:
         st.markdown("#### 当前已确认集成数据")
         display_limit = 1000
