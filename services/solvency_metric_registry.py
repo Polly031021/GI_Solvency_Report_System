@@ -294,8 +294,6 @@ INDUSTRY_METRICS_BY_SOURCE_CODE = {
 
 
 ALL_CUSTOM_METRICS = SUPPLEMENTAL_BASE_METRICS + DERIVED_METRICS + INDUSTRY_METRICS
-CUSTOM_METRICS_BY_CODE = {item.code: item for item in ALL_CUSTOM_METRICS}
-CUSTOM_METRICS_BY_NAME = {item.name: item for item in ALL_CUSTOM_METRICS}
 
 
 def extend_taxonomy(taxonomy: pd.DataFrame) -> pd.DataFrame:

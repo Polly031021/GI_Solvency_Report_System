@@ -91,11 +91,3 @@ def normalize_three_year_return_rows_core(
     return normalized, "已将近三年投资收益率的句式或非标准版式归一化为两行标准数据"
 
 
-def normalize_three_year_return_rows(
-    table_id: str,
-    rows: list[list[str]],
-) -> tuple[list[list[str]], str]:
-    """Backward-compatible table-aware entry point."""
-    if table_id != THREE_YEAR_RETURN_TABLE_ID:
-        return rows, ""
-    return normalize_three_year_return_rows_core(table_id, rows)

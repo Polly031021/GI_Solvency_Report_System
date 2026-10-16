@@ -39,7 +39,7 @@ from services.solvency_navigation import (
     metric_codes_for_chart,      # 保留：旧接口仍在使用
     resolve_chart_selection,     # 保留：兜底时使用
 )
-from services.step7_excel_config import Step7Module, load_step7_config
+from services.step7_excel_config import Step7Module
 from services.solvency_step6_analysis import (
     filter_analysis_frame,
     format_chart_value,
@@ -86,7 +86,6 @@ from services.solvency_step7_charts import (
     build_component_stack_chart,
     build_effect_diverging_chart,
     build_matrix_chart,
-    build_single_metric_trend_chart,
     build_single_metric_trend_charts,
     build_solvency_ratio_combo_chart,
     convert_multiple_units_to_percent,
@@ -104,7 +103,6 @@ from services.solvency_report_notes import company_notes_template
 
 
 PICTURE_DIR = Path(__file__).resolve().parent / "picture"
-STEP7_CHART_TYPE = "内置分析方案"
 ALL_COMPANY_TYPES = "全部"
 DEFAULT_SORT_LABEL = "默认（按列表原始顺序）"
 SORT_DESCENDING = "降序（从大到小）"
@@ -1940,78 +1938,6 @@ def _render_combination_analysis(
         else:
             return
 
-         # ★ 临时 DEBUG：诊断"经营效益"柱子为 0 的原因
-        if chart_name == "经营效益":
-            with st.expander("🔍 经营效益 - 数据诊断", expanded=True):
-                st.caption(
-                    f"当前筛选范围：公司 {frame['公司'].nunique()} 家，"
-                    f"报告期 {frame['报告期'].nunique()} 个"
-                )
-
-                # --- 1. 检查 NET_PROFIT 与 SIGNED_PREMIUM 是否存在 ---
-                _codes_all = sorted(frame["指标编码"].astype(str).unique().tolist())
-                st.write("**① 当前 frame 里所有的指标编码**")
-                st.write(_codes_all)
-
-                _has_profit = "NET_PROFIT" in _codes_all
-                _has_premium = "SIGNED_PREMIUM" in _codes_all
-                st.write({
-                    "有 NET_PROFIT": "✅" if _has_profit else "❌ 数据源里根本没有净利润！",
-                    "有 SIGNED_PREMIUM": "✅" if _has_premium else "❌ 数据源里没有签单保费！",
-                })
-
-                # --- 2. 打印 NET_PROFIT / SIGNED_PREMIUM 的原始值 ---
-                _dbg = frame[
-                    frame["指标编码"].astype(str).isin(["NET_PROFIT", "SIGNED_PREMIUM"])
-                ].copy()
-                if not _dbg.empty:
-                    st.write("**② 净利润与保费的原始值（前 30 条）**")
-                    st.dataframe(
-                        _dbg[["公司", "报告期", "指标编码", "数值", "单位", "期间口径"]]
-                        .sort_values(["公司", "报告期", "指标编码"])
-                        .head(30),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    # --- 3. 按公司×报告期透视 ---
-                    st.write("**③ 按（公司, 报告期）透视：净利润 / 保费**")
-                    _pivot = (
-                        _dbg.pivot_table(
-                            index=["公司", "报告期"],
-                            columns="指标编码",
-                            values="数值",
-                            aggfunc="first",
-                        )
-                        .reset_index()
-                    )
-                    st.dataframe(_pivot, use_container_width=True, hide_index=True)
-
-                    # --- 4. 计算比率，检查是否为 0 ---
-                    if "NET_PROFIT" in _pivot.columns and "SIGNED_PREMIUM" in _pivot.columns:
-                        _pivot["净利润率(%)"] = (
-                            _pivot["NET_PROFIT"]
-                            / _pivot["SIGNED_PREMIUM"].where(_pivot["SIGNED_PREMIUM"] != 0)
-                            * 100
-                        )
-                        st.write("**④ 计算出的净利润率（%）**")
-                        st.dataframe(
-                            _pivot[["公司", "报告期", "NET_PROFIT", "SIGNED_PREMIUM", "净利润率(%)"]],
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-
-                        # --- 5. 判断单位是否一致 ---
-                        st.write("**⑤ 单位检查**")
-                        _units = _dbg.groupby("指标编码")["单位"].unique().to_dict()
-                        st.write(_units)
-                        st.caption(
-                            "⚠️ 如果 NET_PROFIT 单位是'元'而 SIGNED_PREMIUM 单位是'万元'，"
-                            "相除后的值会小 10000 倍 → 柱子高度几乎为 0。"
-                        )
-                else:
-                    st.error("❌ frame 里既没有 NET_PROFIT 也没有 SIGNED_PREMIUM 数据！")
-
         periods = sorted(frame["报告期"].dropna().unique().tolist())
         columns_per_row = 2
 
@@ -2611,6 +2537,12 @@ def _render_combination_analysis(
         )
         st.caption("深蓝虚线为样本中位数，用于识别市场风险和信用风险同时偏高的公司。")
     elif plan.kind == RISK_RATIO_SCATTER:
+        # 坐标轴口径来自注册表（Excel 可在"图表配置(JSON)"的 scatter 字段覆盖）。
+        # 未注册的自定义图表名回退到"市场风险/认可资产"口径，避免 KeyError。
+        x_code, y_code, bubble_size_code, denominator_label = (
+            RISK_RATIO_SCATTER_SPECS.get(chart_name)
+            or RISK_RATIO_SCATTER_SPECS[MARKET_RISK_ASSET_SCATTER]
+        )
         if chart_name in RISK_SCATTER_DUAL_VIEW_CHARTS:
             _render_risk_ratio_scatter_fragment(
                 converted,
@@ -3027,20 +2959,6 @@ def render_underwriting_efficiency_scatter(
         if y_upper <= y_lower:
             y_upper = y_lower + MIN_SPAN
 
-        # ★ 新增：数据诊断展开区，跑一次就能看到真实数据
-        with st.expander(f"🔍 {label} - 数据诊断", expanded=False):
-            st.write({
-                "公司数": len(_values),
-                "原始最小值": float(_values.min()),
-                "原始最大值": float(_values.max()),
-                "跨度": _raw_span,
-                "纵轴下限": y_lower,
-                "纵轴上限": y_upper,
-                "中位数": median_val,
-                "是否小数形式(已自动×100)": _is_decimal_form,
-                "所有值(排序)": sorted(_values.tolist()),
-            })
-
         # ★ 动态提示：根据是否有真实差异给不同说明
         _variance_hint = (
             "" if _has_real_variance
@@ -3375,7 +3293,6 @@ def show_step_7_solvency(
             level_two = entries[0].level_two if entries else ""
             module_chart_kind = None
             module_metric_codes: tuple[str, ...] = ()
-            module_chart_config: dict = {}
             module_requires_all = entries[0].requires_all if entries else False
             module_entry_metric_codes = entries[0].metric_codes if entries else ()
         else:
@@ -3383,7 +3300,6 @@ def show_step_7_solvency(
             level_two = module.level_two
             module_chart_kind = module.chart_kind
             module_metric_codes = module.metric_codes
-            module_chart_config = module.chart_config
             module_requires_all = module.requires_all   # ★ 改用 Excel 的值
             module_entry_metric_codes = module.metric_codes
 

@@ -18,7 +18,6 @@ from .solvency_navigation import (
 
 TRANSPARENT = "transparent"
 ANNUAL_REPORT_FONT = "Microsoft YaHei"
-ANNUAL_REPORT_PANEL_BORDER = "#EAEAEA"
 REGULATORY_LIMITS = {
     "CORE_SOLVENCY_RATIO": 50.0,
     "COMBINED_SOLVENCY_RATIO": 100.0,
@@ -56,8 +55,6 @@ CAPITAL_COMPONENT_ORDER = {
     for index, label in enumerate(list(COMPONENT_COLORS)[:4])
 }
 MIN_INSIDE_LABEL_SHARE = 0.045
-UNDISCLOSED_COLOR = "#B8BDC7"
-RESPONSIVE_BAR_WIDTH = alt.RelativeBandSize(0.72)
 TREND_LABEL_FORMATS = {
     "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES": ",.5f",
     "LIFE_INSURANCE_RISK_TO_QUANT_CAPITAL": ",.1f",
@@ -2819,112 +2816,6 @@ def combine_linked_matrix_charts(
     )
 
 
-# ============================================================================
-# ★ 新增：能力五边形雷达图
-# ============================================================================
-
-
-def compute_capability_scores(
-    frame: pd.DataFrame,
-    axes_config: list[dict],
-    periods: Iterable[str],
-) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """把五个能力指标（保费增速 / ROE / 总资产 / 实际资本 / 偿付能力）原始值
-    按预设基准区间折算成 0-100 的得分，供能力雷达图使用。
-
-    参数
-    ----
-    frame: 已经筛选到目标公司、目标期的标准窄表（未做单位换算，金额单位为万元）
-    axes_config: 每个顶点的配置，形如
-        [{"code": "ROE", "label": "ROE", "period": "本年累计数",
-          "lower": 0, "upper": 12}, ...]
-    periods: 可用报告期列表，函数内部取最后一个作为"最新期"
-
-    返回
-    ----
-    (score_frame, raw_frame, latest_period)
-        score_frame: 列 = 公司 + "<label>_得分"
-        raw_frame:   列 = 公司 + "<label>"（原始值）
-        latest_period: 实际使用的报告期
-    """
-    if frame.empty or not periods or not axes_config:
-        return pd.DataFrame(), pd.DataFrame(), ""
-
-    latest_period = sorted(str(p) for p in periods)[-1]
-    period_frame = frame[
-        frame["报告期"].astype(str).eq(latest_period)
-    ].copy()
-    if period_frame.empty:
-        return pd.DataFrame(), pd.DataFrame(), latest_period
-
-    companies = list(dict.fromkeys(
-        str(c).strip()
-        for c in period_frame["公司"].fillna("").astype(str)
-        if str(c).strip()
-    ))
-    if not companies:
-        return pd.DataFrame(), pd.DataFrame(), latest_period
-
-    raw_rows: list[dict] = []
-    score_rows: list[dict] = []
-    for company in companies:
-        company_rows = period_frame[
-            period_frame["公司"].astype(str).eq(company)
-        ]
-        raw: dict = {"公司": company}
-        score: dict = {"公司": company}
-        for ax in axes_config:
-            code = str(ax.get("code", "")).strip()
-            label = str(ax.get("label", "")).strip() or code
-            target_period = str(ax.get("period", "")).strip()
-            if not code:
-                raw[label] = None
-                score[f"{label}_得分"] = 0.0
-                continue
-            match = company_rows[
-                company_rows["指标编码"].astype(str).eq(code)
-            ]
-            if target_period:
-                exact = match[match["期间口径"].astype(str).eq(target_period)]
-                if not exact.empty:
-                    match = exact
-            value = None
-            if not match.empty:
-                numeric = pd.to_numeric(match.iloc[0]["数值"], errors="coerce")
-                if pd.notna(numeric):
-                    value = float(numeric)
-            raw[label] = value
-            if value is None:
-                score[f"{label}_得分"] = 0.0
-            else:
-                lo = float(ax.get("lower", 0))
-                hi = float(ax.get("upper", 100))
-                if hi <= lo:
-                    score[f"{label}_得分"] = 0.0
-                else:
-                    s = (value - lo) / (hi - lo) * 100.0
-                    score[f"{label}_得分"] = max(0.0, min(100.0, s))
-        raw_rows.append(raw)
-        score_rows.append(score)
-
-    raw_df = pd.DataFrame(raw_rows)
-    score_df = pd.DataFrame(score_rows)
-    # 数据越完整的公司排前面
-    score_cols = [c for c in score_df.columns if c.endswith("_得分")]
-    if score_cols:
-        score_df["_axes_filled"] = score_df[score_cols].apply(
-            lambda r: int((r > 0).sum()), axis=1
-        )
-        score_df = (
-            score_df.sort_values("_axes_filled", ascending=False)
-            .drop(columns=["_axes_filled"])
-            .reset_index(drop=True)
-        )
-    # raw 跟 score 保持同一个公司顺序
-    raw_df = raw_df.set_index("公司").reindex(score_df["公司"]).reset_index()
-    return score_df, raw_df, latest_period
-
-
 def build_capability_radar_chart(
     score_frame: pd.DataFrame,
     axis_labels: list[str],
@@ -3365,6 +3256,9 @@ def build_structure_change_chart(
     _ratio_scale = alt.Scale(domain=[_ratio_lower, _ratio_upper])
     _growth_scale = alt.Scale(domain=[_growth_lower, _growth_upper])
 
+    # 横轴始终按"报告期顺序"排列，而不是按数值大小排序
+    _display_period_order = [_display_period_label(p) for p in period_order]
+
     # ---------- 7. 构建图表 ----------
     base = alt.Chart(plot_df)
 
@@ -3657,7 +3551,6 @@ def build_performance_pattern_trajectory(
         return work.drop_duplicates("公司", keep="first")
 
     rank_rows: list[dict] = []
-    _missing_log: list[dict] = []   # 记录缺失原因，便于排查
 
     for period in period_order:
         period_df = df[df["报告期"].eq(str(period))]

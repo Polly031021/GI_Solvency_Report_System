@@ -75,19 +75,6 @@ KPMG_CHART_COLORS = (
     "#F1C44D",
     "#269924",
 )
-# Prefer these official KPMG light/bright tones for filled chart areas.  Lines,
-# reference rules, and highlighted series continue to use the saturated chart
-# palette above so they remain visible on the light report background.
-KPMG_LIGHT_CHART_COLORS = (
-    "#ACEAFF",  # Light Blue
-    "#FD349C",  # Pink
-    "#B497FF",  # Light Purple
-    "#FFA3DA",  # Light Pink
-    "#63EBB2",  # Light Green
-    "#00B8F5",  # Pacific Blue
-    "#00C0AE",  # Green
-    "#F1C44D",  # Amber
-)
 # Annual-report-style bright fill palette for non-key bar and stack charts.
 # Deep KPMG Blue, Cobalt Blue and all Dark-series shades are intentionally
 # excluded so dark-navy value labels remain clear without a white outline.
@@ -304,7 +291,6 @@ INDUSTRY_NAVIGATION: tuple[NavigationEntry, ...] = (
 )
 
 COMPANY_FIRST_LEVELS = tuple(dict.fromkeys(entry.level_one for entry in COMPANY_NAVIGATION)) + (PRINT_ALL_LABEL,)
-INDUSTRY_FIRST_LEVELS = (OVERVIEW_LEVEL, PRINT_ALL_LABEL)
 
 
 def _available_entries(
@@ -434,12 +420,3 @@ def apply_navigation_labels(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def ordered_available_codes(codes: Iterable[object]) -> list[str]:
-    available = {str(code).strip() for code in codes if str(code).strip()}
-    ordered = [
-        code
-        for entry in COMPANY_NAVIGATION
-        for code in entry.metric_codes
-        if code in available
-    ]
-    return list(dict.fromkeys(ordered))
