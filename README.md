@@ -87,7 +87,9 @@ tests/                    回归测试
 | `theme.py` | STEP7 专用 CSS（屏幕 + 打印） |
 | `selection.py` | 公司/指标筛选、排序、配色映射、图表清单解析 |
 | `rendering.py` | 单指标图表通用渲染（单位换算、图例、公司面板网格） |
-| `plans.py` | 多指标组合图调度中心（按图表类型分派） |
+| `plans.py` | 组合图调度中心：`render_combination_analysis` 按图表类型分派 |
+| `plan_renderers.py` | 18 种组合图的具体渲染实现（`render_plan_*`） |
+| `plan_inputs.py` | 组合图输入准备：指标编码解析、阶梯打分、能力五边形打分 |
 | `fragments.py` | 气泡图/散点图的局部放大联动（Streamlit fragment） |
 | `ai_analysis.py` | 一键 AI 点评（调用登录页配置的模型接口） |
 | `underwriting.py` | 承保效益散点图 |
@@ -98,10 +100,10 @@ tests/                    回归测试
 | 模块 | 职责 |
 | --- | --- |
 | `report_profiles.py` | Profile 工作簿的校验、加载与导出（含 v2 版式变体/字段字典/完整性规则） |
-| `solvency_hybrid_pipeline.py` | STEP1 定位管线：规则法、雷达/边界分析、大模型复核、视觉定位兜底 |
+| `solvency_hybrid_pipeline/` | STEP1 定位管线包：`config` 配置、`llm` 调用、`locator_vision` 视觉定位、`locator_rule` 规则定位、`locator` 定位入口、`page_extract` 逐页提取与跨页合并、`extract` 提取入口 |
 | `solvency_pdf_locator.py` | 文本层分析、目录换算、文档类型识别、报告元数据提取 |
 | `solvency_table_boundaries.py` | 目标表起止边界与版式变体（含 S05 单行跨页等真实版式） |
-| `solvency_ai_table_extractor.py` | STEP2 逐页提取：单位记录、网格重建、完整性校验与重试 |
+| `solvency_ai_table_extractor/` | STEP2 逐页提取包：`models` 模型与文本工具、`units` 单位记录、`grid` 文本网格、`source_profile` 源PDF完整性、`llm` 模型调用、`extract` 主流程 |
 | `table_strategy_registry.py` / `table_strategy_handlers.py` | 各目标表的专用提取策略 |
 | `solvency_normalizer.py` | 指标匹配、期间口径归一、单位换算、标准窄表 schema |
 | `solvency_step3_standardizer.py` | 目标指标清单填报与派生指标计算 |
@@ -110,7 +112,7 @@ tests/                    回归测试
 | `solvency_company_identity.py` | 公司名称归一化、历史名称别名、同业分类解析 |
 | `solvency_navigation.py` | 图表导航定义与 KPMG 官方色卡 |
 | `solvency_step6_analysis.py` | STEP6 数据准备与 Altair 对比图构建 |
-| `solvency_step7_charts.py` | STEP7/STEP8 图表库（趋势、组合、堆叠、矩阵、气泡、雷达、结构变化等） |
+| `solvency_step7_charts/` | STEP7/STEP8 图表库包：`primitives` 原语、`trend` 趋势、`capital` 资本、`bubble` 气泡、`matrix` 矩阵散点、`radar` 雷达、`structure` 结构变化、`performance` 业绩模式 |
 | `solvency_metric_registry.py` | 寿险/CROSS/行业派生指标的补充定义 |
 | `registered_capital_extractor.py` | 从披露文本中提取注册资本 |
 | `solvency_financing_analysis.py` | 重大融资信息（增资/发债）统计 |
@@ -169,9 +171,11 @@ python -m pyflakes ..                 # 静态检查：未定义名字/未使用
 
 1. `dashboard_components.render_print_control` 仍使用 `st.components.v1.html`，
    Streamlit 已提示该 API 将于 2026-06-01 后移除；升级 Streamlit 时需一并改造。
-2. `services/solvency_step7_charts.py`（约 3.7k 行）是最大的单文件，
-   可继续按图表族（趋势/资本/矩阵/雷达/结构变化）拆分为子包。
-3. `step7_solvency/plans.py` 中的 `render_combination_analysis` 仍是长函数，
-   内部按图表类型分支，可进一步把每个分支抽成独立函数。
+2. 仍有若干千行以上的业务模块可按同样方式继续拆分，按优先级排序：
+   `services/solvency_step3_standardizer.py`（1268 行）、
+   `services/table_strategy_handlers.py`（1192 行）、
+   `services/report_profiles.py`（1186 行）、
+   `services/solvency_dataset_adapter.py`（1156 行）。
+3. 代码里保留了较多"★ 修复/★ 新增"式的历史注释，确认稳定后可以精简为结论性说明。
 4. `config/non_life_solvency_page_features.json`、`config/solvency_page_features.json`
    与内置 JSON Profile 属于历史兼容路径，当前财险走工作簿配置，可按部署情况清理。
