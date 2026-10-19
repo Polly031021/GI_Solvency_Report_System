@@ -357,6 +357,7 @@ def show_step_7_solvency(
                         key_prefix=f"s7_{chart_index}",
                         financing_data=financing_data,
                         module_override=module,  # ★ 新增
+                        industry_frame=frame,
                     )
             render_report_footnote(chart_note)
 
