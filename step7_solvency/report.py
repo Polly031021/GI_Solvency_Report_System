@@ -282,8 +282,11 @@ def show_step_7_solvency(
             module_requires_all = module.requires_all  # ★ 改用 Excel 的值
             module_entry_metric_codes = module.metric_codes
 
-        # 标题：Excel 有二级就拼上，没有就省掉
-        title_parts = [p for p in (level_one, level_two, chart_name) if p]
+        # 标题：Excel 有二级就拼上，没有就省掉；二级与图表同名时只保留一次。
+        title_parts = []
+        for part in (level_one, level_two, chart_name):
+            if part and (not title_parts or title_parts[-1] != part):
+                title_parts.append(part)
         title_text = " - ".join(title_parts)
 
         with st.container(key=f"s7_report_module_{chart_index}"):
@@ -348,17 +351,20 @@ def show_step_7_solvency(
                             company_period_bars=(plan_kind == TREND_WITH_COMPANY_BARS),
                         )
                 else:
-                    render_combination_analysis(
-                        scoped,
-                        chart_name,
-                        periods=selected_periods,
-                        unit_mode=unit_mode,
-                        highlight_company=highlight_company,
-                        key_prefix=f"s7_{chart_index}",
-                        financing_data=financing_data,
-                        module_override=module,  # ★ 新增
-                        industry_frame=frame,
-                    )
+                    try:
+                        render_combination_analysis(
+                            scoped,
+                            chart_name,
+                            periods=selected_periods,
+                            unit_mode=unit_mode,
+                            highlight_company=highlight_company,
+                            key_prefix=f"s7_{chart_index}",
+                            financing_data=financing_data,
+                            module_override=module,  # ★ 新增
+                            industry_frame=frame,
+                        )
+                    except (ValueError, KeyError) as exc:
+                        st.warning(f"“{chart_name}”暂无法绘制：{exc}")
             render_report_footnote(chart_note)
 
     if print_all:

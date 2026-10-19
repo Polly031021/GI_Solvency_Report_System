@@ -244,16 +244,11 @@ def selected_chart_names(
         if first == PRINT_ALL_LABEL:
             return [m.chart_name for m in modules]
         second = st.session_state.get("company_nav_level_two", "全部")
-        active_chart = st.session_state.get("company_nav_chart", "")
         # 按 Excel 顺序筛选
         pool = [m for m in modules if m.level_one == first]
         if second and second != "全部":
             pool = [m for m in pool if m.level_two == second]
-        # 若侧边栏选了某个具体图表，只渲染它；否则渲染该层级下全部
-        if active_chart and second and second != "全部":
-            matched = [m for m in pool if m.chart_name == active_chart]
-            if matched:
-                return [m.chart_name for m in matched]
+        # 二级分类就是图表入口，渲染该层级下全部模块。
         return [m.chart_name for m in pool]
 
     # --- 没 Excel：兜底用旧的 COMPANY_NAVIGATION ---

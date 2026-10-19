@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import math
 import re
 import unicodedata
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1027,8 +1029,54 @@ def _backfill_missing_company_names(frame: pd.DataFrame) -> pd.DataFrame:
 
     return result
 
-def read_standard_workbook(workbook_bytes: bytes, filename: str) -> pd.DataFrame:
-    excel = pd.ExcelFile(io.BytesIO(workbook_bytes))
+STANDARD_WORKBOOK_CACHE_VERSION = "standard-workbook-v1"
+
+
+def _standard_workbook_cache_path(
+    workbook_bytes: bytes,
+    filename: str,
+    include_internal: bool,
+) -> Path:
+    digest = hashlib.sha256(
+        STANDARD_WORKBOOK_CACHE_VERSION.encode("utf-8")
+        + b"\0"
+        + str(filename).encode("utf-8")
+        + b"\0"
+        + (b"1" if include_internal else b"0")
+        + b"\0"
+        + workbook_bytes
+    ).hexdigest()
+    cache_dir = Path(tempfile.gettempdir()) / "gi_solvency_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"{digest}.pkl"
+
+
+def _open_excel_workbook(workbook_bytes: bytes) -> pd.ExcelFile:
+    """Prefer calamine when available; fall back to pandas' default engine."""
+    try:
+        return pd.ExcelFile(io.BytesIO(workbook_bytes), engine="calamine")
+    except (ImportError, ValueError):
+        return pd.ExcelFile(io.BytesIO(workbook_bytes))
+
+
+def read_standard_workbook(
+    workbook_bytes: bytes,
+    filename: str,
+    *,
+    include_internal: bool = True,
+) -> pd.DataFrame:
+    cache_path = _standard_workbook_cache_path(
+        workbook_bytes,
+        filename,
+        include_internal,
+    )
+    if cache_path.exists():
+        try:
+            return pd.read_pickle(cache_path)
+        except Exception:
+            cache_path.unlink(missing_ok=True)
+
+    excel = _open_excel_workbook(workbook_bytes)
     sheet_name = "标准数据" if "标准数据" in excel.sheet_names else excel.sheet_names[0]
     preview = pd.read_excel(excel, sheet_name=sheet_name, header=None, nrows=12)
     header_row = None
@@ -1041,7 +1089,7 @@ def read_standard_workbook(workbook_bytes: bytes, filename: str) -> pd.DataFrame
         raise ValueError(f"{filename} 未找到标准窄表表头。")
     frame = pd.read_excel(excel, sheet_name=sheet_name, header=header_row)
     frame.columns = [str(column).strip() for column in frame.columns]
-    if INTERNAL_STANDARD_SHEET_NAME in excel.sheet_names:
+    if include_internal and INTERNAL_STANDARD_SHEET_NAME in excel.sheet_names:
         internal = pd.read_excel(excel, sheet_name=INTERNAL_STANDARD_SHEET_NAME)
         internal.columns = [str(column).strip() for column in internal.columns]
         frame = _restore_internal_fields(frame, internal)
@@ -1087,13 +1135,31 @@ def read_standard_workbook(workbook_bytes: bytes, filename: str) -> pd.DataFrame
         & ~result["公司"].astype(str).str.startswith("COMPANY_")
     )
     if bad_code_mask.any():
-        for idx in result.index[bad_code_mask]:
-            company = str(result.at[idx, "公司"]).strip()
-            identity = resolve_company_identity(company, {})
-            result.at[idx, "公司统一编码"] = identity.company_code
-            result.at[idx, "原始公司名称"] = identity.original_name
-            result.at[idx, "标准公司名称"] = identity.standard_name
-            result.at[idx, "公司类型"] = identity.company_type
+        bad_companies = (
+            result.loc[bad_code_mask, "公司"].astype(str).str.strip().drop_duplicates()
+        )
+        bad_identity_map = {
+            company: resolve_company_identity(company, {})
+            for company in bad_companies
+        }
+        bad_identities = (
+            result.loc[bad_code_mask, "公司"]
+            .astype(str)
+            .str.strip()
+            .map(bad_identity_map)
+        )
+        result.loc[bad_code_mask, "公司统一编码"] = [
+            item.company_code for item in bad_identities
+        ]
+        result.loc[bad_code_mask, "原始公司名称"] = [
+            item.original_name for item in bad_identities
+        ]
+        result.loc[bad_code_mask, "标准公司名称"] = [
+            item.standard_name for item in bad_identities
+        ]
+        result.loc[bad_code_mask, "公司类型"] = [
+            item.company_type for item in bad_identities
+        ]
 
     # 原有的空公司名反查逻辑
     result = _backfill_missing_company_names(result)
@@ -1123,6 +1189,10 @@ def read_standard_workbook(workbook_bytes: bytes, filename: str) -> pd.DataFrame
                 result.at[idx, "公司统一编码"] = identity.company_code
                 result.at[idx, "公司类型"] = identity.company_type
 
+    try:
+        result.to_pickle(cache_path)
+    except Exception:
+        pass
     return result
 
 

@@ -14,6 +14,7 @@ from services.solvency_step7_chart_plans import (
     CAPITAL_STRUCTURE_COMBO,
     CAPABILITY_RADAR,
     INDUSTRY_PREMIUM_STRUCTURE,
+    INDUSTRY_MARKET_SHARE,
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
     COMPONENT_STACK,
@@ -36,6 +37,7 @@ from .plan_inputs import chart_input_metric_codes
 from .plan_renderers import (
     render_plan_capability_radar,
     render_plan_industry_premium_structure,
+    render_plan_industry_market_share,
     render_plan_capital_amount_combo,
     render_plan_capital_efficiency_bubble,
     render_plan_capital_ratio_combo,
@@ -101,6 +103,15 @@ def render_combination_analysis(
     # ★ 行业整体保费结构：使用上传数据中的全部公司，不受 Step7 公司/类型筛选影响
     if plan.kind == INDUSTRY_PREMIUM_STRUCTURE:
         render_plan_industry_premium_structure(
+            industry_frame if industry_frame is not None else frame,
+            unit_mode=unit_mode,
+            key_prefix=key_prefix,
+            module_override=module_override,
+        )
+        return
+
+    if plan.kind == INDUSTRY_MARKET_SHARE:
+        render_plan_industry_market_share(
             industry_frame if industry_frame is not None else frame,
             unit_mode=unit_mode,
             key_prefix=key_prefix,
@@ -237,5 +248,10 @@ def render_combination_analysis(
 
     # ★ 新增：承保效益散点图
     elif plan.kind == UNDERWRITING_EFFICIENCY_SCATTER:
-        render_plan_underwriting_efficiency_scatter(frame, key_prefix, module_override)
+        render_plan_underwriting_efficiency_scatter(
+            frame,
+            key_prefix,
+            module_override,
+            industry_frame=industry_frame,
+        )
         return

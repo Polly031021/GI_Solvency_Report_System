@@ -8,6 +8,7 @@ PyMuPDF
 pdfplumber
 openai
 openpyxl
+python-calamine
 xlrd
 lxml
 python-dateutil

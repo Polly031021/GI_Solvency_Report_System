@@ -40,6 +40,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     EFFECT_DIVERGING,
     FINANCING_TABLE,
     INDUSTRY_PREMIUM_STRUCTURE,
+    INDUSTRY_MARKET_SHARE,
     KEY_METRICS_TABLE,
     MARKET_CREDIT_MATRIX,
     PENDING_DEFINITION,
@@ -119,6 +120,12 @@ MODULE_SPECS = (
         ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"),
         {"years": 5},
     ),
+    (
+        "行业市场份额",
+        INDUSTRY_MARKET_SHARE,
+        ("SIGNED_PREMIUM", "NET_PROFIT", "COMBINED_RATIO"),
+        {"min_coverage": 0.8},
+    ),
 )
 
 
@@ -193,10 +200,38 @@ def test_industry_premium_template_module() -> None:
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.metric) >= 4, "选择“全部”后行业保费结构图未恢复渲染"
-    print("PASS 行业概览 > 规模与发展：行业保费结构图与“全部”切换正常")
+
+    at.session_state["company_nav_level_two"] = "市场份额"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "公司类别市场份额" in markdown_text
+    assert "公司类别金额对比" in markdown_text
+    print("PASS 行业概览：保费结构、全部切换与市场份额均正常")
+
+
+def test_default_step7_config_without_upload() -> None:
+    """Step7 must load the bundled template without a sidebar upload."""
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "行业概览"
+    at.session_state["company_nav_level_two"] = "规模与发展"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.metric) >= 4, "默认 STEP7 配置未自动加载"
+    print("PASS STEP7 默认配置自动加载")
 
 
 if __name__ == "__main__":
     test_excel_driven_step7_charts()
     test_industry_premium_template_module()
+    test_default_step7_config_without_upload()
     print("全部通过")

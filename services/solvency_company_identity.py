@@ -49,16 +49,16 @@ COMPANY_ALIASES = (
 
 # 财险清单使用短名称，PDF 文件名/正文常用这些简称或全称片段。
 _NON_LIFE_SHORT_ALIASES: dict[str, tuple[str, ...]] = {
-    "人保财险": ("中国人民财产保险", "人保", "人保财险"),
+    "人保财险": ("中国人民财产保险", "人保", "人保财险", "人保产险"),
     "平安产险": ("中国平安财产保险", "平安财险", "平安产险"),
-    "太保财险": ("中国太平洋财产保险", "太平洋财险", "太保财险"),
+    "太保财险": ("中国太平洋财产保险", "太平洋财险", "太保财险", "太保产险"),
     "国寿财产": ("中国人寿财产保险", "国寿财险", "国寿财产"),
-    "众安财产": ("众安在线财产保险", "众安保险", "众安财产"),
+    "众安财产": ("众安在线财产保险", "众安保险", "众安财产", "众安产险"),
     "英大财产": ("英大泰和财产保险", "英大财险", "英大财产"),
     "大地财产": ("中国大地财产保险", "大地财险", "大地财产"),
     "中华联合": ("中华联合财产保险", "中华财险", "中华联合"),
     "太平财险": ("太平财产保险", "太平财险"),
-    "阳光财产": ("阳光财产保险", "阳光财险", "阳光财产"),
+    "阳光财产": ("阳光财产保险", "阳光财险", "阳光财产", "阳光产险"),
 }
 
 
@@ -301,36 +301,101 @@ def apply_company_identities(
     result = frame.copy()
     if result.empty or "公司" not in result.columns:
         return result
-    for index, row in result.iterrows():
-        company = str(row.get("公司", "") or "").strip()
-        company_type = str(row.get("公司类型", "") or "").strip()
-        company_code = str(row.get("公司统一编码", "") or "").strip()
-        if (
-            company == "行业合计"
-            or company_type == "行业合计"
-            or company_code.startswith("INDUSTRY_")
-        ):
-            result.at[index, "原始公司名称"] = "行业合计"
-            result.at[index, "标准公司名称"] = "行业合计"
-            result.at[index, "公司"] = "行业合计"
-            result.at[index, "公司统一编码"] = company_code or "INDUSTRY_TOTAL"
-            result.at[index, "公司类型"] = "行业合计"
-            continue
-        original = str(row.get("原始公司名称", "") or "").strip() or row.get("公司", "")
-        identity = resolve_company_identity(
-            original,
-            company_type_map,
-            fallback_company_type=str(row.get("公司类型", "") or "").strip() or "未分类",
+    company = result.get("公司", pd.Series("", index=result.index)).fillna("").astype(str).str.strip()
+    company_type = (
+        result.get("公司类型", pd.Series("", index=result.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    company_code = (
+        result.get("公司统一编码", pd.Series("", index=result.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    industry_mask = (
+        company.eq("行业合计")
+        | company_type.eq("行业合计")
+        | company_code.str.startswith("INDUSTRY_")
+    )
+    if industry_mask.any():
+        result.loc[industry_mask, "原始公司名称"] = "行业合计"
+        result.loc[industry_mask, "标准公司名称"] = "行业合计"
+        result.loc[industry_mask, "公司"] = "行业合计"
+        result.loc[industry_mask, "公司统一编码"] = company_code.loc[industry_mask].where(
+            company_code.loc[industry_mask].ne(""),
+            "INDUSTRY_TOTAL",
         )
-        result.at[index, "原始公司名称"] = identity.original_name
-        result.at[index, "标准公司名称"] = identity.standard_name
-        result.at[index, "公司统一编码"] = identity.company_code
-        result.at[index, "公司"] = identity.standard_name
-        result.at[index, "公司类型"] = identity.company_type
-        if not str(row.get("同业分类", "") or "").strip() and peer_group_map:
-            result.at[index, "同业分类"] = resolve_peer_group(
-                original,
-                peer_group_map,
-                fallback_peer_group=default_peer_group,
+        result.loc[industry_mask, "公司类型"] = "行业合计"
+
+    original = (
+        result.get("原始公司名称", pd.Series("", index=result.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    original = original.where(original.ne(""), company)
+    fallback_type = company_type.where(company_type.ne(""), "未分类")
+
+    # Resolve each distinct (name, fallback type) once instead of once per row.
+    key_frame = pd.DataFrame(
+        {"original": original, "fallback": fallback_type},
+        index=result.index,
+    )
+    unique_keys = key_frame.drop_duplicates().itertuples(index=False, name=None)
+    identity_map = {
+        (str(name), str(fallback)): resolve_company_identity(
+            name,
+            company_type_map,
+            fallback_company_type=fallback,
+        )
+        for name, fallback in unique_keys
+    }
+    identities = [
+        identity_map.get((str(name), str(fallback)))
+        for name, fallback in zip(original, fallback_type)
+    ]
+    non_industry = ~industry_mask
+    if non_industry.any():
+        non_industry_values = [
+            item for item, keep in zip(identities, non_industry) if keep
+        ]
+        result.loc[non_industry, "原始公司名称"] = [
+            item.original_name for item in non_industry_values
+        ]
+        result.loc[non_industry, "标准公司名称"] = [
+            item.standard_name for item in non_industry_values
+        ]
+        result.loc[non_industry, "公司统一编码"] = [
+            item.company_code for item in non_industry_values
+        ]
+        result.loc[non_industry, "公司"] = [
+            item.standard_name for item in non_industry_values
+        ]
+        result.loc[non_industry, "公司类型"] = [
+            item.company_type for item in non_industry_values
+        ]
+
+    if peer_group_map:
+        peer_group = (
+            result.get("同业分类", pd.Series("", index=result.index))
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        missing_peer = peer_group.eq("") & ~industry_mask
+        if missing_peer.any():
+            peer_names = original.loc[missing_peer].drop_duplicates()
+            peer_lookup = {
+                str(name): resolve_peer_group(
+                    name,
+                    peer_group_map,
+                    fallback_peer_group=default_peer_group,
+                )
+                for name in peer_names
+            }
+            result.loc[missing_peer, "同业分类"] = original.loc[missing_peer].map(
+                lambda value: peer_lookup.get(str(value), default_peer_group)
             )
     return result

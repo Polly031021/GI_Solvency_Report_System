@@ -23,7 +23,11 @@ from .solvency_step7_chart_plans import (
     FINANCING_TABLE,
     PENDING_DEFINITION,
     CAPABILITY_RADAR,          # ★ 新增
+    UNDERWRITING_EFFICIENCY_SCATTER,
+    STRUCTURE_CHANGE_CHART,
+    PERFORMANCE_PATTERN_GRID,
     INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增：行业整体保费规模与结构
+    INDUSTRY_MARKET_SHARE,  # ★ 新增：行业市场份额
 )
 
 
@@ -45,8 +49,12 @@ CHART_KIND_LABELS = {
     "效应发散图": EFFECT_DIVERGING,
     "公司分期柱": COMPANY_PERIOD_BAR,
     "能力雷达图": CAPABILITY_RADAR,     # ★ 新增
+    "承保效益散点图": UNDERWRITING_EFFICIENCY_SCATTER,
+    "结构变化组合图": STRUCTURE_CHANGE_CHART,
+    "业绩模式分列图": PERFORMANCE_PATTERN_GRID,
     "行业保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增
     "行业整体保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,
+    "行业市场份额图": INDUSTRY_MARKET_SHARE,
     "待定": PENDING_DEFINITION,
 }
 

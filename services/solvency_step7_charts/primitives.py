@@ -13,6 +13,14 @@ from ..solvency_navigation import (
     KPMG_CHART_COLORS,
     KPMG_PERIOD_CHART_COLORS,
 )
+from ..report_style import (
+    REPORT_AXIS_COLOR,
+    REPORT_DOMAIN_COLOR,
+    REPORT_FONT,
+    REPORT_GRID_COLOR,
+    REPORT_GRID_OPACITY,
+    REPORT_TEXT_COLOR,
+)
 
 TRANSPARENT = "transparent"
 ANNUAL_REPORT_FONT = "Microsoft YaHei"
@@ -169,6 +177,43 @@ def apply_report_theme(chart: alt.Chart) -> alt.Chart:
             fontSize=13,
             fontWeight="bold",
             offset=12,
+        )
+    )
+
+
+def apply_industry_chart_theme(
+    chart: alt.Chart,
+    *,
+    height: int = 360,
+) -> alt.Chart:
+    """Apply the underwriting module's white-card / soft-grid chart treatment."""
+    return (
+        chart.properties(background="#FFFFFF", height=height)
+        .configure(font=REPORT_FONT)
+        .configure_view(fill="#FFFFFF", stroke=None)
+        .configure_axis(
+            domainColor=REPORT_DOMAIN_COLOR,
+            domainWidth=1,
+            gridColor=REPORT_GRID_COLOR,
+            gridOpacity=REPORT_GRID_OPACITY,
+            labelColor=REPORT_AXIS_COLOR,
+            labelFont=REPORT_FONT,
+            labelFontSize=10,
+            ticks=False,
+            titleColor=REPORT_AXIS_COLOR,
+            titleFont=REPORT_FONT,
+            titleFontSize=10,
+        )
+        .configure_axisX(grid=False)
+        .configure_axisY(grid=True)
+        .configure_legend(
+            labelColor=REPORT_TEXT_COLOR,
+            labelFont=REPORT_FONT,
+            labelFontSize=10,
+            symbolOpacity=1,
+            titleColor=REPORT_TEXT_COLOR,
+            titleFont=REPORT_FONT,
+            titleFontSize=10,
         )
     )
 

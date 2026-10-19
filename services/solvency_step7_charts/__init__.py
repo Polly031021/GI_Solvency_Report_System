@@ -105,6 +105,14 @@ from .industry_premium import (
     prepare_industry_premium_annual,
 )
 
+from .industry_market_share import (
+    MarketShareData,
+    build_market_share_amount_bars,
+    build_market_share_pies,
+    market_share_category_colors,
+    prepare_market_share_data,
+)
+
 from .performance import (
     PERFORMANCE_PATTERN_ORDER,
     classify_performance_pattern,
@@ -186,6 +194,11 @@ __all__ = [
     "TOTAL_PREMIUM_CODE",
     "build_industry_premium_structure_chart",
     "prepare_industry_premium_annual",
+    "MarketShareData",
+    "build_market_share_amount_bars",
+    "build_market_share_pies",
+    "market_share_category_colors",
+    "prepare_market_share_data",
     "PERFORMANCE_PATTERN_ORDER",
     "classify_performance_pattern",
     "build_performance_pattern_trajectory",
