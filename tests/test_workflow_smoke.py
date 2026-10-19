@@ -59,7 +59,8 @@ def _metric_codes() -> list[str]:
         codes.extend(entry.metric_codes)
     codes.extend([
         "REGISTERED_CAPITAL", "SIGNED_PREMIUM_MOTOR", "SIGNED_PREMIUM", "NET_PROFIT",
-        "RECOGNIZED_ASSETS", "MINIMUM_CAPITAL",
+        "RECOGNIZED_ASSETS", "MINIMUM_CAPITAL", "COMBINED_RATIO",
+        "CREDIT_RISK_TO_QUANT_CAPITAL",
     ])
     return list(dict.fromkeys(code for code in codes if code))
 
@@ -75,7 +76,12 @@ def _row(
     percent = _is_percent_metric(code)
     period_scope = (
         "本年累计数"
-        if code in {"SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"}
+        if code in {
+            "SIGNED_PREMIUM",
+            "SIGNED_PREMIUM_MOTOR",
+            "NET_PROFIT",
+            "COMBINED_RATIO",
+        }
         else "本季度末数"
     )
     if percent:

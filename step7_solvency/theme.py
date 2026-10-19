@@ -9,6 +9,18 @@ def render_report_style() -> None:
     st.markdown(
         """
         <style>
+        /* STEP7 uses the same white canvas as the chart cards.  Scope the
+           override to the report page so other workflow tabs keep their
+           platform background. */
+        html:has(.solvency-report-title),
+        body:has(.solvency-report-title),
+        [data-testid="stAppViewContainer"]:has(.solvency-report-title),
+        [data-testid="stMain"]:has(.solvency-report-title) {
+            background:#FFFFFF!important;
+        }
+        body:has(.solvency-report-title) [data-testid="stHeader"] {
+            background:#FFFFFF!important;
+        }
         [class*="st-key-s7_report_module_"],
         [class*="st-key-s7_trend_group_"],
         .solvency-report-title, .solvency-module-title,
@@ -52,6 +64,40 @@ def render_report_style() -> None:
             border-radius:4px; padding:9px 13px; margin:6px 0 0; color:#243B53;
         }
         .solvency-analysis-spacer {height:16px; width:100%;}
+        .s7-uw-year-title {
+            color:#00338D; font-size:16px; font-weight:800; letter-spacing:.4px;
+            margin:2px 0 2px;
+        }
+        .s7-uw-year-sub {color:#64748B; font-size:11px; margin:0 0 4px;}
+        .s7-uw-counts {
+            display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+            margin:7px 0 10px;
+        }
+        .s7-uw-chip {
+            display:inline-flex; align-items:center; gap:4px;
+            border-radius:999px; padding:3px 10px;
+            font-size:12px; font-weight:700; line-height:1.4;
+        }
+        .s7-uw-chip--profit {background:#EAF7EE;color:#146C12;border:1px solid #BFE5C8;}
+        .s7-uw-chip--loss {background:#FDECEC;color:#B0191C;border:1px solid #F5C2C2;}
+        .s7-uw-chip--even {background:#FFF7E0;color:#8A5A00;border:1px solid #F1D58A;}
+        .s7-uw-muted {color:#64748B;font-size:11px;}
+        .s7-uw-legend {
+            display:flex; flex-wrap:wrap; gap:14px; align-items:center;
+            color:#475569; font-size:11px; margin:2px 0 10px;
+        }
+        .s7-uw-legend span {display:inline-flex; align-items:center; gap:5px;}
+        .s7-uw-dot {width:9px; height:9px; border-radius:50%; display:inline-block;}
+        .s7-uw-dash {
+            width:24px; height:0; border-top:2px dashed #64748B;
+            display:inline-block;
+        }
+        .s7-uw-empty {
+            min-height:275px; display:flex; align-items:center; justify-content:center;
+            text-align:center; padding:28px 20px; box-sizing:border-box;
+            border:1px dashed #CBD5E1; border-radius:10px;
+            background:#F8FAFC; color:#94A3B8; font-size:12px; line-height:1.8;
+        }
         .solvency-chart-legend {
             display:flex; flex-wrap:wrap; justify-content:flex-end;
             align-items:center; gap:10px 18px;
@@ -169,6 +215,14 @@ def render_report_style() -> None:
                on the first sheet and the complete company-bar group starts the next. */
             [class*="st-key-s7_report_module_"]:has([class*="st-key-s7_company_bars_page_"]) {
                 break-inside:auto!important; page-break-inside:auto!important;
+            }
+            /* The underwriting module contains three rows of paired charts.
+               Let the module flow across sheets while keeping each row intact. */
+            [class*="st-key-s7_report_module_"]:has(.solvency-underwriting-grid) {
+                break-inside:auto!important; page-break-inside:auto!important;
+            }
+            [class*="st-key-underwriting_row_"] {
+                break-inside:avoid-page!important; page-break-inside:avoid!important;
             }
             [class*="st-key-s7_company_bars_page_"] {
                 break-before:page!important; page-break-before:always!important;

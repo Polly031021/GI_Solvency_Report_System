@@ -111,7 +111,11 @@ def read_step6_analysis_workbook(
     source_name: str,
     report_profile_id: str,
 ) -> tuple[pd.DataFrame, tuple[str, ...]]:
-    frame = read_standard_workbook(workbook_bytes, source_name)
+    frame = read_standard_workbook(
+        workbook_bytes,
+        source_name,
+        include_internal=False,
+    )
     return prepare_visualization_source(frame, report_profile_id)
 
 

@@ -38,8 +38,17 @@ streamlit run app.py
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
 | STEP6 自定义分析 | 任选指标/公司/报告期，生成簇状柱、折线、散点、横向条形等对比图，图例与配色可自定义 | `ui/step6_analysis.py`、`services/solvency_step6_analysis.py` |
-| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益散点图、行业五年保费结构等，支持图片覆盖、AI 点评与打印导出 PDF | `step7_solvency/`、`services/solvency_step7_charts/` |
+| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益五年年度散点图、行业五年保费结构、公司类别市场份额等，支持图片覆盖、AI 点评与打印导出 PDF | `step7_solvency/`、`services/solvency_step7_charts/` |
 | STEP8 行业分析 | 行业整体概览、同业分类分布趋势与排名、重大融资统计，支持整本报告打印 | `step8_solvency.py`、`dashboard_components.py` |
+
+STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.xlsx`，无需每次在侧边栏上传；上传文件仅覆盖当前会话，可点击“恢复默认配置”切回内置模板。侧边栏只保留一级/二级分类，二级分类即图表入口。
+
+### 大文件读取性能
+
+- 标准窄表按文件 SHA256 缓存到系统临时目录，同一文件首次解析后再次读取不再重新打开 Excel。
+- STEP6 分析读取只加载公开的 `标准数据` 工作表，跳过隐藏的系统字段表。
+- 公司名称识别按唯一公司/类型分组执行，不再对每一行重复解析。
+- 安装 `python-calamine`（已列入 requirements）后，Excel 首次读取会优先使用 calamine 引擎；未安装时自动回退到 openpyxl。
 
 ### 三个贯穿全流程的设计
 
@@ -92,11 +101,11 @@ tests/                    回归测试
 | `selection.py` | 公司/指标筛选、排序、配色映射、图表清单解析 |
 | `rendering.py` | 单指标图表通用渲染（单位换算、图例、公司面板网格） |
 | `plans.py` | 组合图调度中心：`render_combination_analysis` 按图表类型分派 |
-| `plan_renderers.py` | 19 种组合图的具体渲染实现（`render_plan_*`） |
+| `plan_renderers.py` | 20 种组合图的具体渲染实现（`render_plan_*`） |
 | `plan_inputs.py` | 组合图输入准备：指标编码解析、阶梯打分、能力五边形打分 |
 | `fragments.py` | 气泡图/散点图的局部放大联动（Streamlit fragment） |
 | `ai_analysis.py` | 一键 AI 点评（调用登录页配置的模型接口） |
-| `underwriting.py` | 承保效益散点图 |
+| `underwriting.py` | 承保效益五年年度散点图与盈利/亏损公司数趋势 |
 | `report.py` | 主流程编排；`__init__.py` 只导出 `show_step_7_solvency` |
 
 ### services/ 包（业务逻辑）
@@ -118,6 +127,7 @@ tests/                    回归测试
 | `solvency_dataset_adapter.py` | 集成层：外部宽表映射、派生指标补全、行业合计生成、工作簿读写 |
 | `solvency_company_identity.py` | 公司名称归一化、历史名称别名、同业分类解析 |
 | `solvency_navigation.py` | 图表导航定义与 KPMG 官方色卡 |
+| `report_style.py` | 行业概览图表共享色板、字体、坐标轴与网格风格常量 |
 | `solvency_step6_analysis.py` | STEP6 数据准备与 Altair 对比图构建 |
 | `solvency_step7_charts/` | STEP7/STEP8 图表库包：`primitives` 原语、`trend` 趋势、`capital` 资本、`bubble` 气泡、`matrix` 矩阵散点、`radar` 雷达、`structure` 结构变化、`performance` 业绩模式 |
 | `solvency_metric_registry.py` | 寿险/CROSS/行业派生指标的补充定义 |
@@ -141,6 +151,8 @@ tests/                    回归测试
 - **公司名称归一**：去掉「（偿付能力）」「（合并）」等披露口径后缀，避免同一家公司被算作两家。
 - **人工确认优先**：定位置信度低于阈值或证据冲突时会标记需人工核对，提取按人工确认的页码执行。
 - **行业概览口径**：`行业概览 > 规模与发展` 使用上传数据中的全部公司，不受 STEP7 展示公司/公司类型筛选影响；年度值取每年 Q4 的 `本年累计数`，车险取 `SIGNED_PREMIUM_MOTOR`，非车险为总签单保费减车险；拆分缺失时以灰色“未拆分”段保留已有合计。
+- **行业市场份额口径**：`行业概览 > 市场份额` 使用最新一个覆盖达标的完整年度，按根目录 `财险公司列表.xlsx` 的 `公司类别` 聚合；饼图展示保费、净利润、承保利润的正值占比，柱状图展示三类指标的具体金额，承保利润缺失时按 `签单保费 ×（1 - 综合成本率）` 测算。
+- **承保效益口径**：`行业概览 > 承保效益` 取最近 5 个有数据的年度（Q4/年末），每年按当年保费收入降序排名；每家公司一个点，横轴为保费排名、纵轴为综合成本率，纵轴以 100% 为中心对称展开并用虚线标示盈亏平衡。综合成本率低于 100% 计为盈利、高于 100% 计为亏损；图下展示当年盈利/亏损公司数，第三行第二张图汇总五年盈亏公司数趋势。年度累计保费缺失时回退到本季度数参与排名。
 
 ---
 
@@ -186,8 +198,10 @@ python test_step2_extraction_modes.py # STEP2 提取：千分位修复、规则�
 python test_step4_validation.py       # STEP4 勾稽：失败原因、STEP3 依据、跨表比对与页面下钻
 python test_app_smoke.py              # 登录后首页渲染
 python test_workflow_smoke.py         # 注入合成数据，逐页渲染 STEP0–STEP8（含全部内置图表）
-python test_step7_excel_modules.py    # Excel 配置驱动的 30 种 STEP7 图表类型
+python test_underwriting_yearly.py    # 承保效益：五年年度散点图、100% 中轴与盈亏汇总
+python test_step7_excel_modules.py    # Excel 配置驱动的 31 种 STEP7 图表类型
 python test_industry_premium_logic.py # 行业保费结构：Q4 全年累计、车险拆分与 2022–2025 出图
+python test_industry_market_share_logic.py # 行业市场份额：最新完整年度、公司类别与图表结构
 python -m pyflakes ..                 # 静态检查：未定义名字/未使用导入（当前零告警）
 ```
 

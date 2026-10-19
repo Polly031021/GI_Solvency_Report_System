@@ -7,7 +7,14 @@ import re
 import altair as alt
 import pandas as pd
 
-from .primitives import apply_report_theme
+from ..report_style import (
+    COBALT_BLUE,
+    PACIFIC_BLUE,
+    PINK,
+    PRIMARY_BLUE,
+    PURPLE,
+)
+from .primitives import apply_industry_chart_theme
 
 
 TOTAL_PREMIUM_CODE = "SIGNED_PREMIUM"
@@ -80,7 +87,10 @@ def _annual_rows(
         ["公司", "年度"],
         keep="last",
     )
-    return work[["公司", "年度", "数值"]]
+    columns = ["公司", "年度", "数值"]
+    if "单位" in work.columns:
+        columns.append("单位")
+    return work[columns]
 
 
 def _scale_anomaly_mask(values: pd.Series) -> pd.Series:
@@ -338,11 +348,11 @@ def build_industry_premium_structure_chart(
     )
     bar_color_scale = alt.Scale(
         domain=["车险", "非车险", "未拆分"],
-        range=["#1E49E2", "#00B8F5", "#D9E2EC"],
+        range=[COBALT_BLUE, PACIFIC_BLUE, "#D9E2EC"],
     )
     line_color_scale = alt.Scale(
         domain=["车险", "非车险", "合计"],
-        range=["#7213EA", "#FD349C", "#00338D"],
+        range=[PURPLE, PINK, PRIMARY_BLUE],
     )
 
     bars = (
@@ -376,7 +386,7 @@ def build_industry_premium_structure_chart(
             dy=-10,
             fontSize=10,
             fontWeight="bold",
-            color="#00338D",
+            color=PRIMARY_BLUE,
         )
         .encode(
             x=alt.X("年度:O", sort=years),
@@ -410,11 +420,6 @@ def build_industry_premium_structure_chart(
     chart = (
         alt.layer(bars, total_labels, lines)
         .resolve_scale(color="independent")
-        .properties(width="container", height=390)
-        .configure_axisY(
-            grid=True,
-            gridColor="#E6EAF0",
-            gridOpacity=0.8,
-        )
+        .properties(width="container")
     )
-    return apply_report_theme(chart)
+    return apply_industry_chart_theme(chart, height=360)

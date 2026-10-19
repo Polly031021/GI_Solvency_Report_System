@@ -7,6 +7,13 @@ from html import escape
 import pandas as pd
 import streamlit as st
 from dashboard_components import render_key_solvency_overview, render_major_financing
+from services.report_style import (
+    COBALT_BLUE,
+    PACIFIC_BLUE,
+    PINK,
+    PRIMARY_BLUE,
+    PURPLE,
+)
 from services.solvency_navigation import (
     KPMG_CAPITAL_COMBO_COLORS,
     MARKET_RISK_ASSET_SCATTER,
@@ -16,6 +23,9 @@ from services.solvency_step7_charts import (
     CAPITAL_STRUCTURE_COLORS,
     build_capability_radar_chart,
     build_industry_premium_structure_chart,
+    build_market_share_amount_bars,
+    build_market_share_pies,
+    market_share_category_colors,
     build_structure_change_chart,
     build_capital_amount_combo,
     build_capital_ratio_combo_chart,
@@ -34,6 +44,7 @@ from services.solvency_step7_charts import (
     classify_performance_pattern,
     build_performance_pattern_trajectory,
     prepare_industry_premium_annual,
+    prepare_market_share_data,
 )
 from .fragments import (
     render_capital_efficiency_bubble_fragment,
@@ -894,9 +905,22 @@ def render_plan_capability_radar(
         )
 
 
-def render_plan_underwriting_efficiency_scatter(frame, key_prefix, module_override):
+def render_plan_underwriting_efficiency_scatter(
+    frame,
+    key_prefix,
+    module_override,
+    *,
+    industry_frame=None,
+):
+    # 承保效益属于“行业概览”，排名应基于上传数据中的全部公司；
+    # 没有行业全量数据时才回退到当前筛选范围。
+    source = (
+        industry_frame
+        if isinstance(industry_frame, pd.DataFrame) and not industry_frame.empty
+        else frame
+    )
     render_underwriting_efficiency_scatter(
-        frame,  # ← 直接把当前页面的 frame 传进去
+        source,
         chart_config=(module_override.chart_config if module_override else {}),
         key_prefix=key_prefix,
     )
@@ -1031,12 +1055,17 @@ def render_plan_industry_premium_structure(
         border=True,
     )
 
+    st.markdown(
+        "<div class='s7-uw-year-title'>近五年保费规模与结构</div>"
+        "<div class='s7-uw-year-sub'>车险 / 非车险 / 合计趋势</div>",
+        unsafe_allow_html=True,
+    )
     legend_items = [
-        ("#1E49E2", "车险（柱）", "square"),
-        ("#00B8F5", "非车险（柱）", "square"),
-        ("#7213EA", "车险（趋势线）", "line"),
-        ("#FD349C", "非车险（趋势线）", "line"),
-        ("#00338D", "合计（趋势线）", "line"),
+        (COBALT_BLUE, "车险（柱）", "square"),
+        (PACIFIC_BLUE, "非车险（柱）", "square"),
+        (PURPLE, "车险（趋势线）", "line"),
+        (PINK, "非车险（趋势线）", "line"),
+        (PRIMARY_BLUE, "合计（趋势线）", "line"),
     ]
     render_chart_legend(legend_items)
     try:
@@ -1085,3 +1114,90 @@ def render_plan_industry_premium_structure(
             }
         )
         st.dataframe(display, width="stretch", hide_index=True)
+
+
+def render_plan_industry_market_share(
+    industry_frame,
+    *,
+    unit_mode,
+    key_prefix,
+    module_override,
+):
+    """Render latest-year category market share pies and amount bars."""
+    cfg = module_override.chart_config if module_override else {}
+    min_coverage = float(cfg.get("min_coverage", 0.8) or 0.8)
+    data = prepare_market_share_data(industry_frame, min_coverage=min_coverage)
+    if data is None:
+        st.warning("当前数据没有可用于市场份额分析的年度记录。")
+        return
+
+    unit = unit_mode if unit_mode in {"十亿元", "亿元", "百万元", "十万元"} else "亿元"
+    divisor = {
+        "十亿元": 100_000.0,
+        "亿元": 10_000.0,
+        "百万元": 100.0,
+        "十万元": 10.0,
+    }[unit]
+    st.markdown(
+        f"<div class='s7-uw-year-title'>公司类别市场份额（{data.year} 年）</div>"
+        "<div class='s7-uw-year-sub'>保费 / 净利润 / 承保利润占比</div>",
+        unsafe_allow_html=True,
+    )
+    category_colors = market_share_category_colors(
+        data.categories["公司类别"].astype(str).tolist()
+    )
+    render_chart_legend(
+        [
+            (category_colors.get(category, "#9AA6B2"), category, "square")
+            for category in data.categories["公司类别"].astype(str).tolist()
+        ]
+    )
+    pie_chart = build_market_share_pies(
+        data,
+        unit_mode=unit_mode,
+        showlegend=False,
+    )
+    st.plotly_chart(
+        pie_chart,
+        width="stretch",
+        key=f"{key_prefix}_market_share_pies",
+    )
+    st.caption("饼图展示各指标正值占比，负值不计入占比。")
+
+    st.markdown(
+        f"<div class='s7-uw-year-title'>公司类别金额对比（{data.year} 年）</div>"
+        f"<div class='s7-uw-year-sub'>按公司类别汇总（{unit}）</div>",
+        unsafe_allow_html=True,
+    )
+    bar_chart = build_market_share_amount_bars(data, unit_mode=unit_mode)
+    st.plotly_chart(
+        bar_chart,
+        width="stretch",
+        key=f"{key_prefix}_market_share_bars",
+    )
+    st.caption("利润面板以灰色零轴区分正值与负值。")
+    with st.expander("查看分类与公司明细"):
+        category_display = data.categories.copy()
+        for column in ("保费", "净利润", "承保利润"):
+            category_display[column] = (
+                pd.to_numeric(category_display[column], errors="coerce") / divisor
+            )
+        category_display = category_display.rename(
+            columns={
+                "保费": f"保费（{unit}）",
+                "净利润": f"净利润（{unit}）",
+                "承保利润": f"承保利润（{unit}）",
+                "保费占比": "保费占比",
+                "净利润占比": "净利润占比",
+                "承保利润占比": "承保利润占比",
+            }
+        )
+        st.dataframe(category_display, width="stretch", hide_index=True)
+        if data.company_detail["承保利润测算"].any():
+            st.caption("承保利润 = 签单保费 ×（1 - 综合成本率）的测算值。")
+        company_display = data.company_detail.copy()
+        for column in ("保费", "净利润", "承保利润"):
+            company_display[column] = (
+                pd.to_numeric(company_display[column], errors="coerce") / divisor
+            )
+        st.dataframe(company_display, width="stretch", hide_index=True)

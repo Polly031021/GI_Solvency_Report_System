@@ -74,6 +74,8 @@ def test_industry_premium_chart_renders_complete_2022_2025() -> None:
         "#FD349C",
         "#00338D",
     ]
+    assert spec["config"]["axis"]["labelColor"] == "#475569"
+    assert spec["config"]["axis"]["gridColor"] == "#E5E7EB"
     x_sort = spec["layer"][0]["encoding"]["x"]["sort"]
     assert x_sort == ["2022", "2023", "2024", "2025"]
 

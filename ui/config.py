@@ -19,6 +19,7 @@ PEER_GROUP_CONFIG = CONFIG_DIR / "solvency_peer_groups.json"
 NON_LIFE_COMPANY_LIST = ROOT / "财险公司列表.xlsx"
 # 财险公司全称与披露地址，用于把短名称别名关联到同一家公司。
 NON_LIFE_COMPANY_URLS = CONFIG_DIR / "non_life_solvency_company_urls.xlsx"
+STEP7_CONFIG_FILE = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
 WORKFLOW_TAB_LABELS = (
     "STEP0 报告监控",
     "STEP1 页码定位",

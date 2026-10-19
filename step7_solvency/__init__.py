@@ -3,7 +3,7 @@
 对外只暴露 show_step_7_solvency；其余模块按职责拆分：
 specs 常量、theme 样式、selection 筛选、rendering 单指标图表、
 plans 多指标组合图、fragments 联动气泡图、ai_analysis AI 点评、
-underwriting 承保效益散点图。
+underwriting 承保效益五年年度散点图与盈亏公司数趋势。
 """
 
 from .report import show_step_7_solvency
