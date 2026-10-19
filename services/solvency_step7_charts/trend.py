@@ -468,3 +468,108 @@ def metric_bar_axis_domain(
     padded_lower = lower * 1.08 if lower < 0 else 0.0
     padded_upper = upper * 1.12 if upper > 0 else 1.0
     return float(padded_lower), float(padded_upper)
+
+
+def build_company_line_trend_chart(
+    frame: pd.DataFrame,
+    code: str,
+    period_order: Iterable[str],
+    highlight_company: str = "",
+) -> alt.Chart:
+    """每家公司一个年度折线小图（facet 网格换行），用于核心指标速览类展示。
+
+    - x 轴用年份（从报告期 2021Q4 提取 2021），按 (公司, 年份) 取均值，
+      同年多批次/多口径记录合并成一个点，消除竖线；
+    - facet 按列数换行成网格；y 轴显示刻度，首尾年份标数值；
+    - 监管下限红色虚线；数值 hover tooltip。
+    """
+    metric, periods, name = metric_rows(frame, code, period_order)
+    metric = metric.dropna(subset=["数值"]).copy()
+    if metric.empty:
+        raise ValueError(f"{name}缺少可绘制的数据。")
+
+    metric["年份"] = metric["报告期"].astype(str).str.extract(r"(\d{4})")[0]
+    metric = metric.dropna(subset=["年份"]).copy()
+    metric["年份"] = metric["年份"].astype(str)
+    metric["数值"] = pd.to_numeric(metric["数值"], errors="coerce")
+    metric = metric.dropna(subset=["数值"])
+    # 同年多记录取均值，确保每个 (公司, 年份) 只有一个点
+    metric = metric.groupby(["公司", "年份"], as_index=False)["数值"].mean()
+    year_order = sorted(metric["年份"].unique().tolist())
+    if not year_order:
+        raise ValueError(f"{name}缺少可绘制的年度数据。")
+
+    company_count = metric["公司"].nunique()
+    if company_count <= 4:
+        columns = 2
+    elif company_count <= 9:
+        columns = 3
+    else:
+        columns = 4
+    panel_width = 300
+    panel_height = 220
+
+    vals = metric["数值"].astype(float)
+    lo, hi = float(vals.min()), float(vals.max())
+    limit = REGULATORY_LIMITS.get(code)
+    if limit is not None:
+        lo = min(lo, float(limit))
+        hi = max(hi, float(limit))
+    pad = max((hi - lo) * 0.1, 1.0)
+    y_scale = alt.Scale(domain=[lo - pad, hi + pad], zero=False, nice=False)
+
+    first_year, last_year = year_order[0], year_order[-1]
+    metric["_首末年"] = metric["年份"].isin([first_year, last_year])
+
+    line_color = "#00338D"
+    base = alt.Chart(metric)
+    line = base.mark_line(color=line_color, strokeWidth=2.2, opacity=0.95).encode(
+        x=alt.X(
+            "年份:N",
+            sort=year_order,
+            axis=alt.Axis(title=None, labelAngle=0, labelFontSize=9, labelLimit=40),
+        ),
+        y=alt.Y(
+            "数值:Q",
+            title="%",
+            axis=alt.Axis(title=None, labelFontSize=8, format=",.0f"),
+            scale=y_scale,
+        ),
+    )
+    points = base.mark_point(filled=True, size=50, color=line_color).encode(
+        x=alt.X("年份:N", sort=year_order),
+        y=alt.Y("数值:Q", scale=y_scale),
+        tooltip=["公司:N", "年份:N", alt.Tooltip("数值:Q", format=",.1f")],
+    )
+    labels = (
+        base.transform_filter(alt.datum["_首末年"])
+        .mark_text(dy=-11, fontSize=9, fontWeight="bold", color="#0C233C")
+        .encode(
+            x=alt.X("年份:N", sort=year_order),
+            y=alt.Y("数值:Q", scale=y_scale),
+            text=alt.Text("数值:Q", format=",.0f"),
+        )
+    )
+    layers: list[alt.Chart] = [line, points, labels]
+
+    if limit is not None:
+        layers.append(
+            alt.Chart(pd.DataFrame({"监管下限": [limit]}))
+            .mark_rule(color="#ED2124", strokeDash=[5, 4], strokeWidth=1.5)
+            .encode(y=alt.Y("监管下限:Q", scale=y_scale))
+        )
+
+    chart = alt.layer(*layers, data=metric).properties(width=panel_width, height=panel_height)
+    return apply_report_theme(
+        chart.facet(
+            facet=alt.Facet(
+                "公司:N",
+                title="",
+                header=alt.Header(labelFontSize=10, labelPadding=4),
+            ),
+            columns=columns,
+            spacing=16,
+        )
+        .resolve_scale(y="shared")
+        .properties(title=f"{name}公司年度走势（%）")
+    )

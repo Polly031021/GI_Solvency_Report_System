@@ -25,16 +25,16 @@ def classify_performance_pattern(
     *,
     improvement_threshold: int = 2,
     fluctuation_threshold: int = 3,
-    stable_threshold: int = 1,
+    stable_threshold: int = 2,
 ) -> str:
     """根据利润排名序列判断业绩模式。
 
     参数
     ----
     rank_series            : 按报告期排序的利润排名（越小越好）
-    improvement_threshold  : 首尾差达到多少才认定为"趋势类"
-    fluctuation_threshold  : 极差达到多少才认定为"大起大落"
-    stable_threshold       : 极差不超过多少才认定为"稳健经营"
+    improvement_threshold  : 首尾名次变化达到多少才算"趋势类"
+    fluctuation_threshold  : 振幅（max-min）达到多少视为剧烈波动
+    stable_threshold       : 振幅不超过多少视为"稳健经营"
     """
     values = [float(v) for v in rank_series.dropna().tolist()]
     n = len(values)
@@ -43,43 +43,54 @@ def classify_performance_pattern(
 
     p_first, p_last = values[0], values[-1]
     p_min, p_max = min(values), max(values)
-    total_change = p_first - p_last  # 正数=改善（名次变小）
     amplitude = p_max - p_min
+    net_change = p_first - p_last  # 正数 = 名次改善（变小）
 
-    # 1. 稳健经营：整体波动极小
+    # 1. 稳健经营：整体振幅很小（常年在头部小幅波动，如人保 1-2 名）
     if amplitude <= stable_threshold:
         return "稳健经营"
 
-    # 2. 逐年提升：首尾显著改善 + 中间几乎单调下行
-    if total_change >= improvement_threshold:
-        downs = sum(1 for i in range(1, n) if values[i] < values[i - 1])
-        if downs >= n - 1:
+    # 相邻差分方向序列（去掉持平的 0）：+ = 名次变差，- = 名次变好
+    signs: list[int] = []
+    for i in range(1, n):
+        d = values[i] - values[i - 1]
+        if d > 0:
+            signs.append(1)
+        elif d < 0:
+            signs.append(-1)
+    if not signs:
+        return "稳健经营"
+
+    # 方向转折次数：相邻方向不同即记一次（降→升、升→降都算）
+    switches = sum(1 for i in range(1, len(signs)) if signs[i] != signs[i - 1])
+
+    # 2. 无转折 = 单调趋势
+    if switches == 0:
+        if signs[0] < 0 and net_change >= improvement_threshold:
             return "逐年提升"
-
-    # 3. 持续恶化：首尾显著恶化 + 中间几乎单调上行
-    if total_change <= -improvement_threshold:
-        ups = sum(1 for i in range(1, n) if values[i] > values[i - 1])
-        if ups >= n - 1:
+        if signs[0] > 0 and net_change <= -improvement_threshold:
             return "持续恶化"
+        # 单调但首尾变化不足：振幅大算大起大落，否则仍算稳健
+        if amplitude >= fluctuation_threshold:
+            return "大起大落"
+        return "稳健经营"
 
-    # 4. V形反转：中间有明显峰值，首尾都在高位
-    if 0 < values.index(p_max) < n - 1:
-        if (p_max - p_first) >= improvement_threshold * 0.5 and (
-            p_max - p_last
-        ) >= improvement_threshold * 0.5:
+    # 3. 一次转折：V 形 / 倒V 形
+    if switches == 1:
+        # 先变差(+)后变好(-)：中间是谷底（最差名次），即 V 形
+        if signs[0] > 0 and signs[-1] < 0:
             return "V形反转"
-
-    # 5. 倒V形反转：中间有明显谷值，首尾都在低位
-    if 0 < values.index(p_min) < n - 1:
-        if (p_first - p_min) >= improvement_threshold * 0.5 and (
-            p_last - p_min
-        ) >= improvement_threshold * 0.5:
+        # 先变好(-)后变差(+)：中间是峰顶（最好名次），即 倒V 形
+        if signs[0] < 0 and signs[-1] > 0:
             return "倒V形反转"
 
-    # 6. 大起大落：极差够大但无明确趋势
-    if amplitude >= fluctuation_threshold:
+    # 4. 两次及以上转折：方向反复（如降→升→降）= 大起大落
+    if switches >= 2:
         return "大起大落"
 
+    # 兜底
+    if amplitude >= fluctuation_threshold:
+        return "大起大落"
     return "其他"
 
 
@@ -185,19 +196,51 @@ def build_performance_pattern_trajectory(
     if company_df.empty:
         raise ValueError(f"{company_name} 无收入/利润排名数据。")
 
-    rank_domain = [n_companies, 1]
+    # ---------- 自适应坐标轴：按该公司自身排名范围缩放 ----------
+    #   固定 [N,1] 时，排名小幅波动在小图里几乎看不出移动；
+    #   这里取该公司收入/利润排名的最小-最大值，上下留 0.5 边距，
+    #   让轨迹波动在小图里更明显；刻度数随范围自适应。
+    rev_vals = company_df["收入排名"].dropna().astype(float)
+    prof_vals = company_df["利润排名"].dropna().astype(float)
+    if not rev_vals.empty:
+        rev_lo, rev_hi = float(rev_vals.min()), float(rev_vals.max())
+    else:
+        rev_lo, rev_hi = 1.0, 2.0
+    if not prof_vals.empty:
+        prof_lo, prof_hi = float(prof_vals.min()), float(prof_vals.max())
+    else:
+        prof_lo, prof_hi = 1.0, 2.0
+    # 若所有年份排名相同，向外扩 ±1，避免退化成单点
+    if rev_lo == rev_hi:
+        rev_lo -= 1.0
+        rev_hi += 1.0
+    if prof_lo == prof_hi:
+        prof_lo -= 1.0
+        prof_hi += 1.0
+    # 反向坐标：排名 1 在右上角；domain 左/下为大值
+    x_domain = [rev_hi + 0.5, rev_lo - 0.5]
+    y_domain = [prof_hi + 0.5, prof_lo - 0.5]
+    x_ticks = max(2, int(rev_hi - rev_lo + 1))
+    y_ticks = max(2, int(prof_hi - prof_lo + 1))
 
-    axis_kwargs = dict(
+    x_axis = alt.Axis(
         title=None,
         labelFontSize=7,
-        tickCount=n_companies,
+        tickCount=x_ticks,
         tickMinStep=1,
         grid=False,
         domain=False,
         ticks=False,
     )
-    x_axis = alt.Axis(**axis_kwargs)
-    y_axis = alt.Axis(**axis_kwargs)
+    y_axis = alt.Axis(
+        title=None,
+        labelFontSize=7,
+        tickCount=y_ticks,
+        tickMinStep=1,
+        grid=False,
+        domain=False,
+        ticks=False,
+    )
 
     base = alt.Chart(company_df)
 
@@ -207,10 +250,10 @@ def build_performance_pattern_trajectory(
         opacity=0.9,
     ).encode(
         x=alt.X(
-            "收入排名:Q", scale=alt.Scale(domain=rank_domain, zero=False, nice=False), axis=x_axis
+            "收入排名:Q", scale=alt.Scale(domain=x_domain, zero=False, nice=False), axis=x_axis
         ),
         y=alt.Y(
-            "利润排名:Q", scale=alt.Scale(domain=rank_domain, zero=False, nice=False), axis=y_axis
+            "利润排名:Q", scale=alt.Scale(domain=y_domain, zero=False, nice=False), axis=y_axis
         ),
         order=alt.Order("报告期:N"),
     )
@@ -258,11 +301,11 @@ def build_performance_pattern_trajectory(
         .encode(
             x=alt.X(
                 "收入排名:Q",
-                scale=alt.Scale(domain=rank_domain, zero=False, nice=False),
+                scale=alt.Scale(domain=x_domain, zero=False, nice=False),
             ),
             y=alt.Y(
                 "利润排名:Q",
-                scale=alt.Scale(domain=rank_domain, zero=False, nice=False),
+                scale=alt.Scale(domain=y_domain, zero=False, nice=False),
             ),
             text=alt.Text("显示年:N"),
         )
@@ -286,11 +329,11 @@ def build_performance_pattern_trajectory(
         .encode(
             x=alt.X(
                 "收入排名:Q",
-                scale=alt.Scale(domain=rank_domain, zero=False, nice=False),
+                scale=alt.Scale(domain=x_domain, zero=False, nice=False),
             ),
             y=alt.Y(
                 "利润排名:Q",
-                scale=alt.Scale(domain=rank_domain, zero=False, nice=False),
+                scale=alt.Scale(domain=y_domain, zero=False, nice=False),
             ),
             size=alt.Size(
                 "点大小:Q",
