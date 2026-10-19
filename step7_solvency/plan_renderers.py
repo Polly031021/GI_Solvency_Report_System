@@ -15,6 +15,7 @@ from services.solvency_navigation import (
 from services.solvency_step7_charts import (
     CAPITAL_STRUCTURE_COLORS,
     build_capability_radar_chart,
+    build_company_line_trend_chart,
     build_industry_premium_structure_chart,
     build_structure_change_chart,
     build_capital_amount_combo,
@@ -850,16 +851,25 @@ def render_plan_capability_radar(
         cat_map = {}
     score_all["_分类"] = score_all["公司"].astype(str).map(cat_map).fillna("未分类")
 
-    # ---------- 分类顺序 ----------
-    ordered_categories = list(dict.fromkeys(str(category) for category in score_all["_分类"]))
-    # “前三大”固定排在“前4-10”之前，两组相邻展示
-    if "前三大" in ordered_categories and "前4-10" in ordered_categories:
-        ordered_categories.remove("前三大")
-        ordered_categories.insert(ordered_categories.index("前4-10"), "前三大")
-    # 把 "未分类" 放到最后
-    if "未分类" in ordered_categories:
-        ordered_categories.remove("未分类")
-        ordered_categories.append("未分类")
+    # ---------- 分类顺序：固定业务分组顺序，未列入的（未分类等）排最后 ----------
+    CATEGORY_ORDER = [
+        "前三大",
+        "前4-10",
+        "大型公司",
+        "中型公司",
+        "小型公司",
+        "农业保险",
+        "外资系",
+        "自保公司",
+    ]
+    present_categories = list(
+        dict.fromkeys(str(category) for category in score_all["_分类"])
+    )
+    ordered_categories = [c for c in CATEGORY_ORDER if c in present_categories]
+    # 顺序表之外的分类（如“未分类”）追加到最后
+    for c in present_categories:
+        if c not in ordered_categories:
+            ordered_categories.append(c)
 
     # ---------- 样式提示 ----------
     st.caption(
@@ -956,6 +966,85 @@ def render_plan_capability_radar(
             ),
             width="stretch",
             hide_index=True,
+        )
+
+
+# 公司类型分组固定顺序（与能力五边形分组口径一致）
+COMPANY_LINE_GROUP_ORDER = [
+    "前三大",
+    "前4-10",
+    "大型公司",
+    "中型公司",
+    "小型公司",
+    "农业保险",
+    "外资系",
+    "自保公司",
+]
+
+
+def render_plan_company_line_trend(chart_frame, highlight_company, key_prefix, periods):
+    """核心指标速览：每家公司一个年度折线小图，按公司类型分组分节展示。"""
+    if chart_frame.empty:
+        st.warning("当前筛选范围没有可绘制的数据。")
+        return
+    codes = sorted(
+        {c for c in chart_frame["指标编码"].dropna().astype(str) if c.strip()}
+    )
+    code = codes[0] if codes else "COMBINED_SOLVENCY_RATIO"
+
+    # 拆分"前十大"为前三大/前4-10
+    chart_frame = _split_top10_peer_group(chart_frame)
+
+    # 取每家公司的同业分类（按公司名聚合，同公司分类一致）
+    if "同业分类" in chart_frame.columns:
+        company_cls = (
+            chart_frame[["公司", "同业分类"]]
+            .dropna()
+            .drop_duplicates(subset=["公司"])
+        )
+        cls_map = dict(zip(company_cls["公司"].astype(str), company_cls["同业分类"].astype(str)))
+    else:
+        cls_map = {}
+
+    # 按固定顺序分组，未列入的归"其他"
+    groups: dict[str, list[str]] = {g: [] for g in COMPANY_LINE_GROUP_ORDER}
+    groups["其他"] = []
+    for company in dict.fromkeys(chart_frame["公司"].astype(str)):
+        g = cls_map.get(company, "")
+        if g in groups:
+            groups[g].append(company)
+        else:
+            groups["其他"].append(company)
+
+    st.caption(
+        "每家公司一个年度小折线图，纵轴为 %；蓝色折线为该公司综合偿付能力充足率走势，"
+        "红色虚线为监管下限 100%；仅标注首末年数值，悬停查看各年明细。"
+    )
+
+    for group_name in COMPANY_LINE_GROUP_ORDER + ["其他"]:
+        companies = groups.get(group_name) or []
+        if not companies:
+            continue
+        sub = chart_frame[chart_frame["公司"].astype(str).isin(companies)]
+        if sub.empty:
+            continue
+        st.markdown(
+            f"<div style='margin:14px 0 6px;font-size:14px;font-weight:700;"
+            f"color:#00338D;border-left:4px solid #00338D;padding-left:8px;'>"
+            f"{group_name}（{len(companies)} 家）</div>",
+            unsafe_allow_html=True,
+        )
+        try:
+            chart = build_company_line_trend_chart(
+                sub, code, periods, highlight_company or ""
+            )
+        except ValueError as exc:
+            st.warning(f"{group_name} 无法绘制：{exc}")
+            continue
+        st.altair_chart(
+            chart_without_internal_title(chart),
+            width="stretch",
+            key=f"{key_prefix}_line_trend_{code}_{group_name}",
         )
 
 
