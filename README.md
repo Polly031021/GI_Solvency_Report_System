@@ -33,21 +33,24 @@ streamlit run app.py
 | --- | --- | --- |
 | STEP0 报告监控 | 读取本地财险公司清单，单家或并发检查披露页面是否已更新目标报告期 | `ui/step0_monitor.py`、`services/solvency_pdf_locator.py` |
 | STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览 | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
-| STEP2 表格提取 | 按确认页码逐页并发提取：先按目标表首尾项目在页内定位表格区域（一页多表时只取目标表），文字版页面走规则法（离线零 token），扫描版页面或规则法未通过校验的页面走大模型并同样按区域裁切；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
+| STEP2 表格提取 | 按确认页码逐页并发提取，默认“智能模式”：文字版页面优先规则法（离线零 token），规则未通过或扫描版页面自动转大模型；默认开启“整页全表提取”，一页多表时合并为同一张中间表展示（内部保留独立表块），不做目标表首尾边界裁切，避免指标被截断；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
 | STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；批量：定位→核对页码→提取三阶段处理多家公司 | `ui/step3_standardization.py`、`services/solvency_step3_standardizer.py`、`services/batch_processor.py` |
-| STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；输出待处理事项工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
+| STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
 | STEP6 自定义分析 | 任选指标/公司/报告期，生成簇状柱、折线、散点、横向条形等对比图，图例与配色可自定义 | `ui/step6_analysis.py`、`services/solvency_step6_analysis.py` |
-| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益散点图等，支持图片覆盖、AI 点评与打印导出 PDF | `step7_solvency/`、`services/solvency_step7_charts.py` |
+| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益散点图、行业五年保费结构等，支持图片覆盖、AI 点评与打印导出 PDF | `step7_solvency/`、`services/solvency_step7_charts/` |
 | STEP8 行业分析 | 行业整体概览、同业分类分布趋势与排名、重大融资统计，支持整本报告打印 | `step8_solvency.py`、`dashboard_components.py` |
 
-### 两个贯穿全流程的设计
+### 三个贯穿全流程的设计
 
 1. **报告 Profile（报告类型）隔离**：财险 `NON_LIFE_SOLVENCY` 与寿险 `LIFE_SOLVENCY` 使用
    各自的公司范围、目标表、定位关键词与指标字典，切换 Profile 会清空当前未保存的结果，
    避免两类数据混用。仓库当前只提供财险 Profile 工作簿。
 2. **金标准对比**：若 `gold_standard/manifest.json` 存在，STEP1/STEP2 会自动匹配真实 PDF 样本
    并显示定位/提取的基准对比；文件不存在时该功能自动跳过。
+3. **本地 Profile 与公司分类**：默认读取 `config/report_profiles/NON_LIFE_SOLVENCY_profile.xlsx`，
+   文件修改后自动失效并可手动刷新；财险公司的同业分类来自根目录
+   `财险公司列表.xlsx` 的“公司类别”，短名称与全称通过披露地址和别名关联。
 
 ---
 
@@ -89,7 +92,7 @@ tests/                    回归测试
 | `selection.py` | 公司/指标筛选、排序、配色映射、图表清单解析 |
 | `rendering.py` | 单指标图表通用渲染（单位换算、图例、公司面板网格） |
 | `plans.py` | 组合图调度中心：`render_combination_analysis` 按图表类型分派 |
-| `plan_renderers.py` | 18 种组合图的具体渲染实现（`render_plan_*`） |
+| `plan_renderers.py` | 19 种组合图的具体渲染实现（`render_plan_*`） |
 | `plan_inputs.py` | 组合图输入准备：指标编码解析、阶梯打分、能力五边形打分 |
 | `fragments.py` | 气泡图/散点图的局部放大联动（Streamlit fragment） |
 | `ai_analysis.py` | 一键 AI 点评（调用登录页配置的模型接口） |
@@ -137,6 +140,7 @@ tests/                    回归测试
 - **期间口径**：所有期间叫法（本期/上期/年末等）归一为 `本季度末数`、`本年累计数` 等标准口径。
 - **公司名称归一**：去掉「（偿付能力）」「（合并）」等披露口径后缀，避免同一家公司被算作两家。
 - **人工确认优先**：定位置信度低于阈值或证据冲突时会标记需人工核对，提取按人工确认的页码执行。
+- **行业概览口径**：`行业概览 > 规模与发展` 使用上传数据中的全部公司，不受 STEP7 展示公司/公司类型筛选影响；年度值取每年 Q4 的 `本年累计数`，车险取 `SIGNED_PREMIUM_MOTOR`，非车险为总签单保费减车险；拆分缺失时以灰色“未拆分”段保留已有合计。
 
 ---
 
@@ -179,9 +183,11 @@ tests/                    回归测试
 cd tests
 python test_step1_locator_modes.py    # STEP1 定位：文档类型、离线规则法、大模型复核、S05 单行跨页
 python test_step2_extraction_modes.py # STEP2 提取：千分位修复、规则法离线提取、提取方式路由、中间表编辑
+python test_step4_validation.py       # STEP4 勾稽：失败原因、STEP3 依据、跨表比对与页面下钻
 python test_app_smoke.py              # 登录后首页渲染
 python test_workflow_smoke.py         # 注入合成数据，逐页渲染 STEP0–STEP8（含全部内置图表）
-python test_step7_excel_modules.py    # Excel 配置驱动的 29 种 STEP7 图表类型
+python test_step7_excel_modules.py    # Excel 配置驱动的 30 种 STEP7 图表类型
+python test_industry_premium_logic.py # 行业保费结构：Q4 全年累计、车险拆分与 2022–2025 出图
 python -m pyflakes ..                 # 静态检查：未定义名字/未使用导入（当前零告警）
 ```
 

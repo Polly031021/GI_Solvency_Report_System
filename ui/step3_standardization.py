@@ -32,17 +32,123 @@ from services.batch_processor import (
 from .cache import (
     cached_step3_target_template,
     dataframe_to_xlsx,
+    read_company_master,
     read_peer_groups,
     render_pdf_page,
 )
-from .config import PEER_GROUP_CONFIG
+from .config import (
+    NON_LIFE_COMPANY_LIST,
+    NON_LIFE_COMPANY_URLS,
+    PEER_GROUP_CONFIG,
+)
 from .helpers import parse_page_numbers
 from .session import llm_credentials_ready
+
+
+def _render_step3_focus_panel() -> None:
+    """Show the STEP3 rows that a STEP4 failure linked to."""
+    focus = st.session_state.get("step3_focus")
+    if not isinstance(focus, dict) or not focus:
+        return
+    standard_data = st.session_state.standard_data
+    company = str(focus.get("company", "")).strip()
+    report_period = str(focus.get("report_period", "")).strip()
+    period = str(focus.get("period", "")).strip()
+    metric_codes = [
+        str(code).strip()
+        for code in focus.get("metric_codes", [])
+        if str(code).strip()
+    ]
+    record_ids: list[int] = []
+    for value in focus.get("record_ids", []):
+        try:
+            record_ids.append(int(float(value)))
+        except (TypeError, ValueError):
+            continue
+
+    with st.container(border=True):
+        st.markdown("#### STEP4 勾稽定位")
+        st.caption(
+            f"来源检查：{focus.get('rule_name', '')}｜"
+            f"{company or '未标注公司'}｜{report_period or '未标注报告期'}｜"
+            f"{period or '未标注期间'}"
+        )
+        reason = str(focus.get("failure_reason", "")).strip()
+        if reason:
+            st.warning(f"失败原因：{reason}")
+
+        rows = pd.DataFrame()
+        record_numbers: list[int] = []
+        if not standard_data.empty:
+            valid_ids = [
+                record_id
+                for record_id in record_ids
+                if 1 <= record_id <= len(standard_data)
+            ]
+            if valid_ids:
+                candidate = standard_data.iloc[
+                    [record_id - 1 for record_id in valid_ids]
+                ].copy()
+                if not company or candidate["公司"].astype(str).eq(company).any():
+                    rows = candidate
+                    record_numbers = valid_ids
+            if rows.empty and metric_codes:
+                mask = standard_data["指标编码"].astype(str).str.strip().isin(metric_codes)
+                if company:
+                    mask &= standard_data["公司"].astype(str).str.strip().eq(company)
+                if report_period:
+                    mask &= standard_data["报告期"].astype(str).str.strip().eq(report_period)
+                record_numbers = [
+                    position + 1
+                    for position, keep in enumerate(mask.tolist())
+                    if keep
+                ]
+                rows = standard_data.iloc[
+                    [record_number - 1 for record_number in record_numbers]
+                ].copy()
+
+        if rows.empty:
+            st.warning(
+                "STEP3 当前标准窄表中没有找到这些指标记录，属于缺失项。"
+                "请检查指标映射、期间口径或原始提取结果。"
+            )
+        else:
+            rows = rows.reset_index(drop=True)
+            rows.insert(0, "STEP3记录号", record_numbers)
+            columns = [
+                column
+                for column in (
+                    "STEP3记录号", "公司", "报告期", "指标编码", "指标名称",
+                    "期间口径", "数值", "单位", "来源工作表", "来源页码",
+                    "指标属性", "来源类型", "备注", "计算逻辑",
+                )
+                if column in rows.columns
+            ]
+            st.dataframe(rows[columns], width="stretch", hide_index=True)
+            if metric_codes:
+                present_codes = set(rows["指标编码"].astype(str).str.strip())
+                missing_codes = [
+                    code for code in metric_codes if code not in present_codes
+                ]
+                if missing_codes:
+                    st.warning(
+                        "以下检查涉及指标在 STEP3 中没有记录："
+                        + "、".join(missing_codes)
+                    )
+
+        if st.button(
+            "清除 STEP4 定位",
+            key="clear_step3_focus",
+            icon=":material/close:",
+        ):
+            st.session_state.pop("step3_focus", None)
+            st.rerun()
 
 
 def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFrame) -> None:
     """STEP3：单份 PDF 目标表标准填报。"""
     st.subheader(f"{active_profile.profile_name}目标表标准填报")
+    _render_step3_focus_panel()
     with st.container(border=True):
         st.markdown("#### 功能说明")
         st.write(
@@ -89,10 +195,39 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
         )
 
     company_type = active_profile.company_types[0]
-    peer_group_map, default_peer_group = read_peer_groups(
-        PEER_GROUP_CONFIG,
-        PEER_GROUP_CONFIG.stat().st_mtime_ns,
-    )
+    if (
+        active_profile.profile_id == "NON_LIFE_SOLVENCY"
+        and NON_LIFE_COMPANY_LIST.exists()
+    ):
+        try:
+            company_master = read_company_master(
+                NON_LIFE_COMPANY_LIST,
+                NON_LIFE_COMPANY_LIST.stat().st_mtime_ns,
+                NON_LIFE_COMPANY_URLS,
+                NON_LIFE_COMPANY_URLS.stat().st_mtime_ns
+                if NON_LIFE_COMPANY_URLS.exists()
+                else 0,
+            )
+        except Exception as exc:
+            st.warning(
+                f"财险公司分类表读取失败，暂按“其他”处理：{exc}",
+                icon=":material/warning:",
+            )
+            peer_group_map, default_peer_group = read_peer_groups(
+                PEER_GROUP_CONFIG,
+                PEER_GROUP_CONFIG.stat().st_mtime_ns,
+            )
+            company_type_map = {}
+        else:
+            peer_group_map = company_master.peer_group_map
+            company_type_map = company_master.company_type_map
+            default_peer_group = company_master.default_peer_group
+    else:
+        peer_group_map, default_peer_group = read_peer_groups(
+            PEER_GROUP_CONFIG,
+            PEER_GROUP_CONFIG.stat().st_mtime_ns,
+        )
+        company_type_map = {}
     standardize_submitted = st.button(
         "启动目标表标准填报",
         type="primary",
@@ -111,6 +246,8 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
     if standardize_submitted:
         st.session_state.standard_data = pd.DataFrame(columns=STANDARD_COLUMNS)
         st.session_state.validation_results = pd.DataFrame()
+        st.session_state.validation_evidence = pd.DataFrame()
+        st.session_state.step3_focus = {}
         st.session_state.standard_workbook_bytes = b""
         st.session_state.normalization_diagnostics = pd.DataFrame()
         st.session_state.standard_target_summary = pd.DataFrame()
@@ -139,9 +276,15 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     template_label = target_upload.name
 
                 status_box.write("正在匹配披露指标、识别期间口径并统一计量单位…")
+                _metadata_company = str(
+                    st.session_state.metadata.get("公司", "") or ""
+                ).strip()
+                if not _metadata_company:
+                    _metadata_company = Path(st.session_state.pdf_name).stem
                 metadata = sanitize_tree(
                     {
                         **st.session_state.metadata,
+                        "公司": _metadata_company,
                         "来源文件": st.session_state.pdf_name,
                         # ★ 兜底：把 first_page_text 显式带过来
                         "first_page_text": str(
@@ -163,6 +306,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     allowed_company_types=active_profile.company_types,
                     peer_group_map=peer_group_map,
                     default_peer_group=default_peer_group,
+                    company_type_map=company_type_map,
                     include_derived=include_derived,
                     template_warnings=template_warnings,
                 )
@@ -275,6 +419,10 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
             st.metric("单位待核对记录", pending_unit_rows, border=True)
         st.markdown("#### 标准窄表预览")
         step3_narrow_display = narrow_table_view(st.session_state.standard_data)
+        step3_narrow_display.insert(
+            0, "记录号", range(1, len(step3_narrow_display) + 1)
+        )
+        st.caption("记录号用于与 STEP4 勾稽检查的“STEP3记录号”逐行对应。")
         st.dataframe(step3_narrow_display, width="stretch", hide_index=True)
         st.download_button(
             "下载已填报的标准窄表",

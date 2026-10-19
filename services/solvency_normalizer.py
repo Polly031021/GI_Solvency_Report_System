@@ -80,6 +80,20 @@ _UNIT_CONVERT_EXEMPT_CODES = {
     "MOTOR_AVG_PREMIUM",  # 车险车均保费（元/车）
 }
 
+# 资本构成表的四个层级明细：核心一级、核心二级、附属一级、附属二级。
+# 部分公司在原表中用空白表示该层级没有余额（而不是写 0 或 "-"）。
+# 只在这两类资本表的对应行内启用空白=0，避免把其他表的空白误当成零。
+CAPITAL_COMPONENT_ZERO_CODES = frozenset({
+    "CORE_T1_CAPITAL",
+    "CORE_T2_CAPITAL",
+    "ANC_T1_CAPITAL",
+    "ANC_T2_CAPITAL",
+})
+CAPITAL_COMPONENT_ZERO_TABLE_IDS = frozenset({
+    "ACTUAL_CAPITAL",
+    "SOLVENCY_MAIN",
+})
+
 
 PERIOD_TERMS = [
     # 偿付能力主表/实际资本表/最低资本表常用
@@ -135,6 +149,16 @@ _EXACT_LABEL_LOCKS: dict[str, str] = {
     "量化风险分散效应期末数":     "QUANT_RISK_DIVERSIFICATION_EFFECT",
     "量化风险分散效应期初数":     "QUANT_RISK_DIVERSIFICATION_EFFECT",
     "风险分散效应":              "QUANT_RISK_DIVERSIFICATION_EFFECT",
+    # ★ 资本层级常见别名：部分公司写“合计/金额”，归一化后直接锁定，
+    #   避免与“资本工具合计”等相邻项目模糊匹配。
+    "核心一级资本合计":          "CORE_T1_CAPITAL",
+    "核心一级资本金额":          "CORE_T1_CAPITAL",
+    "核心二级资本合计":          "CORE_T2_CAPITAL",
+    "核心二级资本金额":          "CORE_T2_CAPITAL",
+    "附属一级资本合计":          "ANC_T1_CAPITAL",
+    "附属一级资本金额":          "ANC_T1_CAPITAL",
+    "附属二级资本合计":          "ANC_T2_CAPITAL",
+    "附属二级资本金额":          "ANC_T2_CAPITAL",
     # ★ 新增：流动性风险监测表里的"规模保费同比增速"
     "规模保费同比增速":          "PREMIUM_GROWTH",
     "规模保费增速":              "PREMIUM_GROWTH",
@@ -360,6 +384,7 @@ _LEADING_ROW_NUMBER_RE = re.compile(
     r"(?:"
     r"\d+(?:[.．]\d+)*\s*[.．、]?"                    # 阿拉伯数字，分隔符可选
     r"|[一二三四五六七八九十百千]{1,4}\s*[.．、]"     # 中文数字，必须跟分隔符
+    r"|[（(]\s*(?:\d+|[一二三四五六七八九十百千]{1,4})\s*[）)]\s*[.．、]?"  # （一）/（1）
     r")"
     r"\s*"
 )
@@ -370,7 +395,16 @@ def _normalize_label(value: str) -> str:
     text = _TAIL_MODIFIER_RE.sub("", text)
     text = _INLINE_UNIT_PATTERN.sub("", text)
     text = _LEADING_ROW_NUMBER_RE.sub("", text)           # ★ 再剥前导行号
-    return re.sub(r"[\s：:（）()、，,。·—\-_/]", "", text)
+    text = re.sub(r"^\s*其中\s*[:：]?", "", text)          # ★ 剥“其中：”前缀
+    text = re.sub(r"[\s：:（）()、，,。·—\-_/]", "", text)
+    # LCR 期限口径统一：部分报告写“三个月/一年”，部分写“未来3个月/未来12个月”。
+    # 只对 LCR/流动性覆盖率相关标签做转换，避免影响其他指标的文本。
+    if "LCR" in text.upper() or "流动性覆盖率" in text:
+        text = re.sub(r"未来\s*(3|12)\s*个月", r"\1个月", text)
+        text = re.sub(r"十二\s*个月", "12个月", text)
+        text = re.sub(r"三\s*个月", "3个月", text)
+        text = re.sub(r"一\s*年", "12个月", text)
+    return text
 
 
 def normalize_company_type(
@@ -527,6 +561,7 @@ def resolve_metric_match(
     candidates=None,
     *,
     table_id: str = "",
+    allow_all_codes: bool = False,
     minimum_score: float = 0.72,
     ambiguity_margin: float = 0.08,
 ) -> MetricMatchDecision:
@@ -548,16 +583,16 @@ def resolve_metric_match(
                 "精确锁定",
             )
     candidates = candidates or _taxonomy_candidates(taxonomy)
-    allowed_codes = TABLE_ALLOWED_CODES.get(table_id)
-    if table_id in {"OPERATING_METRICS", "NON_LIFE_OPERATING_METRICS"}:
+    allowed_codes = None if allow_all_codes else TABLE_ALLOWED_CODES.get(table_id)
+    if not allow_all_codes and table_id in {"OPERATING_METRICS", "NON_LIFE_OPERATING_METRICS"}:
         allowed_codes = set(
             taxonomy.loc[taxonomy["一级模块"] == "经营指标", "指标编码"].astype(str)
         )
-    elif table_id == "MINIMUM_CAPITAL":
+    elif not allow_all_codes and table_id == "MINIMUM_CAPITAL":
         allowed_codes = set(
             taxonomy.loc[taxonomy["一级模块"] == "最低资本", "指标编码"].astype(str)
         )
-    elif table_id == "SOLVENCY_MAIN":
+    elif not allow_all_codes and table_id == "SOLVENCY_MAIN":
         # 财险主表包含经营口径的认可资产等，不再额外扩范围
         allowed_codes = TABLE_ALLOWED_CODES["SOLVENCY_MAIN"]
         
@@ -788,10 +823,12 @@ def normalize_tables(
     peer_group: str = "",
     peer_group_map: Mapping[str, str] | None = None,
     default_peer_group: str = "",
+    company_type_map: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
     company_type = normalize_company_type(company_type, allowed_company_types)
     company_identity = resolve_company_identity(
         metadata.get("公司", ""),
+        company_type_map,
         fallback_company_type=company_type,
     )
     resolved_peer_group = str(peer_group or "").strip()
@@ -804,6 +841,7 @@ def normalize_tables(
     records: list[dict] = []
     candidates = _taxonomy_candidates(taxonomy)
     for table in tables:
+        whole_page_block = bool(getattr(table, "whole_page_block", False))
         rows = table.rows
         if len(rows) < 2:
             continue
@@ -875,6 +913,7 @@ def normalize_tables(
                     taxonomy,
                     candidates,
                     table_id=table.table_id,
+                    allow_all_codes=whole_page_block,
                 )
                 if contextual.metric is not None and contextual.score == 2.0:
                     decision = contextual
@@ -884,6 +923,7 @@ def normalize_tables(
                     taxonomy,
                     candidates,
                     table_id=table.table_id,
+                    allow_all_codes=whole_page_block,
                 )
             metric = decision.metric
             if metric is None:
@@ -907,13 +947,24 @@ def normalize_tables(
                 data_type = str(metric.get("数据类型", "金额"))
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
+                blank_capital_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
                     if not value:
                         continue
                 else:
                     if pd.isna(numeric_value):
-                        continue
+                        _metric_code = str(metric.get("指标编码", "")).strip()
+                        _table_id = str(getattr(table, "table_id", "")).strip()
+                        if (
+                            not str(raw_value).strip()
+                            and _metric_code in CAPITAL_COMPONENT_ZERO_CODES
+                            and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
+                        ):
+                            numeric_value = 0.0
+                            blank_capital_zero = True
+                        else:
+                            continue
                     value = numeric_value
                     _metric_code_for_unit = str(metric.get("指标编码", "")).strip()
                     if _metric_code_for_unit in _UNIT_CONVERT_EXEMPT_CODES:
@@ -955,6 +1006,11 @@ def normalize_tables(
                             })
                         continue
 
+                    if blank_capital_zero:
+                        note = "资本明细空白，按0处理" + (
+                            f"；{note}" if note else ""
+                        )
+
                 header_index = max(0, column_index - header_offset)
                 period = _period_header(headers, header_index)
                 
@@ -976,6 +1032,9 @@ def normalize_tables(
                     period,
                     metric_code=str(metric.get("指标编码", "")).strip(),
                 )
+                if blank_capital_zero and "预测" in period:
+                    # 空白不自动解释为“下季度预测为0”，只对本期/上期资本明细生效。
+                    continue
                 
                 if period.endswith("/认可价值"):
                     period = period.removesuffix("/认可价值")

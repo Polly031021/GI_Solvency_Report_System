@@ -19,6 +19,11 @@ from .session import llm_credentials_ready
 from .step2_extraction import clear_extraction_results
 
 
+def _mark_pages_dirty() -> None:
+    """只有用户真正修改页码输入框时，才取消“已确认”状态。"""
+    st.session_state.pages_confirmed = False
+
+
 def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> None:
     """STEP1：核对自动定位结果，并提供人工修改物理页码的入口。"""
     if st.session_state.auto_page_matches:
@@ -39,12 +44,17 @@ def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> No
         for match in st.session_state.auto_page_matches:
             input_key = f"page_edit_{match.table_id}"
             if input_key not in st.session_state:
-                st.session_state[input_key] = ", ".join(map(str, match.pages))
-            raw_value = st.text_input(match.table_name, key=input_key)
+                saved_pages = st.session_state.edited_pages.get(
+                    match.table_id,
+                    match.pages,
+                )
+                st.session_state[input_key] = ", ".join(map(str, saved_pages))
+            raw_value = st.text_input(
+                match.table_name,
+                key=input_key,
+                on_change=_mark_pages_dirty,
+            )
             valid_pages, invalid_values = parse_page_numbers(raw_value, total_pages)
-            previous_pages = st.session_state.edited_pages.get(match.table_id)
-            if previous_pages is not None and previous_pages != valid_pages:
-                st.session_state.pages_confirmed = False
             edited_pages[match.table_id] = valid_pages
             updated_matches.append(
                 PageMatch(

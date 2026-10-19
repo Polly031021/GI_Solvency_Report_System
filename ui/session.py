@@ -7,6 +7,7 @@ from threading import Lock
 import pandas as pd
 import streamlit as st
 from services.solvency_normalizer import STANDARD_COLUMNS, upgrade_standard_frame
+from services.solvency_rule_table_extractor import DEFAULT_METHOD
 
 from .config import DEFAULT_PROFILE_ID, STANDARD_SCHEMA_VERSION
 
@@ -30,8 +31,10 @@ def new_state_defaults() -> dict[str, object]:
         "llm_api_key": "",
         "auto_vision_retry": True,
         "force_vision_mode": False,
-        # STEP2 提取方式（文字版页面走规则法，扫描版页面走大模型）
-        "extraction_method": "",
+        # STEP2 默认：文字版页面走规则法，规则失败或扫描版页面转大模型。
+        "extraction_method": DEFAULT_METHOD,
+        # 默认保留整页全部表格，避免目标表边界裁剪造成指标缺失。
+        "extract_whole_page": True,
         "allow_llm_fallback": True,
         "extraction_edit_events": [],
         "extraction_number_repairs": [],
@@ -54,6 +57,8 @@ def new_state_defaults() -> dict[str, object]:
         "major_financing_data": pd.DataFrame(),
         "standard_schema_version": 0,
         "validation_results": pd.DataFrame(),
+        "validation_evidence": pd.DataFrame(),
+        "step3_focus": {},
         "monitor_results": pd.DataFrame(),
         "monitor_single_result": None,
         "edited_pages": {},

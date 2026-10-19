@@ -8,6 +8,7 @@ while the output remains the canonical narrow table consumed by STEP5.
 
 import io
 from dataclasses import dataclass
+from copy import copy
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -18,7 +19,13 @@ from .solvency_dataset_adapter import (
     write_standard_workbook_sheets,
 )
 from .solvency_metric_registry import DERIVED_METRICS
-from .solvency_normalizer import NARROW_TABLE_COLUMNS, STANDARD_COLUMNS, normalize_tables
+from .solvency_normalizer import (
+    CAPITAL_COMPONENT_ZERO_CODES,
+    CAPITAL_COMPONENT_ZERO_TABLE_IDS,
+    NARROW_TABLE_COLUMNS,
+    STANDARD_COLUMNS,
+    normalize_tables,
+)
 from .solvency_table_extractor import ExtractedTable
 
 
@@ -339,6 +346,41 @@ def _dependency_closure(target_codes: set[str]) -> set[str]:
     return required
 
 
+def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
+    """把整页合并表还原成页内表块，供 Step3 按各自表头识别期间。
+
+    Step2 的中间表为了可读性会把同页多表和跨页内容合并成一张表；
+    ``table_blocks`` 保留了每张页内表的独立网格。这里只在标准化计算时
+    展开，不改变用户在 Step2 看到的合并表。
+    """
+    expanded: list[ExtractedTable] = []
+    for table in tables:
+        blocks = getattr(table, "table_blocks", None)
+        if not blocks:
+            expanded.append(table)
+            continue
+        for block in blocks:
+            rows = block.get("rows") if isinstance(block, dict) else block
+            if not rows:
+                continue
+            local = copy(table)
+            local.rows = [list(row) for row in rows]
+            block_page = (
+                block.get("page")
+                if isinstance(block, dict)
+                else getattr(table, "page", 1)
+            )
+            try:
+                local.page = int(block_page or 1)
+            except (TypeError, ValueError):
+                local.page = int(getattr(table, "page", 1) or 1)
+            local.source_pages = [local.page]
+            local.table_blocks = []
+            local.whole_page_block = True
+            expanded.append(local)
+    return expanded
+
+
 def _target_summary(
     target_catalog: pd.DataFrame,
     data: pd.DataFrame,
@@ -431,6 +473,7 @@ def standardize_to_target(
     peer_group: str = "",
     peer_group_map: Mapping[str, str] | None = None,
     default_peer_group: str = "",
+    company_type_map: Mapping[str, str] | None = None,
     include_derived: bool,
     template_warnings: Sequence[str] = (),
 ) -> Step3StandardizationResult:
@@ -467,6 +510,9 @@ def standardize_to_target(
 
     diagnostics: list[dict] = []
     warnings: list[str] = list(template_warnings)   # ★ 提前初始化，供补漏匹配使用
+    # Step2 的可读性合并表内部保留了页内表块；标准化计算和补漏匹配
+    # 都按表块处理，避免把第二张表的列头套到第一张表的数据上。
+    tables = _expand_table_blocks(tables)
     normalized = normalize_tables(
         tables,
         scoped_taxonomy,
@@ -478,6 +524,7 @@ def standardize_to_target(
         peer_group=peer_group,
         peer_group_map=peer_group_map,
         default_peer_group=default_peer_group,
+        company_type_map=company_type_map,
     )
     enriched = append_derived_metrics(normalized) if include_derived else normalized
     data = enriched[
@@ -584,6 +631,7 @@ def standardize_to_target(
             _source_file = _template.get("来源文件", "")
             _source_sheet = getattr(_table, "table_name", "")
             _source_pages = getattr(_table, "source_pages", None) or []
+            _source_table_id = str(getattr(_table, "table_id", "")).strip()
 
             # ★ 太保 S05 表（以及其它双栏 PDF）常出现"标签与数值被拆到多行"
             #   的版式。下面这套合并逻辑覆盖两类结构：
@@ -730,19 +778,29 @@ def standardize_to_target(
                     _vals_with_period: list[tuple[float, str]] = []
                     for _c in range(_label_idx + 1, len(_row)):
                         _cell = str(_row[_c]).replace(",", "").replace("，", "").strip()
-                        # ★ 只对资本明细的 4 个编码把 "-" 当 0；
+                        # ★ 只对资本明细的 4 个编码把 "-" 或空白当 0；
                         #   其他指标（比如财险的寿险业务风险）"-" 表示
                         #   "业务上不适用"，仍然按缺失跳过。
-                        _CAPITAL_ZERO_CODES = {
-                            "CORE_T1_CAPITAL",
-                            "CORE_T2_CAPITAL",
-                            "ANC_T1_CAPITAL",
-                            "ANC_T2_CAPITAL",
-                        }
                         if not _cell:
-                            continue
-                        if _cell in {"-", "--", "—", "–", "/"}:
-                            if _info["code"] in _CAPITAL_ZERO_CODES:
+                            _row_label_for_period = (
+                                str(_row[_label_idx]).strip()
+                                if _label_idx < len(_row) else ""
+                            )
+                            _period_for_blank = (
+                                _period_from_header(_header, _c)
+                                or _period_from_row_label(_row_label_for_period)
+                            )
+                            if (
+                                _info["code"] in CAPITAL_COMPONENT_ZERO_CODES
+                                and _source_table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
+                                and _period_for_blank
+                                and "预测" not in _period_for_blank
+                            ):
+                                _v = 0.0
+                            else:
+                                continue
+                        elif _cell in {"-", "--", "—", "–", "/"}:
+                            if _info["code"] in CAPITAL_COMPONENT_ZERO_CODES:
                                 _v = 0.0
                             else:
                                 continue
@@ -969,6 +1027,18 @@ def standardize_to_target(
         # ★ 修复：用完后删掉临时列，避免污染输出
         if "_期间口径_去重" in data.columns:
             data = data.drop(columns=["_期间口径_去重"])
+
+    if not data.empty and "备注" in data.columns:
+        _blank_zero_count = int(
+            data["备注"]
+            .astype(str)
+            .str.contains("资本明细空白，按0处理", regex=False)
+            .sum()
+        )
+        if _blank_zero_count:
+            warnings.append(
+                f"已将 {_blank_zero_count} 条资本明细空白值按0处理，请核对源表是否为空白。"
+            )
 
     # ---------- 统一模块/单位/数据类型，以 target_catalog 为准 ----------
     if not data.empty and not target_catalog.empty:

@@ -256,6 +256,7 @@ def extract_single_page_vision(
     bbox=None,
     region_note="",
     zoom=3.0,
+    whole_page=False,
 ):
     """将 PDF 页面转为高清图片，使用视觉大模型提取表格。
 
@@ -269,7 +270,7 @@ def extract_single_page_vision(
         page = doc.load_page(page_num - 1)
 
         clip = None
-        if bbox is not None:
+        if bbox is not None and not whole_page:
             try:
                 rect = fitz.Rect(*[float(value) for value in bbox])
                 if rect.is_valid and not rect.is_empty and rect.intersects(page.rect):
@@ -287,14 +288,25 @@ def extract_single_page_vision(
             evidence_text = ""
         doc.close()
 
+        target_text = (
+            "本页的全部表格与段落"
+            if whole_page
+            else f"【{expected_name}】"
+        )
         prompt = f"""你是一个四大会计师事务所的资深财险数字化审计专家。
-我为你提供了一张【保险公司年报的单页高清截图】，目标是精准提取：【{expected_name}】。
+我为你提供了一张【保险公司年报的单页高清截图】，目标是完整提取：{target_text}。
 表格中的【数字是由图片构成的】，请发挥强大的视觉识别能力，提取所有文字和表格。
 【强制要求】：
 1. 所有的科目名、数字金额之间，必须被 "|" 隔开。严禁使用连续空格。
 2. 精准对齐多级表头！如果有留白单元格，必须用 "|" 占位补齐！
 3. 绝不能漏掉任何一行数据，保留金额里的逗号和括号。
 4. 纯文本输出，不要使用 Markdown 代码块。不需要输出 SHEET_NAME 标签，直接排版。"""
+        if whole_page:
+            prompt += (
+                "\n5. 本页如果有多张表，请从上到下全部输出，不要只提取某一张表。"
+                "\n6. 不同表格之间必须单独输出一行 ---TABLE--- 作为分隔；"
+                "每张表都必须带自己的表头，绝不能因为换表而省略行。"
+            )
         prompt += _NUMBER_FORMAT_RULE
         if clip is not None:
             prompt += (
@@ -329,6 +341,10 @@ def extract_single_page_vision(
             clean_row = row.strip()
             if not clean_row:
                 continue
+            if clean_row.upper() in {"---TABLE---", "TABLE_BREAK"}:
+                parsed_data.append(["---TABLE---"])
+                max_cols = max(max_cols, 1)
+                continue
             if re.match(r'^[\s\|-]+$', clean_row) and '-' in clean_row:
                 continue
             if clean_row.startswith('|'):
@@ -356,7 +372,16 @@ def extract_single_page_vision(
 # ============================================================
 # PDF 文本提取引擎
 # ============================================================
-def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, model_name):
+def extract_single_page(
+    pdf_bytes,
+    page_num,
+    expected_name,
+    api_key,
+    base_url,
+    model_name,
+    *,
+    whole_page=False,
+):
     """使用 pdfplumber 提取文本，并用 LLM 转换为结构化数据"""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -368,8 +393,13 @@ def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, m
         if not raw_text:
             return None, ""
 
+        target_text = (
+            "本页的全部表格与段落"
+            if whole_page
+            else f"【{expected_name}】"
+        )
         prompt = f"""你是一个四大会计师事务所的资深财险数字化审计专家。
-当前任务：提取【{expected_name}】。
+当前任务：完整提取{target_text}。
 请将以下纯文本中的【段落文字】原样保留为一行，将【财务表格】转化为用 "|" 严格分隔的标准网格格式。
 【强制要求】：
 1. 所有的科目名、附注编号、数字金额之间，必须被 "|" 隔开。严禁使用连续空格。
@@ -379,6 +409,12 @@ def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, m
 
 以下是原始文本，请开始输出：
 {raw_text}"""
+        if whole_page:
+            prompt += (
+                "\n5. 本页如果有多张表，请从上到下全部输出，不要只提取某一张表。"
+                "\n6. 不同表格之间必须单独输出一行 ---TABLE--- 作为分隔；"
+                "每张表都必须带自己的表头，绝不能因为换表而省略行。"
+            )
         prompt += _NUMBER_FORMAT_RULE
 
         client = OpenAI(api_key=api_key, base_url=base_url)
@@ -398,6 +434,10 @@ def extract_single_page(pdf_bytes, page_num, expected_name, api_key, base_url, m
         for row in lines:
             clean_row = row.strip()
             if not clean_row:
+                continue
+            if clean_row.upper() in {"---TABLE---", "TABLE_BREAK"}:
+                parsed_data.append(["---TABLE---"])
+                max_cols = max(max_cols, 1)
                 continue
             if re.match(r'^[\s\|-]+$', clean_row) and '-' in clean_row:
                 continue

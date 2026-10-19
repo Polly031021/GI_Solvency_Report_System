@@ -661,6 +661,8 @@ def load_profile_registry(
     root = Path(project_root)
     profiles: list[ReportProfile] = []
     for path in sorted(directory.glob("*_profile.xlsx")):
+        if path.name.startswith("~$"):
+            continue
         profiles.append(
             load_profile_workbook(
                 path.read_bytes(),
