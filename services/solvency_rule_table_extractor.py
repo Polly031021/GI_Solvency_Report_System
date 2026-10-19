@@ -33,6 +33,7 @@ from .solvency_table_boundaries import enforce_output_boundaries
 from .solvency_table_extractor import (
     TABLE_HEADERS,
     TABLE_SIGNATURES,
+    extract_page_all_tables,
     page_table_candidates,
 )
 from .table_number_repair import NumberRepairOutcome, repair_thousand_separators
@@ -46,7 +47,8 @@ MODE_RULE = "全部规则法（离线，零模型调用）"
 MODE_LLM = "全部大模型法（文本优先，失败转图片）"
 MODE_VISION = "全部图片视觉法"
 METHOD_OPTIONS = (MODE_RULE, MODE_AUTO, MODE_LLM, MODE_VISION)
-DEFAULT_METHOD = MODE_RULE
+# 默认先走规则法；规则法失败或扫描版页面自动转大模型。
+DEFAULT_METHOD = MODE_AUTO
 
 # ---------- 引擎标识与日志用标签 ----------
 ENGINE_RULE = "rule"
@@ -76,6 +78,7 @@ class PageExtractionOutcome:
     repairs: tuple[str, ...] = ()
     reviews: tuple[str, ...] = ()
     region: TableRegion | None = None
+    frames: tuple[pd.DataFrame, ...] = ()
 
     @property
     def mode_label(self) -> str:
@@ -215,6 +218,55 @@ def _apply_number_repair(
     if not outcome.changed:
         return frame, outcome.repairs, outcome.reviews
     return pd.DataFrame(outcome.rows), outcome.repairs, outcome.reviews
+
+
+def _looks_like_header_row(row: list[str]) -> bool:
+    """判断整页输出中的某一行是否像一张新表的表头。"""
+    cells = [str(cell).strip() for cell in row if str(cell).strip()]
+    if len(cells) < 2:
+        return False
+    text = "".join(cells)
+    hints = (
+        "指标名称", "项目", "行次", "序号", "本季度", "上季度",
+        "期末", "期初", "本年累计", "本年度累计", "下季度", "预测",
+    )
+    return sum(1 for hint in hints if hint in text) >= 2
+
+
+def _split_extracted_frames(frame: pd.DataFrame | None) -> tuple[pd.DataFrame, ...]:
+    """把大模型整页输出按显式分隔行或重复表头拆成多张表。"""
+    if frame is None or frame.empty:
+        return ()
+    rows = [
+        [str(cell).strip() for cell in row]
+        for row in frame.fillna("").astype(str).values.tolist()
+    ]
+    blocks: list[list[list[str]]] = []
+    current: list[list[str]] = []
+
+    def flush() -> None:
+        nonlocal current
+        if len(current) >= 2:
+            blocks.append(current)
+        current = []
+
+    for row in rows:
+        nonempty = [cell for cell in row if cell]
+        marker = (
+            len(nonempty) == 1
+            and nonempty[0].strip().upper() in {"---TABLE---", "TABLE_BREAK"}
+        )
+        if marker:
+            flush()
+            continue
+        if current and _looks_like_header_row(row):
+            flush()
+        current.append(row)
+    flush()
+
+    if len(blocks) <= 1:
+        return (frame,)
+    return tuple(pd.DataFrame(block) for block in blocks)
 
 
 @dataclass
@@ -405,7 +457,41 @@ def _rule_attempt(
     table_config: Mapping[str, object] | None,
     strategy_id: str | None,
     grid: PageGrid | None,
+    whole_page: bool = False,
 ) -> PageExtractionOutcome:
+    if whole_page:
+        try:
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                if page_number < 1 or page_number > len(pdf.pages):
+                    return PageExtractionOutcome(
+                        engine=ENGINE_RULE,
+                        status="失败",
+                        note=f"{RULE_FAILURE_PREFIX}页码超出 PDF 范围",
+                    )
+                table_rows, whole_note = extract_page_all_tables(
+                    pdf.pages[page_number - 1]
+                )
+        except Exception as exc:
+            return PageExtractionOutcome(
+                engine=ENGINE_RULE,
+                status="失败",
+                note=f"{RULE_FAILURE_PREFIX}整页解析失败：{exc}",
+            )
+        if not table_rows:
+            return PageExtractionOutcome(
+                engine=ENGINE_RULE,
+                status="失败",
+                note=f"{RULE_FAILURE_PREFIX}{whole_note}",
+            )
+        frames = tuple(pd.DataFrame(rows) for rows in table_rows)
+        return PageExtractionOutcome(
+            frame=frames[0],
+            frames=frames,
+            engine=ENGINE_RULE,
+            status="成功",
+            note=f"{whole_note}；已完整保留本页所有表格，未做目标表边界裁剪",
+        )
+
     candidates, reason = prepare_rule_candidates(
         pdf_bytes,
         page_number,
@@ -462,7 +548,9 @@ def _llm_text_attempt(
     base_url: str,
     model: str,
     source_text: str = "",
+    whole_page: bool = False,
 ) -> PageExtractionOutcome:
+    text_kwargs = {"whole_page": True} if whole_page else {}
     frame, log = extract_single_page(
         pdf_bytes,
         page_number,
@@ -470,6 +558,7 @@ def _llm_text_attempt(
         api_key,
         base_url,
         model,
+        **text_kwargs,
     )
     if frame is None or frame.empty:
         return PageExtractionOutcome(
@@ -478,11 +567,19 @@ def _llm_text_attempt(
             note=f"文本模式未返回数据：{str(log)[:180] or '无返回'}",
         )
     frame, repairs, reviews = _apply_number_repair(frame, source_text)
+    frames = _split_extracted_frames(frame) if whole_page else (frame,)
+    if not frames:
+        frames = (frame,)
     return PageExtractionOutcome(
         frame=frame,
+        frames=frames,
         engine=ENGINE_LLM_TEXT,
         status="成功",
-        note=f"文本模式提取到{len(frame)}行",
+        note=(
+            f"文本模式整页提取到{len(frame)}行、{len(frames)}张表"
+            if whole_page
+            else f"文本模式提取到{len(frame)}行"
+        ),
         repairs=repairs,
         reviews=reviews,
     )
@@ -502,8 +599,10 @@ def _llm_vision_attempt(
     grid: PageGrid | None = None,
     table_config: Mapping[str, object] | None = None,
     strategy_id: str | None = None,
+    whole_page: bool = False,
 ) -> PageExtractionOutcome:
     def call(bbox, region_note: str) -> PageExtractionOutcome:
+        vision_kwargs = {"whole_page": True} if whole_page else {}
         frame, log = extract_single_page_vision(
             pdf_bytes,
             page_number,
@@ -513,6 +612,7 @@ def _llm_vision_attempt(
             model,
             bbox=bbox,
             region_note=region_note,
+            **vision_kwargs,
         )
         if frame is None or frame.empty:
             return PageExtractionOutcome(
@@ -521,17 +621,25 @@ def _llm_vision_attempt(
                 note=f"图片模式未返回数据：{str(log)[:180] or '无返回'}",
             )
         frame, repairs, reviews = _apply_number_repair(frame, source_text)
+        frames = _split_extracted_frames(frame) if whole_page else (frame,)
+        if not frames:
+            frames = (frame,)
         return PageExtractionOutcome(
             frame=frame,
+            frames=frames,
             engine=ENGINE_LLM_VISION,
             status="成功",
-            note=f"图片模式提取到{len(frame)}行",
+            note=(
+                f"图片模式整页提取到{len(frame)}行、{len(frames)}张表"
+                if whole_page
+                else f"图片模式提取到{len(frame)}行"
+            ),
             repairs=repairs,
             reviews=reviews,
         )
 
     fallback_reason = ""
-    if region is not None and table_id:
+    if region is not None and table_id and not whole_page:
         cropped = call(region.bbox, region.note)
         if cropped.succeeded:
             passed, gate_note = validate_rule_page_rows(
@@ -571,6 +679,7 @@ def extract_page_with_method(
     model: str = "",
     auto_vision_retry: bool = True,
     allow_llm_fallback: bool = True,
+    whole_page: bool = False,
 ) -> PageExtractionOutcome:
     """按选定方式处理单页，必要时在规则法与大模型之间自动切换。"""
     ready = credentials_ready(api_key, base_url, model)
@@ -607,10 +716,11 @@ def extract_page_with_method(
             base_url=base_url,
             model=model,
             source_text=source(),
-            region=region(),
+            region=None if whole_page else region(),
             grid=grid,
             table_config=table_config,
             strategy_id=strategy_id,
+            whole_page=whole_page,
         )
 
     if method == MODE_VISION:
@@ -637,6 +747,7 @@ def extract_page_with_method(
                 base_url=base_url,
                 model=model,
                 source_text=source(),
+                whole_page=whole_page,
             )
             if text_outcome.succeeded:
                 return text_outcome
@@ -668,6 +779,7 @@ def extract_page_with_method(
             table_config=table_config,
             strategy_id=strategy_id,
             grid=grid,
+            whole_page=whole_page,
         )
 
     # ---------- 智能模式：文字版优先规则法，扫描版直接走视觉大模型 ----------
@@ -680,6 +792,7 @@ def extract_page_with_method(
             table_config=table_config,
             strategy_id=strategy_id,
             grid=grid,
+            whole_page=whole_page,
         )
         if rule_outcome.succeeded:
             return rule_outcome
@@ -696,6 +809,7 @@ def extract_page_with_method(
             base_url=base_url,
             model=model,
             source_text=source(),
+            whole_page=whole_page,
         )
         if text_outcome.succeeded:
             text_outcome.note = f"{rule_outcome.note}→已转文本大模型；{text_outcome.note}"

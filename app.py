@@ -8,7 +8,11 @@ from __future__ import annotations
 import streamlit as st
 
 from ui.auth import initialize_login_state, logout, render_login_page
-from ui.cache import prepare_visualization_source, read_profile_registry
+from ui.cache import (
+    prepare_visualization_source,
+    profile_registry_token,
+    read_profile_registry,
+)
 from ui.config import ANALYSIS_TAB_LABELS, PROJECT_MEMBER_ROLE, WORKFLOW_TAB_LABELS
 from ui.navigation import sync_analysis_navigation_from_tab
 from ui.profile_settings import (
@@ -64,7 +68,7 @@ def main() -> None:
             "普通用户通道仅开放 STEP6 自定义分析与 STEP7 公司报告。",
             icon=":material/lock:",
         )
-    profiles = read_profile_registry()
+    profiles = read_profile_registry(profile_registry_token())
     active_profile = render_profile_settings(profiles, is_project_member)
     taxonomy_path, rules_path = resolve_profile_paths(active_profile)
     render_page_heading(active_profile)

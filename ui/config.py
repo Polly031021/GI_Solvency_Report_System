@@ -9,11 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
 PROFILE_DIR = CONFIG_DIR / "report_profiles"
+NON_LIFE_PROFILE_FILE = PROFILE_DIR / "NON_LIFE_SOLVENCY_profile.xlsx"
 # ★ 默认 profile 改为财险，登录后直接进入 NON_LIFE_SOLVENCY
 DEFAULT_PROFILE_ID = "NON_LIFE_SOLVENCY"
 STANDARD_SCHEMA_VERSION = 2
 GOLD_MANIFEST = ROOT / "gold_standard" / "manifest.json"
 PEER_GROUP_CONFIG = CONFIG_DIR / "solvency_peer_groups.json"
+# 财险公司分类主数据：短名称 + 公司类别（前十大/大型/中型/小型/外资系等）。
+NON_LIFE_COMPANY_LIST = ROOT / "财险公司列表.xlsx"
+# 财险公司全称与披露地址，用于把短名称别名关联到同一家公司。
+NON_LIFE_COMPANY_URLS = CONFIG_DIR / "non_life_solvency_company_urls.xlsx"
 WORKFLOW_TAB_LABELS = (
     "STEP0 报告监控",
     "STEP1 页码定位",

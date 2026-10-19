@@ -19,7 +19,11 @@ from services.solvency_dataset_adapter import (
     convert_external_workbook,
     read_standard_workbook,
 )
-from services.solvency_company_identity import load_peer_group_config
+from services.solvency_company_identity import (
+    CompanyMaster,
+    load_company_master_workbook,
+    load_peer_group_config,
+)
 from services.solvency_step3_standardizer import target_template_workbook_bytes
 from services.solvency_step6_analysis import prepare_analysis_frame
 from services.solvency_financing_analysis import read_major_financing_workbook
@@ -33,8 +37,23 @@ from .config import GOLD_MANIFEST, PROFILE_DIR, ROOT
 
 
 @st.cache_data(show_spinner=False)
-def read_profile_registry() -> dict[str, ReportProfile]:
+def read_profile_registry(registry_token: str = "") -> dict[str, ReportProfile]:
+    del registry_token
     return load_profile_registry(PROFILE_DIR, ROOT)
+
+
+def profile_registry_token() -> str:
+    """Profile 工作簿指纹：文件修改后自动触发缓存失效。"""
+    parts: list[str] = []
+    for path in sorted(PROFILE_DIR.glob("*_profile.xlsx")):
+        if path.name.startswith("~$"):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(parts)
 
 
 @st.cache_data(show_spinner=False)
@@ -44,6 +63,20 @@ def read_peer_groups(
 ) -> tuple[dict[str, str], str]:
     del modified_ns
     return load_peer_group_config(path)
+
+
+@st.cache_data(show_spinner=False)
+def read_company_master(
+    path: Path,
+    modified_ns: int,
+    alias_path: Path | None = None,
+    alias_modified_ns: int = 0,
+) -> CompanyMaster:
+    del modified_ns, alias_modified_ns
+    return load_company_master_workbook(
+        path,
+        alias_workbook=alias_path,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -182,7 +215,11 @@ def cached_complete_step5_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def validation_results_to_xlsx(results: pd.DataFrame) -> bytes:
+def validation_results_to_xlsx(
+    results: pd.DataFrame,
+    evidence: pd.DataFrame | None = None,
+    standard_data: pd.DataFrame | None = None,
+) -> bytes:
     summary = validation_status_summary(results)
     category_summary = (
         results.groupby(["check_type", "status"], dropna=False)
@@ -192,12 +229,101 @@ def validation_results_to_xlsx(results: pd.DataFrame) -> bytes:
         .rename(columns={"check_type": "检查类别", "status": "状态"})
     )
     issues = results[~results["status"].isin(["通过", "不适用"])].copy()
+    result_labels = {
+        "result_id": "结果编号",
+        "check_type": "检查类别",
+        "severity": "严重程度",
+        "rule_id": "规则ID",
+        "rule_name": "规则名称",
+        "company": "公司",
+        "report_period": "报告期",
+        "period": "期间组",
+        "actual": "披露值/实际数",
+        "expected": "系统计算值/应有数",
+        "difference": "差异",
+        "tolerance": "容差",
+        "tolerance_unit": "容差单位",
+        "status": "状态",
+        "failure_reason": "失败原因",
+        "formula": "校验公式",
+        "notes": "检查说明",
+        "involved_metrics": "涉及指标编码",
+        "source_pages": "来源页码",
+        "suggestion": "处理建议",
+        "evidence_count": "STEP3依据条数",
+    }
+    evidence_labels = {
+        "result_id": "结果编号",
+        "record_id": "STEP3记录号",
+        "metric_code": "指标编码",
+        "metric_name": "指标名称",
+        "role": "检查角色",
+        "period": "期间组",
+        "status": "记录状态",
+        "actual_value": "STEP3数值/披露值",
+        "expected_value": "应有值/标准值",
+        "unit": "单位",
+        "source_file": "来源文件",
+        "source_sheet": "来源工作表",
+        "source_page": "来源页码",
+        "message": "问题说明",
+    }
+
+    def _visible(frame: pd.DataFrame, labels: dict[str, str]) -> pd.DataFrame:
+        columns = [column for column in labels if column in frame.columns]
+        return frame[columns].rename(columns=labels)
+
+    detail_frame = _visible(results, result_labels)
+    issue_frame = _visible(issues, result_labels)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="状态汇总", index=False)
         category_summary.to_excel(writer, sheet_name="分类汇总", index=False)
-        results.to_excel(writer, sheet_name="检查明细", index=False)
-        issues.to_excel(writer, sheet_name="待处理事项", index=False)
+        detail_frame.to_excel(writer, sheet_name="检查明细", index=False)
+        issue_frame.to_excel(writer, sheet_name="待处理事项", index=False)
+
+        issue_evidence = evidence
+        if (
+            isinstance(evidence, pd.DataFrame)
+            and not evidence.empty
+            and "result_id" in evidence.columns
+            and "result_id" in issues.columns
+        ):
+            issue_ids = set(issues["result_id"].astype(str))
+            issue_evidence = evidence[
+                evidence["result_id"].astype(str).isin(issue_ids)
+            ]
+        if isinstance(issue_evidence, pd.DataFrame) and not issue_evidence.empty:
+            _visible(issue_evidence, evidence_labels).to_excel(
+                writer, sheet_name="失败原因与STEP3依据", index=False
+            )
+            if isinstance(standard_data, pd.DataFrame) and not standard_data.empty:
+                record_ids: list[int] = []
+                for value in issue_evidence.get(
+                    "record_id", pd.Series(dtype=object)
+                ).tolist():
+                    try:
+                        record_id = int(float(value))
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= record_id <= len(standard_data):
+                        record_ids.append(record_id)
+                if record_ids:
+                    record_ids = list(dict.fromkeys(record_ids))
+                    related = standard_data.iloc[[value - 1 for value in record_ids]].copy()
+                    related.insert(0, "STEP3记录号", record_ids)
+                    related_columns = [
+                        column
+                        for column in (
+                            "STEP3记录号", "公司", "报告期", "指标编码", "指标名称",
+                            "期间口径", "数值", "单位", "来源工作表", "来源页码",
+                            "指标属性", "来源类型", "备注", "计算逻辑", "来源文件",
+                        )
+                        if column in related.columns
+                    ]
+                    related[related_columns].to_excel(
+                        writer, sheet_name="STEP3相关记录", index=False
+                    )
     return output.getvalue()
 
 

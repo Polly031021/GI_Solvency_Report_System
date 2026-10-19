@@ -138,9 +138,13 @@ def _validate(
     header_text = _compact("".join(rows[0][:2]))
     row_number_table = any(term in header_text for term in ("行次", "序号", "编号"))
     numeric_rows = 0
+    labeled_rows = 0
     shifted_rows = 0
     for row in data_rows:
         value_start = 2 if row_number_table and len(row) > 2 else 1
+        labeled_rows += bool(
+            any(str(cell).strip() for cell in row[:value_start])
+        )
         has_number = any(_cell_has_disclosed_value(cell) for cell in row[value_start:])
         numeric_rows += bool(has_number)
         if not row_number_table:
@@ -158,19 +162,27 @@ def _validate(
         if expected_source_rows > 0
         else configured_minimum
     )
-    if numeric_rows < minimum_numeric_rows:
+    # 实际资本表的资本层级行可能合法地没有数值（空白表示该层级为 0），
+    # 因此用“有项目名的数据行”而不是“有数值的数据行”判断表是否完整。
+    counted_rows = (
+        max(numeric_rows, labeled_rows)
+        if table_id == "ACTUAL_CAPITAL"
+        else numeric_rows
+    )
+    if counted_rows < minimum_numeric_rows:
         raise ExtractionQualityError(
-            f"整表提取不完整：仅识别到{numeric_rows}条数值行，至少应有{minimum_numeric_rows}条。"
+            f"整表提取不完整：仅识别到{counted_rows}条有效数据行，"
+            f"至少应有{minimum_numeric_rows}条。"
         )
     if expected_source_rows >= 3:
         coverage_minimum = max(
             minimum_numeric_rows,
             min(expected_source_rows, math.ceil(expected_source_rows * SOURCE_ROW_COVERAGE_RATIO)),
         )
-        if numeric_rows < coverage_minimum:
+        if counted_rows < coverage_minimum:
             raise ExtractionQualityError(
                 f"整表覆盖不足：原PDF网格约有{expected_source_rows}条数值行，"
-                f"模型仅返回{numeric_rows}条，至少应返回{coverage_minimum}条。"
+                f"模型仅返回{counted_rows}条有效行，至少应返回{coverage_minimum}条。"
             )
     item_recall, missing_items = _item_recall_profile(rows, source_item_labels)
     _validate_source_section_order(rows, source_section_titles)

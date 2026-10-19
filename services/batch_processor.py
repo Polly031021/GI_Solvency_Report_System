@@ -15,7 +15,10 @@ from .batch_extraction import (
     sanitize_tree,
     sniff_unit_from_text,
 )
-from .solvency_company_identity import load_peer_group_config
+from .solvency_company_identity import (
+    load_company_master_workbook,
+    load_peer_group_config,
+)
 from .solvency_hybrid_pipeline import locate_tables_hybrid
 from .solvency_metric_registry import extend_taxonomy
 from .solvency_normalizer import load_taxonomy
@@ -126,8 +129,26 @@ def build_context_from_profile(
 
     # peer group 配置路径（找不到不报错，用空配置）
     try:
-        peer_cfg = profile.project_root / "config" / "solvency_peer_groups.json"
-        peer_group_map, default_peer_group = load_peer_group_config(peer_cfg)
+        if profile.profile_id == "NON_LIFE_SOLVENCY":
+            master_path = profile.project_root / "财险公司列表.xlsx"
+            alias_path = (
+                profile.project_root
+                / "config"
+                / "non_life_solvency_company_urls.xlsx"
+            )
+            company_master = load_company_master_workbook(
+                master_path,
+                alias_workbook=alias_path,
+            )
+            peer_group_map = dict(company_master.peer_group_map)
+            default_peer_group = company_master.default_peer_group
+            company_type_map = {
+                **dict(company_master.company_type_map),
+                **dict(company_type_map or {}),
+            }
+        else:
+            peer_cfg = profile.project_root / "config" / "solvency_peer_groups.json"
+            peer_group_map, default_peer_group = load_peer_group_config(peer_cfg)
     except Exception:
         peer_group_map, default_peer_group = {}, ""
 
@@ -373,6 +394,7 @@ def process_one_pdf_bytes(
             allowed_company_types=ctx.profile.company_types,
             peer_group_map=ctx.peer_group_map,
             default_peer_group=ctx.default_peer_group,
+            company_type_map=ctx.company_type_map,
             include_derived=ctx.include_derived,
         )
 

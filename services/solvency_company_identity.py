@@ -28,6 +28,16 @@ class CompanyIdentity:
     matched_by: str
 
 
+@dataclass(frozen=True)
+class CompanyMaster:
+    """公司分类主数据：同业分类与公司类型。"""
+
+    peer_group_map: Mapping[str, str]
+    company_type_map: Mapping[str, str]
+    default_peer_group: str = "其他"
+    default_company_type: str = "财险"
+
+
 COMPANY_ALIASES = (
     CompanyAliasDefinition(
         code="LIFE_ORIENTAL_JIAFU",
@@ -36,6 +46,20 @@ COMPANY_ALIASES = (
         aliases=("中韩人寿",),
     ),
 )
+
+# 财险清单使用短名称，PDF 文件名/正文常用这些简称或全称片段。
+_NON_LIFE_SHORT_ALIASES: dict[str, tuple[str, ...]] = {
+    "人保财险": ("中国人民财产保险", "人保", "人保财险"),
+    "平安产险": ("中国平安财产保险", "平安财险", "平安产险"),
+    "太保财险": ("中国太平洋财产保险", "太平洋财险", "太保财险"),
+    "国寿财产": ("中国人寿财产保险", "国寿财险", "国寿财产"),
+    "众安财产": ("众安在线财产保险", "众安保险", "众安财产"),
+    "英大财产": ("英大泰和财产保险", "英大财险", "英大财产"),
+    "大地财产": ("中国大地财产保险", "大地财险", "大地财产"),
+    "中华联合": ("中华联合财产保险", "中华财险", "中华联合"),
+    "太平财险": ("太平财产保险", "太平财险"),
+    "阳光财产": ("阳光财产保险", "阳光财险", "阳光财产"),
+}
 
 
 def canonical_company_name(value: Any) -> str:
@@ -127,6 +151,102 @@ def resolve_peer_group(
     longest = max(length for length, _ in matches)
     longest_groups = {group for length, group in matches if length == longest}
     return next(iter(longest_groups)) if len(longest_groups) == 1 else fallback
+
+
+def _normalize_url(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text.rstrip("/")
+
+
+def _normalize_company_type(value: Any, default: str = "财险") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if any(token in text for token in ("财险", "财产保险", "财产险", "产险")):
+        return "财险"
+    if "健康" in text:
+        return "健康险"
+    if "养老" in text:
+        return "养老险"
+    if "寿险" in text or "人寿" in text:
+        return "寿险"
+    return text
+
+
+def load_company_master_workbook(
+    path: str | Path,
+    *,
+    company_column: str = "公司",
+    group_column: str = "公司类别",
+    type_column: str = "业务类型",
+    default_peer_group: str = "其他",
+    default_company_type: str = "财险",
+    alias_workbook: str | Path | None = None,
+) -> CompanyMaster:
+    """读取公司分类工作簿，并可选合并全称/别名工作簿。
+
+    ``财险公司列表.xlsx`` 使用短名称（如“人保财险”），而 PDF 文件名或
+    报告正文可能使用全称。``alias_workbook`` 通过披露地址把全称关联到
+    同一家公司，避免短名称与全称被分到“其他”。
+    """
+    frame = pd.read_excel(path).fillna("")
+    if company_column not in frame.columns or group_column not in frame.columns:
+        raise ValueError(
+            f"公司分类工作簿缺少列：{company_column} / {group_column}"
+        )
+
+    peer_group_map: dict[str, str] = {}
+    company_type_map: dict[str, str] = {}
+    group_by_url: dict[str, str] = {}
+    for _, row in frame.iterrows():
+        company_name = str(row.get(company_column, "") or "").strip()
+        group = str(row.get(group_column, "") or "").strip()
+        if not company_name or not group:
+            continue
+        peer_group_map[company_name] = group
+        company_type_map[company_name] = _normalize_company_type(
+            row.get(type_column, ""),
+            default=default_company_type,
+        )
+        url = _normalize_url(
+            row.get("报告披露地址", row.get("偿付能力披露地址", ""))
+        )
+        if url:
+            group_by_url[url] = group
+
+    alias_path = Path(alias_workbook) if alias_workbook else None
+    if alias_path is not None and alias_path.exists():
+        alias_frame = pd.read_excel(alias_path).fillna("")
+        for _, row in alias_frame.iterrows():
+            company_name = str(row.get("公司", "") or "").strip()
+            url = _normalize_url(
+                row.get(
+                    "偿付能力披露地址",
+                    row.get("报告披露地址", ""),
+                )
+            )
+            group = group_by_url.get(url)
+            if not company_name or not group:
+                continue
+            peer_group_map.setdefault(company_name, group)
+            company_type_map.setdefault(company_name, default_company_type)
+
+    for short_name, aliases in _NON_LIFE_SHORT_ALIASES.items():
+        group = peer_group_map.get(short_name)
+        if not group:
+            continue
+        for alias in aliases:
+            peer_group_map.setdefault(alias, group)
+            company_type_map.setdefault(alias, default_company_type)
+
+    if not peer_group_map:
+        raise ValueError(f"公司分类工作簿没有可用记录：{path}")
+    return CompanyMaster(
+        peer_group_map=peer_group_map,
+        company_type_map=company_type_map,
+        default_peer_group=str(default_peer_group or "其他").strip(),
+        default_company_type=str(default_company_type or "财险").strip(),
+    )
 
 
 def resolve_company_identity(

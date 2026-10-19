@@ -9,8 +9,13 @@ import streamlit as st
 from services.report_profiles import ProfileValidationError, ReportProfile
 from services.solvency_metric_registry import extend_taxonomy
 
-from .cache import export_profile_workbook, read_taxonomy, read_uploaded_profile
-from .config import CONFIG_DIR
+from .cache import (
+    export_profile_workbook,
+    read_profile_registry,
+    read_taxonomy,
+    read_uploaded_profile,
+)
+from .config import CONFIG_DIR, NON_LIFE_PROFILE_FILE, ROOT
 from .session import reset_profile_results
 
 
@@ -43,6 +48,26 @@ def render_profile_settings(
                     "目标表和定位关键词可以通过配置工作簿维护。上传后先进行结构与引用校验，"
                     "仅在当前浏览器会话中生效，不会覆盖项目内的正式配置。"
                 )
+                try:
+                    default_profile_label = NON_LIFE_PROFILE_FILE.relative_to(ROOT)
+                except ValueError:
+                    default_profile_label = NON_LIFE_PROFILE_FILE
+                st.caption(
+                    f"默认本地 Profile：`{default_profile_label}`。"
+                    "修改该文件后会自动失效并重新读取；也可点击下方按钮立即刷新。"
+                )
+                if not NON_LIFE_PROFILE_FILE.exists():
+                    st.warning(
+                        f"默认 Profile 文件不存在：{NON_LIFE_PROFILE_FILE}",
+                        icon=":material/warning:",
+                    )
+                if st.button(
+                    "立即刷新本地 Profile 配置",
+                    key="refresh_local_profile",
+                    icon=":material/refresh:",
+                ):
+                    read_profile_registry.clear()
+                    st.rerun()
                 uploaded_profile_file = st.file_uploader(
                     "上传报告 Profile 配置工作簿",
                     type=["xlsx"],

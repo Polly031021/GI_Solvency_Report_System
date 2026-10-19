@@ -203,6 +203,12 @@ def _clean_rows(rows: list[list]) -> list[list[str]]:
     return [row for row in cleaned if any(cell for cell in row)]
 def _repair_solvency_main(rows: list[list[str]]) -> list[list[str]]:
     repaired = [["指标名称", "本季度末数", "上季度末数", "下季度末预测数"]]
+    capital_component_labels = (
+        "核心一级资本",
+        "核心二级资本",
+        "附属一级资本",
+        "附属二级资本",
+    )
     for row in rows:
         if len(row) < 3 or "指标名称" in row[0]:
             continue
@@ -211,7 +217,10 @@ def _repair_solvency_main(rows: list[list[str]]) -> list[list[str]]:
         current = cells[2].strip()
         previous = "".join(cells[3:5]).strip()
         forecast = "".join(cells[5:7]).strip()
-        if label and any((current, previous, forecast)):
+        keep_blank_capital_row = any(
+            term in label for term in capital_component_labels
+        )
+        if label and (any((current, previous, forecast)) or keep_blank_capital_row):
             repaired.append([label, current, previous, forecast])
     return repaired
 
@@ -473,6 +482,67 @@ def page_table_candidates(
     return sorted(
         fingerprints.values(),
         key=lambda item: (-item.quality_score, item.strategy != "线框识别", item.table_index),
+    )
+
+
+def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
+    """提取页面内的全部表格，不按目标表首尾项目裁切。
+
+    一页多表时，调用方应把返回的每个网格保留成独立表，而不是拼成一张
+    大表。这样 Step3 仍能按每张表自己的表头识别期间口径，同时不会因为
+    原先的边界裁剪漏掉目标表中的指标。
+    """
+    best_tables: list[list[list[str]]] = []
+    best_score = -1.0
+    best_strategy = ""
+    for strategy, settings in _PAGE_STRATEGIES:
+        try:
+            raw_tables = page.extract_tables(table_settings=settings) or []
+        except Exception:
+            raw_tables = []
+
+        cleaned_tables: list[list[list[str]]] = []
+        seen: set[str] = set()
+        for raw_rows in raw_tables:
+            rows = _clean_rows(raw_rows)
+            if len(rows) < 2:
+                continue
+            width = max((len(row) for row in rows), default=0)
+            if width < 2:
+                continue
+            fingerprint = _candidate_fingerprint(rows)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            cleaned_tables.append(rows)
+
+        if not cleaned_tables:
+            continue
+        numeric_cells = sum(
+            bool(re.search(r"\d", cell))
+            for table in cleaned_tables
+            for row in table
+            for cell in row
+            if cell
+        )
+        # 优先保证“表数”完整，再比较数值单元格和行数；线框识别结果
+        # 通常更规整，同等完整度下优先保留线框结果。
+        score = (
+            len(cleaned_tables) * 25
+            + numeric_cells * 0.5
+            + sum(len(table) for table in cleaned_tables) * 0.5
+            + (3 if strategy == "线框识别" else 0)
+        )
+        if score > best_score:
+            best_score = score
+            best_tables = cleaned_tables
+            best_strategy = strategy
+
+    if not best_tables:
+        return [], "整页全表提取未识别到可用表格"
+    return (
+        best_tables,
+        f"整页全表（{best_strategy}｜共{len(best_tables)}张表）",
     )
 
 
