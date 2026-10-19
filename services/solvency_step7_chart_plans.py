@@ -29,6 +29,7 @@ UNDERWRITING_EFFICIENCY_SCATTER = "underwriting_efficiency_scatter"  # ★ 新�
 STRUCTURE_CHANGE_CHART = "structure_change_chart"  # ★ 新增：结构变化组合图
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
 INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
+COMPANY_LINE_TREND = "company_line_trend"                # ★ 新增：每家公司一个跨期折线小图
 
 
 @dataclass(frozen=True)

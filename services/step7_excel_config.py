@@ -24,6 +24,7 @@ from .solvency_step7_chart_plans import (
     PENDING_DEFINITION,
     CAPABILITY_RADAR,          # ★ 新增
     INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增：行业整体保费规模与结构
+    COMPANY_LINE_TREND,        # ★ 新增：公司折线趋势图
 )
 
 
@@ -47,6 +48,7 @@ CHART_KIND_LABELS = {
     "能力雷达图": CAPABILITY_RADAR,     # ★ 新增
     "行业保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增
     "行业整体保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,
+    "公司折线趋势图": COMPANY_LINE_TREND,   # ★ 新增
     "待定": PENDING_DEFINITION,
 }
 
