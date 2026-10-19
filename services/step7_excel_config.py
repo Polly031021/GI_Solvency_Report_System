@@ -28,6 +28,7 @@ from .solvency_step7_chart_plans import (
     PERFORMANCE_PATTERN_GRID,
     INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增：行业整体保费规模与结构
     INDUSTRY_MARKET_SHARE,  # ★ 新增：行业市场份额
+    COMPANY_LINE_TREND,        # ★ 新增：公司折线趋势图
 )
 
 
@@ -55,6 +56,7 @@ CHART_KIND_LABELS = {
     "行业保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增
     "行业整体保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,
     "行业市场份额图": INDUSTRY_MARKET_SHARE,
+    "公司折线趋势图": COMPANY_LINE_TREND,   # ★ 新增
     "待定": PENDING_DEFINITION,
 }
 

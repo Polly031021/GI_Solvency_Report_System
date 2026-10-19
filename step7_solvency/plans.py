@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pandas as pd
 from services.step7_excel_config import Step7Module
 from services.solvency_step7_chart_plans import (
+    COMPANY_LINE_TREND,
     COMPANY_PERIOD_BAR,
     CAPITAL_AMOUNT_COMBO,
     CAPITAL_EFFICIENCY_BUBBLE,
@@ -36,6 +37,7 @@ from .specs import COMPONENT_STACK_SPECS, RISK_RATIO_SCATTER_SPECS
 from .plan_inputs import chart_input_metric_codes
 from .plan_renderers import (
     render_plan_capability_radar,
+    render_plan_company_line_trend,
     render_plan_industry_premium_structure,
     render_plan_industry_market_share,
     render_plan_capital_amount_combo,
@@ -243,6 +245,13 @@ def render_combination_analysis(
     elif plan.kind == CAPABILITY_RADAR:
         render_plan_capability_radar(
             chart_frame, highlight_company, key_prefix, module_override, periods
+        )
+        return
+
+    # ★ 新增：每家公司一个跨期折线小图（核心指标速览）
+    elif plan.kind == COMPANY_LINE_TREND:
+        render_plan_company_line_trend(
+            chart_frame, highlight_company, key_prefix, periods
         )
         return
 

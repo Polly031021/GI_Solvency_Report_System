@@ -52,6 +52,7 @@ from .trend import (
     build_single_metric_trend_charts,
     build_company_bar_trend_chart,
     build_company_period_bar_chart,
+    build_company_line_trend_chart,
     metric_bar_axis_domain,
 )
 
@@ -161,6 +162,7 @@ __all__ = [
     "build_single_metric_trend_charts",
     "build_company_bar_trend_chart",
     "build_company_period_bar_chart",
+    "build_company_line_trend_chart",
     "metric_bar_axis_domain",
     "solvency_ratio_axis_domain",
     "build_solvency_ratio_combo_chart",
