@@ -195,7 +195,8 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
     st.caption(
         f"横轴为「{revenue_code}」在样本内的排名，纵轴为「{profit_code}」排名；"
         "反向坐标（第 1 名在右上角）。"
-        "公司按利润排名的年度轨迹自动归类到以下模式："
+        "每家小图的坐标轴按该公司自身排名范围自适应缩放，便于看出排名波动；"
+        "刻度数字仍为真实名次。公司按利润排名年度轨迹归类为："
         "逐年提升 / 稳健经营 / V形反转 / 大起大落 / 持续恶化。"
     )
     # ★ 新增：数据诊断展开区，帮用户排查"某年缺失"的具体原因
@@ -749,12 +750,45 @@ def render_plan_risk_ratio_scatter(
             )
 
 
+# 前三大财险公司名称前缀（实际数据名为人保产险/平安产险/太保产险）
+TOP3_NONLIFE_PREFIXES = ("人保", "平安", "太保")
+
+
+def _split_top10_peer_group(frame: pd.DataFrame) -> pd.DataFrame:
+    """把“同业分类”里的“前十大”拆成“前三大”/“前4-10”。
+
+    - 公司名以“人保/平安/太保”开头的 → “前三大”
+    - 其余原“前十大”公司 → “前4-10”
+    - 其他分类原样保留。
+
+    作用于 DataFrame 的“同业分类”列；capability_scores 会按该列分组建立打分池，
+    因此前三家在 3 家内做百分位排名，前4-10 在 7 家内做百分位排名。
+    """
+    if "同业分类" not in frame.columns or frame.empty:
+        return frame
+    frame = frame.copy()
+    company = frame["公司"].astype(str).str.strip()
+    category = frame["同业分类"].astype(str).str.strip()
+    is_top10 = category.eq("前十大")
+    is_top3 = company.str.startswith(TOP3_NONLIFE_PREFIXES)
+    frame.loc[is_top10 & is_top3, "同业分类"] = "前三大"
+    frame.loc[is_top10 & ~is_top3, "同业分类"] = "前4-10"
+    return frame
+
+
 def render_plan_capability_radar(
     chart_frame, highlight_company, key_prefix, module_override, periods
 ):
     cfg = module_override.chart_config if module_override else {}
     axes_config = cfg.get("axes") or DEFAULT_CAPABILITY_AXES
     axes_labels = [ax["label"] for ax in axes_config]
+
+    # ★ 打分前先把“前十大”拆成“前三大”/“前4-10”：
+    #   前三大 = 人保、平安、太保三家财险公司（实际数据名为人保产险/平安产险/太保产险，
+    #   故按公司名前缀匹配）；其余前十大公司归入“前4-10”。
+    #   拆分作用于 chart_frame 的“同业分类”列，使 capability_scores 的分组打分池
+    #   与下方展示分组口径一致：前三家在 3 家内排名，前4-10 在 7 家内排名。
+    chart_frame = _split_top10_peer_group(chart_frame)
 
     latest_period_for_anchor = str(periods[-1]) if periods else ""
     baseline_full = chart_frame[
@@ -769,12 +803,39 @@ def render_plan_capability_radar(
     )
 
     if score_all.empty:
+        # ---------- 诊断：定位打分池为空的具体原因 ----------
+        required_codes = [str(ax.get("code", "")).strip() for ax in axes_config]
+        if "指标编码" in chart_frame.columns:
+            present_codes = sorted(
+                {c for c in chart_frame["指标编码"].dropna().astype(str) if c.strip()}
+            )
+        else:
+            present_codes = []
+        missing_codes = [c for c in required_codes if c not in present_codes]
+        latest_period = str(periods[-1]) if periods else ""
+        if latest_period and "报告期" in chart_frame.columns:
+            latest_rows = chart_frame[
+                chart_frame["报告期"].astype(str).eq(latest_period)
+            ]
+            latest_n_companies = latest_rows["公司"].nunique() if "公司" in latest_rows.columns else 0
+            latest_n_rows = len(latest_rows)
+        else:
+            latest_n_rows = 0
+            latest_n_companies = 0
         st.warning(
-            "能力五边形需要以下五个指标：" + "、".join(axes_labels) + "。当前筛选范围缺少部分数据。"
+            "能力五边形当前无法打分，诊断如下：\n"
+            f"- 筛选后总记录数：{len(chart_frame)}；\n"
+            f"- 最新报告期「{latest_period or '（无）'}」在筛选后仅剩 {latest_n_rows} 行、"
+            f"{latest_n_companies} 家公司；\n"
+            f"- 要求的指标编码：{'、'.join(required_codes)}；\n"
+            f"- 数据中缺失的编码：{'、'.join(missing_codes) if missing_codes else '无（5 个编码都在）'}；\n"
+            f"- 数据中实际存在的编码：{'、'.join(present_codes) if present_codes else '无'}。\n"
+            "常见原因：89 家数据的「指标编码」列与标准编码不一致（如用了中文名），"
+            "或最新报告期这一期缺少上述 5 个指标。"
         )
         return
 
-    # ---------- 取得每家公司的同业分类 ----------
+    # ---------- 取得每家公司的同业分类（此时已是拆分后的“前三大”/“前4-10”） ----------
     category_column = "同业分类" if "同业分类" in chart_frame.columns else None
     if category_column:
         cat_map = (
@@ -791,6 +852,10 @@ def render_plan_capability_radar(
 
     # ---------- 分类顺序 ----------
     ordered_categories = list(dict.fromkeys(str(category) for category in score_all["_分类"]))
+    # “前三大”固定排在“前4-10”之前，两组相邻展示
+    if "前三大" in ordered_categories and "前4-10" in ordered_categories:
+        ordered_categories.remove("前三大")
+        ordered_categories.insert(ordered_categories.index("前4-10"), "前三大")
     # 把 "未分类" 放到最后
     if "未分类" in ordered_categories:
         ordered_categories.remove("未分类")
@@ -800,9 +865,9 @@ def render_plan_capability_radar(
     st.caption(
         f"展示 {latest_period}；每家公司单独一张能力五边形，"
         "按“同业分类”分组排列。"
-        "顶点依次为：" + "、".join(axes_labels) + "。打分基准 = 全量 "
-        f"{len(score_all)} 家（百分位排名），"
-        "50 分 ≈ 行业中位数水平（灰色虚线五边形）。"
+        "顶点依次为：" + "、".join(axes_labels) + "。"
+        "打分在各分组内做百分位排名（前三大 3 家互比、前4-10 7 家互比），"
+        "50 分 ≈ 本组中位数水平（灰色虚线五边形）。"
     )
 
     # ---------- 按分类逐组渲染 ----------
