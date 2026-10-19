@@ -250,7 +250,7 @@ def selected_chart_names(
         if second and second != "全部":
             pool = [m for m in pool if m.level_two == second]
         # 若侧边栏选了某个具体图表，只渲染它；否则渲染该层级下全部
-        if active_chart:
+        if active_chart and second and second != "全部":
             matched = [m for m in pool if m.chart_name == active_chart]
             if matched:
                 return [m.chart_name for m in matched]

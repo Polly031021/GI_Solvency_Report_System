@@ -58,7 +58,7 @@ def _metric_codes() -> list[str]:
     for entry in (*COMPANY_NAVIGATION, *INDUSTRY_NAVIGATION):
         codes.extend(entry.metric_codes)
     codes.extend([
-        "REGISTERED_CAPITAL", "SIGNED_PREMIUM", "NET_PROFIT",
+        "REGISTERED_CAPITAL", "SIGNED_PREMIUM_MOTOR", "SIGNED_PREMIUM", "NET_PROFIT",
         "RECOGNIZED_ASSETS", "MINIMUM_CAPITAL",
     ])
     return list(dict.fromkeys(code for code in codes if code))
@@ -73,6 +73,11 @@ def _row(
     period_index: int,
 ) -> dict[str, object]:
     percent = _is_percent_metric(code)
+    period_scope = (
+        "本年累计数"
+        if code in {"SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"}
+        else "本季度末数"
+    )
     if percent:
         value = 80.0 + metric_index * 3 + company_index * 12.5 + period_index * 4
         unit, data_type = "%", "百分比"
@@ -91,7 +96,7 @@ def _row(
         "二级模块": "资本",
         "指标编码": code,
         "指标名称": f"指标{metric_index}",
-        "期间口径": "本季度末数",
+        "期间口径": period_scope,
         "数值": value,
         "单位": unit,
         "数据类型": data_type,

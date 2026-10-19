@@ -13,6 +13,7 @@ from services.solvency_step7_chart_plans import (
     CAPITAL_RATIO_COMBO,
     CAPITAL_STRUCTURE_COMBO,
     CAPABILITY_RADAR,
+    INDUSTRY_PREMIUM_STRUCTURE,
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
     COMPONENT_STACK,
@@ -34,6 +35,7 @@ from .specs import COMPONENT_STACK_SPECS, RISK_RATIO_SCATTER_SPECS
 from .plan_inputs import chart_input_metric_codes
 from .plan_renderers import (
     render_plan_capability_radar,
+    render_plan_industry_premium_structure,
     render_plan_capital_amount_combo,
     render_plan_capital_efficiency_bubble,
     render_plan_capital_ratio_combo,
@@ -64,6 +66,7 @@ def render_combination_analysis(
     key_prefix: str,
     financing_data: pd.DataFrame | None = None,
     module_override: Step7Module | None = None,  # ★ 新增
+    industry_frame: pd.DataFrame | None = None,
 ) -> None:
     """Render an approved multi-metric plan selected by chart name.
 
@@ -93,6 +96,16 @@ def render_combination_analysis(
 
     if plan.kind == STRUCTURE_CHANGE_CHART:
         render_plan_structure_change_chart(chart_name, frame)
+        return
+
+    # ★ 行业整体保费结构：使用上传数据中的全部公司，不受 Step7 公司/类型筛选影响
+    if plan.kind == INDUSTRY_PREMIUM_STRUCTURE:
+        render_plan_industry_premium_structure(
+            industry_frame if industry_frame is not None else frame,
+            unit_mode=unit_mode,
+            key_prefix=key_prefix,
+            module_override=module_override,
+        )
         return
 
     # ★ 新增：公司业绩展示（收入排名—利润排名，按模式分列）

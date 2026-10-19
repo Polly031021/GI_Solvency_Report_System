@@ -77,7 +77,23 @@ def _navigation_template(
 
 
 def company_notes_template() -> pd.DataFrame:
-    return _navigation_template(COMPANY_NAVIGATION, prefix="S7")
+    template = _navigation_template(COMPANY_NAVIGATION, prefix="S7")
+    industry_row = pd.DataFrame(
+        [
+            {
+                "模块ID": "S7_INDUSTRY_PREMIUM",
+                "一级分类": "行业概览",
+                "二级分类": "规模与发展",
+                "对应图表名称": "行业整体保费规模与结构",
+                "分析内容-默认": "",
+                "分析内容-自定义": "",
+                "注释内容": "",
+                "图片文件名": "",
+            }
+        ],
+        columns=NOTE_COLUMNS,
+    )
+    return pd.concat([industry_row, template], ignore_index=True)
 
 
 def industry_notes_template() -> pd.DataFrame:

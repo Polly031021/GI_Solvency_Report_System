@@ -28,6 +28,7 @@ CAPABILITY_RADAR = "capability_radar"          # ★ 新增
 UNDERWRITING_EFFICIENCY_SCATTER = "underwriting_efficiency_scatter"  # ★ 新增：承保效益散点图
 STRUCTURE_CHANGE_CHART = "structure_change_chart"  # ★ 新增：结构变化组合图
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
+INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,10 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     "公司业绩展示": ChartPlan(
         PERFORMANCE_PATTERN_GRID,
         "按业绩模式（逐年提升/稳健经营/V形反转/大起大落/持续恶化）分列展示",
+    ),
+    "行业整体保费规模与结构": ChartPlan(
+        INDUSTRY_PREMIUM_STRUCTURE,
+        "近五年行业保费合计堆叠柱（车险/非车险）叠加车险、非车险及合计趋势线",
     ),
 }
 

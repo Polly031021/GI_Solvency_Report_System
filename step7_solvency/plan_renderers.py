@@ -15,6 +15,7 @@ from services.solvency_navigation import (
 from services.solvency_step7_charts import (
     CAPITAL_STRUCTURE_COLORS,
     build_capability_radar_chart,
+    build_industry_premium_structure_chart,
     build_structure_change_chart,
     build_capital_amount_combo,
     build_capital_ratio_combo_chart,
@@ -32,6 +33,7 @@ from services.solvency_step7_charts import (
     PERFORMANCE_PATTERN_ORDER,
     classify_performance_pattern,
     build_performance_pattern_trajectory,
+    prepare_industry_premium_annual,
 )
 from .fragments import (
     render_capital_efficiency_bubble_fragment,
@@ -898,3 +900,188 @@ def render_plan_underwriting_efficiency_scatter(frame, key_prefix, module_overri
         chart_config=(module_override.chart_config if module_override else {}),
         key_prefix=key_prefix,
     )
+
+
+def render_plan_industry_premium_structure(
+    industry_frame,
+    *,
+    unit_mode,
+    key_prefix,
+    module_override,
+):
+    """Render the five-year industry premium overview with an all-company scope."""
+    cfg = module_override.chart_config if module_override else {}
+    year_window = int(cfg.get("years", 5) or 5)
+    annual_scope = str(cfg.get("annual_scope", "") or "").strip()
+    annual, detail, companies = prepare_industry_premium_annual(
+        industry_frame,
+        years=year_window,
+        annual_scope=annual_scope,
+    )
+    if annual.empty:
+        st.warning("当前数据没有可用的行业年度累计保费记录。")
+        return
+
+    complete = annual[annual["完整"].astype(bool)].copy()
+    available = annual[
+        annual["合计"].notna()
+        | annual["车险"].notna()
+        | annual["非车险"].notna()
+    ].copy()
+    if available.empty:
+        st.warning("当前数据没有可用的行业年度保费记录。")
+        return
+
+    unit = unit_mode if unit_mode in {"十亿元", "亿元", "百万元", "十万元"} else "亿元"
+    divisor = {
+        "十亿元": 100_000.0,
+        "亿元": 10_000.0,
+        "百万元": 100.0,
+        "十万元": 10.0,
+    }[unit]
+
+    def display_value(value) -> float | None:
+        if value is None or pd.isna(value):
+            return None
+        return float(value) / divisor
+
+    value_format = ",.1f" if unit == "十亿元" else ",.0f"
+
+    base = complete if not complete.empty else available
+    latest = base.iloc[-1]
+    previous = base.iloc[-2] if len(base) >= 2 else None
+    latest_is_complete = bool(latest.get("完整", False))
+    latest_total = display_value(latest.get("合计"))
+    latest_car = display_value(latest.get("车险"))
+    latest_non_car = display_value(latest.get("非车险"))
+    latest_car_value = 0.0 if latest_car is None or pd.isna(latest_car) else float(latest_car)
+    latest_non_car_value = (
+        0.0 if latest_non_car is None or pd.isna(latest_non_car) else float(latest_non_car)
+    )
+    car_share = (
+        None
+        if not latest_total or latest_total <= 0
+        else (latest_car_value / float(latest_total) * 100)
+    )
+    non_car_share = (
+        None
+        if not latest_total or latest_total <= 0
+        else (latest_non_car_value / float(latest_total) * 100)
+    )
+
+    st.caption("指标：签单保费")
+    metric_columns = st.columns(4)
+    latest_year = str(latest.get("年度", "") or "")
+    metric_columns[0].metric(
+        (
+            f"最新完整年度合计（{latest_year}）"
+            if latest_year and latest_is_complete
+            else f"最新年度合计（{latest_year}）"
+        ),
+        "—" if latest_total is None else f"{latest_total:{value_format}} {unit}",
+        border=True,
+    )
+    previous_total = None if previous is None else previous.get("合计")
+    previous_year = None if previous is None else str(previous.get("年度", ""))
+    is_year_over_year = bool(
+        previous_year
+        and str(latest.get("年度", "")).isdigit()
+        and previous_year.isdigit()
+        and int(latest["年度"]) - int(previous_year) == 1
+    )
+    growth_label = (
+        "同比增速"
+        if is_year_over_year and latest_is_complete
+        else "较上一有数年度"
+    )
+    latest_total_raw = latest.get("合计")
+    if (
+        previous_total is not None
+        and pd.notna(previous_total)
+        and float(previous_total) != 0
+        and latest_total_raw is not None
+        and pd.notna(latest_total_raw)
+    ):
+        growth = (float(latest_total_raw) / float(previous_total) - 1) * 100
+        metric_columns[1].metric(
+            growth_label,
+            f"{growth:+.1f}%",
+            border=True,
+        )
+    else:
+        metric_columns[1].metric(growth_label, "—", border=True)
+    if len(complete) >= 2 and float(complete.iloc[0]["合计"] or 0) > 0:
+        cagr = (
+            (float(latest["合计"]) / float(complete.iloc[0]["合计"]))
+            ** (1 / (len(complete) - 1))
+            - 1
+        ) * 100
+        metric_columns[2].metric(
+            f"{len(complete)}年复合增速",
+            f"{cagr:+.1f}%",
+            border=True,
+        )
+    else:
+        metric_columns[2].metric("复合增速", "—", border=True)
+    metric_columns[3].metric(
+        "车险 / 非车险占比",
+        "—"
+        if car_share is None or non_car_share is None
+        else f"{car_share:.0f}% / {non_car_share:.0f}%",
+        border=True,
+    )
+
+    legend_items = [
+        ("#1E49E2", "车险（柱）", "square"),
+        ("#00B8F5", "非车险（柱）", "square"),
+        ("#7213EA", "车险（趋势线）", "line"),
+        ("#FD349C", "非车险（趋势线）", "line"),
+        ("#00338D", "合计（趋势线）", "line"),
+    ]
+    render_chart_legend(legend_items)
+    try:
+        chart = build_industry_premium_structure_chart(annual, unit_mode=unit)
+        st.altair_chart(
+            chart,
+            width="stretch",
+            key=f"{key_prefix}_industry_premium_structure",
+        )
+    except ValueError as exc:
+        st.warning(str(exc))
+        return
+
+    incomplete = annual[~annual["完整"].astype(bool)]
+    anomaly_count = int(pd.to_numeric(annual["异常数"], errors="coerce").fillna(0).sum())
+
+    with st.expander("查看行业年度明细"):
+        if not incomplete.empty:
+            company_count = max(len(companies), 1)
+            missing_labels = []
+            for row in incomplete.itertuples(index=False):
+                if int(row.公司数) == 0:
+                    reason = "缺少年度累计"
+                elif int(row.公司数) < company_count * 0.8:
+                    reason = "年度累计覆盖不足"
+                elif int(row.车险公司数) < company_count * 0.8:
+                    reason = "车险拆分覆盖不足"
+                else:
+                    reason = "数据不完整"
+                missing_labels.append(f"{row.年度}（{reason}）")
+            st.caption("数据不完整的年度：" + "、".join(missing_labels))
+        if anomaly_count:
+            st.caption(
+                f"检测到 {anomaly_count} 条公司年度值疑似单位/量级异常，"
+                "图表未自动改写原始数值；请核对明细。"
+            )
+        display = detail.copy()
+        for column in ("车险", "非车险", "合计"):
+            if column in display.columns:
+                display[column] = pd.to_numeric(display[column], errors="coerce") / divisor
+        display = display.rename(
+            columns={
+                "车险": f"车险（{unit}）",
+                "非车险": f"非车险（{unit}）",
+                "合计": f"合计（{unit}）",
+            }
+        )
+        st.dataframe(display, width="stretch", hide_index=True)

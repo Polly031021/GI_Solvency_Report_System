@@ -39,6 +39,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     COMPONENT_STACK,
     EFFECT_DIVERGING,
     FINANCING_TABLE,
+    INDUSTRY_PREMIUM_STRUCTURE,
     KEY_METRICS_TABLE,
     MARKET_CREDIT_MATRIX,
     PENDING_DEFINITION,
@@ -112,6 +113,12 @@ MODULE_SPECS = (
     ("经营效益", STRUCTURE_CHANGE_CHART, ("NET_PROFIT", "SIGNED_PREMIUM"), {}),
     ("资本规模", STRUCTURE_CHANGE_CHART, ("CORE_T1_CAPITAL", "ANC_T1_CAPITAL", "ACTUAL_CAPITAL"), {}),
     ("公司业绩展示", PERFORMANCE_PATTERN_GRID, ("SIGNED_PREMIUM", "NET_PROFIT"), {}),
+    (
+        "行业整体保费规模与结构",
+        INDUSTRY_PREMIUM_STRUCTURE,
+        ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"),
+        {"years": 5},
+    ),
 )
 
 
@@ -156,6 +163,40 @@ def test_excel_driven_step7_charts() -> None:
     print(f"PASS Excel 驱动 STEP7：{len(MODULE_SPECS)} 种图表类型全部渲染成功")
 
 
+def test_industry_premium_template_module() -> None:
+    """模板中的“行业概览 > 规模与发展”必须实际渲染行业保费结构图。"""
+    template_path = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    if not template_path.exists():
+        print("SKIP 行业概览模板测试：未找到 Step7-偿付能力公司报告展示模块.xlsx")
+        return
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "行业概览"
+    at.session_state["company_nav_level_two"] = "规模与发展"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.metric) >= 4, "行业保费结构页的四个指标卡未渲染"
+
+    # Selecting “全部” must render the full industry pool, not keep the
+    # previously selected single chart.
+    at.session_state["company_nav_level_two"] = "全部"
+    at.session_state["company_nav_chart"] = "承保效益"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.metric) >= 4, "选择“全部”后行业保费结构图未恢复渲染"
+    print("PASS 行业概览 > 规模与发展：行业保费结构图与“全部”切换正常")
+
+
 if __name__ == "__main__":
     test_excel_driven_step7_charts()
+    test_industry_premium_template_module()
     print("全部通过")

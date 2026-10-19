@@ -96,6 +96,15 @@ from .structure import (
     build_structure_change_chart,
 )
 
+from .industry_premium import (
+    ANNUAL_SCOPE_ALIASES,
+    DISPLAY_UNITS,
+    MOTOR_PREMIUM_CODE,
+    TOTAL_PREMIUM_CODE,
+    build_industry_premium_structure_chart,
+    prepare_industry_premium_annual,
+)
+
 from .performance import (
     PERFORMANCE_PATTERN_ORDER,
     classify_performance_pattern,
@@ -171,6 +180,12 @@ __all__ = [
     "build_capability_radar_chart",
     "display_period_label",
     "build_structure_change_chart",
+    "ANNUAL_SCOPE_ALIASES",
+    "DISPLAY_UNITS",
+    "MOTOR_PREMIUM_CODE",
+    "TOTAL_PREMIUM_CODE",
+    "build_industry_premium_structure_chart",
+    "prepare_industry_premium_annual",
     "PERFORMANCE_PATTERN_ORDER",
     "classify_performance_pattern",
     "build_performance_pattern_trajectory",
