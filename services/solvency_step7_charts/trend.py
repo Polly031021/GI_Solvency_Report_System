@@ -522,7 +522,18 @@ def build_company_line_trend_chart(
     metric["_首末年"] = metric["年份"].isin([first_year, last_year])
 
     line_color = "#00338D"
-    base = alt.Chart(metric)
+    base = alt.Chart()
+
+    # 单位自适应：比率类（%）用整数百分比格式；金额类（元等）用 ~s 自动缩写
+    unit = ""
+    if "单位" in metric.columns:
+        unit_series = metric["单位"].dropna().astype(str)
+        if not unit_series.empty:
+            unit = unit_series.iloc[0].strip()
+    is_pct = unit == "%"
+    y_format = ",.0f" if is_pct else "~s"
+    title_suffix = f"（{unit}）" if unit else ""
+
     line = base.mark_line(color=line_color, strokeWidth=2.2, opacity=0.95).encode(
         x=alt.X(
             "年份:N",
@@ -531,15 +542,15 @@ def build_company_line_trend_chart(
         ),
         y=alt.Y(
             "数值:Q",
-            title="%",
-            axis=alt.Axis(title=None, labelFontSize=8, format=",.0f"),
+            title=None,
+            axis=alt.Axis(title=None, labelFontSize=8, format=y_format),
             scale=y_scale,
         ),
     )
     points = base.mark_point(filled=True, size=50, color=line_color).encode(
         x=alt.X("年份:N", sort=year_order),
         y=alt.Y("数值:Q", scale=y_scale),
-        tooltip=["公司:N", "年份:N", alt.Tooltip("数值:Q", format=",.1f")],
+        tooltip=["公司:N", "年份:N", alt.Tooltip("数值:Q", format=",.1f"), "单位:N"],
     )
     labels = (
         base.transform_filter(alt.datum["_首末年"])
@@ -547,7 +558,7 @@ def build_company_line_trend_chart(
         .encode(
             x=alt.X("年份:N", sort=year_order),
             y=alt.Y("数值:Q", scale=y_scale),
-            text=alt.Text("数值:Q", format=",.0f"),
+            text=alt.Text("数值:Q", format=y_format),
         )
     )
     layers: list[alt.Chart] = [line, points, labels]
@@ -571,5 +582,5 @@ def build_company_line_trend_chart(
             spacing=16,
         )
         .resolve_scale(y="shared")
-        .properties(title=f"{name}公司年度走势（%）")
+        .properties(title=f"{name}公司年度走势{title_suffix}")
     )

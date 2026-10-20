@@ -247,45 +247,48 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
             hide_index=True,
         )
 
-    # ---------- 5. 分列并排渲染 ----------
-    _pattern_cols = st.columns(len(active_patterns), gap="small")
-    for _col, _pattern in zip(_pattern_cols, active_patterns):
-        with _col:
-            # 列标题（模仿参考图的橙红色横幅）
-            st.markdown(
-                f"<div style='background:#D94330; color:#FFFFFF; "
-                f"text-align:center; padding:6px 0; border-radius:3px; "
-                f"font-weight:700; font-size:13px; margin-bottom:10px;'>"
-                f"{escape(_pattern)}</div>",
-                unsafe_allow_html=True,
-            )
-            # 该列下的公司，纵向堆叠
-            for _company in grouped[_pattern]:
-                # ★ 新增：在公司图上方显示公司名（红色小标题）
-                st.markdown(
-                    f"<div style='text-align:center; "
-                    f"font-size:11px; font-weight:700; color:#C8102E; "
-                    f"margin:6px 0 2px; white-space:nowrap; "
-                    f"overflow:hidden; text-overflow:ellipsis;' "
-                    f"title='{escape(_company)}'>"
-                    f"{escape(_company)}</div>",
-                    unsafe_allow_html=True,
-                )
-                try:
-                    _chart = build_performance_pattern_trajectory(
-                        frame,
-                        _company,
-                        periods_list,
-                        revenue_code=revenue_code,
-                        profit_code=profit_code,
+    # ---------- 5. 按模式纵向分组，组内公司横向网格排列 ----------
+    GRID_COLS = 3
+    for _pattern in active_patterns:
+        _companies = grouped[_pattern]
+        # 模式标题横幅（整行）
+        st.markdown(
+            f"<div style='background:#D94330; color:#FFFFFF; "
+            f"text-align:center; padding:6px 0; border-radius:3px; "
+            f"font-weight:700; font-size:13px; margin:14px 0 10px;'>"
+            f"{escape(_pattern)}（{len(_companies)} 家）</div>",
+            unsafe_allow_html=True,
+        )
+        # 该组公司按 GRID_COLS 横向分批，每批一行
+        for _start in range(0, len(_companies), GRID_COLS):
+            _batch = _companies[_start : _start + GRID_COLS]
+            _cols = st.columns(GRID_COLS, gap="small")
+            for _slot, _company in enumerate(_batch):
+                with _cols[_slot]:
+                    st.markdown(
+                        f"<div style='text-align:center; "
+                        f"font-size:12px; font-weight:700; color:#C8102E; "
+                        f"margin:6px 0 2px; white-space:nowrap; "
+                        f"overflow:hidden; text-overflow:ellipsis;' "
+                        f"title='{escape(_company)}'>"
+                        f"{escape(_company)}</div>",
+                        unsafe_allow_html=True,
                     )
-                    st.altair_chart(
-                        _chart,  # ★ 改动：不再清空 title
-                        width="content",
-                        key=f"{key_prefix}_pattern_{_pattern}_{_company}",
-                    )
-                except ValueError as _exc:
-                    st.warning(f"{_company}：{_exc}")
+                    try:
+                        _chart = build_performance_pattern_trajectory(
+                            frame,
+                            _company,
+                            periods_list,
+                            revenue_code=revenue_code,
+                            profit_code=profit_code,
+                        )
+                        st.altair_chart(
+                            _chart,
+                            width="content",
+                            key=f"{key_prefix}_pattern_{_pattern}_{_company}",
+                        )
+                    except ValueError as _exc:
+                        st.warning(f"{_company}：{_exc}")
 
 
 def render_plan_key_metrics_table(frame, highlight_company):
