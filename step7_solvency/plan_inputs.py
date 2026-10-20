@@ -316,7 +316,40 @@ def capability_scores(
                 score_row[f"{label}_得分"] = score_with_steps(value, steps)
                 continue
 
-            # ② 同分类内百分位排名
+            # ② 保费增速：全行业统一百分位（89家一起比，最好100、最低0）
+            if code == "PREMIUM_GROWTH":
+                pool = baseline_pool_all.get(label, [])
+                n = len(pool)
+                if n == 0:
+                    score_row[f"{label}_得分"] = 0.0
+                elif n == 1:
+                    score_row[f"{label}_得分"] = 100.0
+                else:
+                    below = sum(1 for v in pool if v < value)
+                    equal = sum(1 for v in pool if v == value)
+                    rank = below + (equal + 1) / 2.0
+                    score = (rank - 1.0) / (n - 1.0) * 100.0
+                    score_row[f"{label}_得分"] = max(0.0, min(100.0, score))
+                continue
+
+            # ③ 总资产、实际资本：组内线性比例（组内最高=100，其他=值/最高值×100）
+            if code in {"TOTAL_ASSETS", "ACTUAL_CAPITAL"}:
+                pool = baseline_pool_by_group.get((company_group, label), [])
+                if not pool:
+                    pool = baseline_pool_all.get(label, [])
+                if not pool:
+                    score_row[f"{label}_得分"] = 0.0
+                else:
+                    max_val = max(pool)
+                    if max_val <= 0:
+                        score_row[f"{label}_得分"] = 0.0
+                    else:
+                        score_row[f"{label}_得分"] = max(
+                            0.0, min(100.0, value / max_val * 100.0)
+                        )
+                continue
+
+            # ④ 其他顶点：同分类内百分位排名（原默认逻辑）
             pool = baseline_pool_by_group.get((company_group, label), [])
             if len(pool) < 2:
                 # 组内不足 2 家（无法排名），退回到全量池
