@@ -18,6 +18,7 @@ from services.solvency_step7_chart_plans import (
     INDUSTRY_MARKET_SHARE,
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
+    PREMIUM_GROWTH_STRUCTURE,
     COMPONENT_STACK,
     EFFECT_DIVERGING,
     FINANCING_TABLE,
@@ -56,6 +57,7 @@ from .plan_renderers import (
     render_plan_solvency_matrix,
     render_plan_solvency_ratio_combo,
     render_plan_structure_change_chart,
+    render_plan_premium_growth_structure,
     render_plan_underwriting_efficiency_scatter,
 )
 
@@ -100,6 +102,15 @@ def render_combination_analysis(
 
     if plan.kind == STRUCTURE_CHANGE_CHART:
         render_plan_structure_change_chart(chart_name, frame)
+        return
+
+    if plan.kind == PREMIUM_GROWTH_STRUCTURE:
+        render_plan_premium_growth_structure(
+            chart_name,
+            frame,
+            unit_mode=unit_mode,
+            module_override=module_override,
+        )
         return
 
     # ★ 行业整体保费结构：使用上传数据中的全部公司，不受 Step7 公司/类型筛选影响

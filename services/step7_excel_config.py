@@ -25,6 +25,7 @@ from .solvency_step7_chart_plans import (
     CAPABILITY_RADAR,          # ★ 新增
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
+    PREMIUM_GROWTH_STRUCTURE,
     PERFORMANCE_PATTERN_GRID,
     INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增：行业整体保费规模与结构
     INDUSTRY_MARKET_SHARE,  # ★ 新增：行业市场份额
@@ -52,6 +53,8 @@ CHART_KIND_LABELS = {
     "能力雷达图": CAPABILITY_RADAR,     # ★ 新增
     "承保效益散点图": UNDERWRITING_EFFICIENCY_SCATTER,
     "结构变化组合图": STRUCTURE_CHANGE_CHART,
+    "保费增速结构图": PREMIUM_GROWTH_STRUCTURE,
+    "保费增速组合图": PREMIUM_GROWTH_STRUCTURE,
     "业绩模式分列图": PERFORMANCE_PATTERN_GRID,
     "行业保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增
     "行业整体保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,

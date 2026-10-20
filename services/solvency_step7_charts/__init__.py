@@ -57,6 +57,7 @@ from .trend import (
 )
 
 from .capital import (
+    annual_period_order,
     solvency_ratio_axis_domain,
     build_solvency_ratio_combo_chart,
     build_capital_ratio_combo_chart,
@@ -95,6 +96,15 @@ from .radar import (
 from .structure import (
     display_period_label,
     build_structure_change_chart,
+)
+
+from .premium_growth import (
+    PREMIUM_GROWTH_GROUP_ORDER,
+    PremiumGrowthPanel,
+    build_premium_growth_structure_chart,
+    group_premium_growth_panels,
+    prepare_premium_growth_panel,
+    premium_growth_axis_domain,
 )
 
 from .industry_premium import (
@@ -156,6 +166,7 @@ __all__ = [
     "_signed_stack_positions",
     "metric_rows",
     "trend_y_domain",
+    "annual_period_order",
     "build_metric_trend_group",
     "prepare_metric_trend",
     "build_single_metric_trend_chart",
@@ -190,6 +201,12 @@ __all__ = [
     "build_capability_radar_chart",
     "display_period_label",
     "build_structure_change_chart",
+    "PREMIUM_GROWTH_GROUP_ORDER",
+    "PremiumGrowthPanel",
+    "build_premium_growth_structure_chart",
+    "group_premium_growth_panels",
+    "prepare_premium_growth_panel",
+    "premium_growth_axis_domain",
     "ANNUAL_SCOPE_ALIASES",
     "DISPLAY_UNITS",
     "MOTOR_PREMIUM_CODE",
