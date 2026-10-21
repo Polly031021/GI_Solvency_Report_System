@@ -301,11 +301,12 @@ def build_tables_from_page_results(
                     if _frame_matches_target(rows, target_terms)
                 ]
                 _page_frames = _matched_frames or _frame_rows
-            if whole_page:
-                table_blocks.extend(
-                    {"page": int(_page), "rows": rows}
-                    for rows in _page_frames
-                )
+            # 无论是否开启“整页全表”，都为每个页内帧保留独立表块；
+            # STEP3 只消费 table_blocks，不再依赖合并表的全局表头。
+            table_blocks.extend(
+                {"page": int(_page), "rows": rows}
+                for rows in _page_frames
+            )
             if not _page_frames:
                 continue
             # 一页多表时仍合成同一张中间表展示，只在表与表之间插入
@@ -533,7 +534,7 @@ def build_tables_from_page_results(
             unit=table_unit,
             unit_source=table_unit or "未识别",
             source_grid_raw=grid_raw,
-            table_blocks=table_blocks if whole_page else [],
+            table_blocks=table_blocks,
         )
         raw_tables.append(table_obj)
     return raw_tables

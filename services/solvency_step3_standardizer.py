@@ -7,6 +7,7 @@ while the output remains the canonical narrow table consumed by STEP5.
 """
 
 import io
+import re
 from dataclasses import dataclass
 from copy import copy
 from pathlib import Path
@@ -29,8 +30,12 @@ from .solvency_normalizer import (
     CAPITAL_COMPONENT_ZERO_TABLE_IDS,
     NARROW_TABLE_COLUMNS,
     STANDARD_COLUMNS,
+    _EXACT_LABEL_LOCKS,
+    _normalize_label,
+    infer_period_label,
     normalize_tables,
 )
+from .solvency_table_boundaries import TABLE_CANONICAL_HEADERS
 from .solvency_table_extractor import ExtractedTable
 
 
@@ -380,72 +385,332 @@ def _dependency_closure(target_codes: set[str]) -> set[str]:
     return required
 
 
+_BLOCK_HEADER_LABEL_TERMS = (
+    "指标名称",
+    "项目",
+    "行次",
+    "序号",
+    "指标",
+    "监测指标",
+)
+_BLOCK_HEADER_PERIOD_TERMS = (
+    "本季度",
+    "上季度",
+    "本年累计",
+    "本年度累计",
+    "期末",
+    "期初",
+    "下季度",
+    "预测",
+    "账面价值",
+    "非认可",
+    "认可价值",
+)
+_BLOCK_SUBHEADER_TERMS = (
+    "审计后",
+    "审计前",
+    "账面价值",
+    "非认可",
+    "认可价值",
+    "预测",
+    "本季度",
+    "上季度",
+    "期末",
+    "期初",
+)
+_BLOCK_NUMBER_RE = re.compile(r"^[（(]?[-+]?[\d,]+(?:\.\d+)?[）)]?%?$")
+_DEFAULT_TABLE_HEADERS = {
+    **TABLE_CANONICAL_HEADERS,
+    "NON_LIFE_OPERATING_METRICS": ("指标名称", "本季度数", "本年累计数"),
+    "LIQUIDITY_MONITORING": ("指标名称", "本季度数", "本年累计数"),
+}
+
+
+def _is_block_numeric(value: object) -> bool:
+    text = str(value or "").strip().replace(",", "").replace("，", "")
+    if not text:
+        return False
+    return bool(_BLOCK_NUMBER_RE.fullmatch(text))
+
+
+def _block_header_score(row: Sequence[str]) -> tuple[int, int, int]:
+    text = "".join(str(cell or "") for cell in row)
+    label_hits = sum(term in text for term in _BLOCK_HEADER_LABEL_TERMS)
+    period_hits = sum(term in text for term in _BLOCK_HEADER_PERIOD_TERMS)
+    numeric = sum(_is_block_numeric(cell) for cell in row)
+    score = label_hits * 10 + min(period_hits, 4) * 4 - numeric * 3
+    return score, label_hits, period_hits
+
+
+def _locate_block_header_index(rows: Sequence[Sequence[str]]) -> int | None:
+    best: tuple[int, int] | None = None
+    for index, row in enumerate(rows[:8]):
+        score, label_hits, period_hits = _block_header_score(row)
+        numeric = sum(_is_block_numeric(cell) for cell in row)
+        nonempty = sum(bool(str(cell or "").strip()) for cell in row)
+        if numeric > 1:
+            continue
+        if (
+            index <= 2
+            and nonempty >= 2
+            and numeric == 0
+            and label_hits >= 1
+            and period_hits == 0
+        ):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif label_hits >= 1 and (period_hits >= 1 or label_hits >= 2):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif period_hits >= 2 and numeric == 0:
+            if best is None or score > best[0]:
+                best = (score, index)
+    return best[1] if best is not None and best[0] >= 6 else None
+
+
 def _block_has_metric_header(rows: Sequence[Sequence[str]]) -> bool:
-    terms = (
-        "指标名称",
-        "项目",
-        "行次",
-        "本季度数",
-        "本年累计数",
-        "本季度末数",
-        "上季度末数",
+    return _locate_block_header_index(rows) is not None
+
+
+def _is_block_subheader(row: Sequence[str]) -> bool:
+    text = "".join(str(cell or "") for cell in row)
+    hits = sum(term in text for term in _BLOCK_SUBHEADER_TERMS)
+    numeric = sum(_is_block_numeric(cell) for cell in row)
+    return hits >= 1 and numeric <= 1
+
+
+def _raw_canonical_headers(table: ExtractedTable) -> list[str]:
+    raw = (
+        (getattr(table, "table_config", None) or {}).get("canonical_headers")
+        or _DEFAULT_TABLE_HEADERS.get(str(getattr(table, "table_id", "")))
+        or ()
     )
-    for row in rows[:3]:
-        text = "".join(str(cell) for cell in row)
-        if sum(term in text for term in terms) >= 2:
-            return True
-    return False
+    if isinstance(raw, str):
+        raw = (
+            raw.replace("，", "、")
+            .replace(",", "、")
+            .replace("|", "、")
+            .split("、")
+        )
+    return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
+def _first_column_looks_numeric(rows: Sequence[Sequence[str]]) -> bool:
+    candidates = [row for row in rows if len(row) >= 2 and str(row[1]).strip()]
+    if len(candidates) < 2:
+        return False
+    hits = sum(_is_block_numeric(row[0]) for row in candidates)
+    return hits / len(candidates) >= 0.6
+
+
+def _fit_canonical_headers(
+    headers: Sequence[str],
+    width: int,
+    rows: Sequence[Sequence[str]],
+) -> list[str]:
+    values = [str(item).strip() for item in headers if str(item).strip()]
+    if not values or width <= 0:
+        return []
+    if len(values) == width:
+        return values
+    if len(values) == width + 1 and values[0] in {"行次", "序号", "编号"}:
+        return values[1:]
+    if len(values) == width - 1 and _first_column_looks_numeric(rows):
+        return ["行次", *values]
+    if len(values) > width:
+        return values[:width]
+    return [*values, *[""] * (width - len(values))]
+
+
+def _periods_from_headers(headers: Sequence[str]) -> tuple[str, ...]:
+    return tuple(infer_period_label(str(header or "")) for header in headers)
+
+
+def _merge_wrapped_value_rows(
+    rows: Sequence[Sequence[str]],
+    known_labels: frozenset[str] = frozenset(),
+) -> list[list[str]]:
+    """Merge a wrapped label row with the following value row.
+
+    PDFs often split a long label into two visual lines while the numbers sit
+    on the second line.  The old Step2 merge only accepted rows without any
+    numeric cell, so those labels were left broken.  This conservative pass
+    only merges when the first row is label-only, the next row has numbers,
+    and the next row's text tail is at most two Chinese characters.
+    """
+    normalized = [list(row) for row in rows]
+    if len(normalized) < 2:
+        return normalized
+    output: list[list[str]] = []
+    index = 0
+    while index < len(normalized):
+        row = normalized[index]
+        nonempty = [
+            (position, str(cell or '').strip())
+            for position, cell in enumerate(row)
+            if str(cell or '').strip()
+        ]
+        text_cells = [
+            (position, value)
+            for position, value in nonempty
+            if not _is_block_numeric(value)
+            and any('\u4e00' <= ch <= '\u9fff' for ch in value)
+        ]
+        row_number = (
+            str(row[0] or '').strip()
+            if row and _is_block_numeric(row[0]) and len(str(row[0]).strip()) <= 6
+            else ''
+        )
+        numeric_cells = [
+            (position, value)
+            for position, value in nonempty
+            if _is_block_numeric(value)
+            and not (position == 0 and row_number)
+        ]
+        if (
+            index + 1 < len(normalized)
+            and not numeric_cells
+            and len(text_cells) == 1
+        ):
+            label_index, label = text_cells[0]
+            blocked = any(
+                token in label
+                for token in ('指标', '情况', '表', '单位', '其中', '减：', '加：', '注：')
+            )
+            if len(label) >= 4 and not blocked:
+                next_row = normalized[index + 1]
+                next_nonempty = [
+                    (position, str(cell or '').strip())
+                    for position, cell in enumerate(next_row)
+                    if str(cell or '').strip()
+                ]
+                values = [
+                    (position, value)
+                    for position, value in next_nonempty
+                    if _is_block_numeric(value)
+                ]
+                tails = [
+                    (position, value)
+                    for position, value in next_nonempty
+                    if not _is_block_numeric(value)
+                    and any('\u4e00' <= ch <= '\u9fff' for ch in value)
+                ]
+                tail = tails[0][1] if tails else ''
+                combined_label = _normalize_label(label + tail) if tail else ''
+                tail_allowed = len(tail) <= 2 or (
+                    bool(known_labels) and combined_label in known_labels
+                )
+                no_tail_allowed = (
+                    not known_labels
+                    or _normalize_label(label) in known_labels
+                )
+                if values and (tail_allowed if tail else no_tail_allowed):
+                    if tail:
+                        row[label_index] = label + tail
+                    first_cell = str(next_row[0] or '').strip()
+                    if not str(row[0] or '').strip() and _is_block_numeric(first_cell):
+                        row[0] = first_cell
+                    for position, value in values:
+                        if position < len(row):
+                            row[position] = value
+                    output.append(row)
+                    index += 2
+                    continue
+        output.append(row)
+        index += 1
+    return output
+
+def _known_metric_labels(taxonomy: pd.DataFrame | None) -> frozenset[str]:
+    if taxonomy is None or taxonomy.empty:
+        return frozenset()
+    labels: set[str] = {
+        _normalize_label(item) for item in _EXACT_LABEL_LOCKS
+    }
+    for column in ("指标名称", "别名"):
+        if column not in taxonomy.columns:
+            continue
+        for value in taxonomy[column].astype(str):
+            for item in re.split(r"[|｜]", value):
+                normalized = _normalize_label(item)
+                if normalized:
+                    labels.add(normalized)
+    return frozenset(labels)
+
+
+def _expand_table_blocks(
+    tables: list[ExtractedTable],
+    taxonomy: pd.DataFrame | None = None,
+) -> list[ExtractedTable]:
     """把整页合并表还原成页内表块，供 Step3 按各自表头识别期间。
 
     Step2 的中间表为了可读性会把同页多表和跨页内容合并成一张表；
     ``table_blocks`` 保留了每张页内表的独立网格。这里只在标准化计算时
     展开，不改变用户在 Step2 看到的合并表。
+
+    续页没有表头时，优先继承同一目标表上一块的表头；没有可继承表头时，
+    使用 Profile 或内置标准表头补齐。这样跨页第二页不会再被当成无表头
+    数据块，从第一行开始误读。
     """
     expanded: list[ExtractedTable] = []
+    known_labels = _known_metric_labels(taxonomy)
+    last_header_by_table: dict[str, list[list[str]]] = {}
     for table in tables:
+        table_id = str(getattr(table, "table_id", "") or "")
         blocks = getattr(table, "table_blocks", None)
+        had_blocks = bool(blocks)
         if not blocks:
-            expanded.append(table)
-            continue
+            blocks = [{"page": getattr(table, "page", 1), "rows": table.rows}]
         for block in blocks:
             rows = block.get("rows") if isinstance(block, dict) else block
             if not rows:
                 continue
             local = copy(table)
             block_rows = [list(row) for row in rows]
-            raw_headers = (
-                (getattr(table, "table_config", None) or {}).get(
-                    "canonical_headers"
-                )
-                or ()
-            )
-            if isinstance(raw_headers, str):
-                raw_headers = (
-                    raw_headers.replace("，", "、")
-                    .replace(",", "、")
-                    .replace("|", "、")
-                    .split("、")
-                )
-            canonical_headers = [
-                str(item).strip()
-                for item in raw_headers
-                if str(item).strip()
-            ]
-            if canonical_headers and not _block_has_metric_header(block_rows):
-                width = max((len(row) for row in block_rows), default=0)
+            width = max((len(row) for row in block_rows), default=0)
+            header_index = _locate_block_header_index(block_rows)
+            header_rows: list[list[str]] = []
+            default_periods: tuple[str, ...] = ()
+
+            if header_index is not None:
+                header_rows = [block_rows[header_index]]
+                next_index = header_index + 1
+                if (
+                    next_index < len(block_rows)
+                    and _is_block_subheader(block_rows[next_index])
+                ):
+                    header_rows.append(block_rows[next_index])
+                block_rows = block_rows[header_index:]
+                last_header_by_table[table_id] = [
+                    list(row) for row in header_rows
+                ]
+            else:
+                inherited = last_header_by_table.get(table_id)
+                if inherited and len(inherited[0]) == width:
+                    header_rows = [list(row) for row in inherited]
+                    block_rows = [*header_rows, *block_rows]
+                else:
+                    canonical = _fit_canonical_headers(
+                        _raw_canonical_headers(table),
+                        width,
+                        block_rows,
+                    )
+                    if canonical:
+                        header_rows = [canonical]
+                        block_rows = [canonical, *block_rows]
+
+            if header_rows:
+                default_periods = _periods_from_headers(header_rows[0])
+            _data_start = len(header_rows)
+            if len(block_rows) > _data_start:
                 block_rows = [
-                    [
-                        canonical_headers[index]
-                        if index < len(canonical_headers)
-                        else ""
-                        for index in range(width)
-                    ],
-                    *block_rows,
+                    *block_rows[:_data_start],
+                    *_merge_wrapped_value_rows(
+                        block_rows[_data_start:],
+                        known_labels,
+                    ),
                 ]
             local.rows = block_rows
+            local.default_periods = default_periods
             block_page = (
                 block.get("page")
                 if isinstance(block, dict)
@@ -457,7 +722,9 @@ def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
                 local.page = int(getattr(table, "page", 1) or 1)
             local.source_pages = [local.page]
             local.table_blocks = []
-            local.whole_page_block = True
+            local.whole_page_block = (
+                True if had_blocks else bool(getattr(table, "whole_page_block", False))
+            )
             expanded.append(local)
     return expanded
 
@@ -594,7 +861,7 @@ def standardize_to_target(
     warnings: list[str] = list(template_warnings)   # ★ 提前初始化，供补漏匹配使用
     # Step2 的可读性合并表内部保留了页内表块；标准化计算和补漏匹配
     # 都按表块处理，避免把第二张表的列头套到第一张表的数据上。
-    tables = _expand_table_blocks(tables)
+    tables = _expand_table_blocks(tables, taxonomy)
     normalized = normalize_tables(
         tables,
         scoped_taxonomy,
