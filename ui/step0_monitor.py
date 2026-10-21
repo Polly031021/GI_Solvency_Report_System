@@ -54,6 +54,11 @@ def _load_monitor_companies() -> pd.DataFrame:
     return companies
 
 
+def load_monitor_companies() -> pd.DataFrame:
+    """Public loader for STEP5 company-type mapping without rendering STEP0."""
+    return _load_monitor_companies()
+
+
 def listed_flag_series(companies: pd.DataFrame) -> pd.Series:
     """返回“是否上市公司”布尔序列；清单缺少标记列时全部为 False。"""
     if LISTED_FLAG_COLUMN not in companies.columns or companies.empty:

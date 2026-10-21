@@ -30,6 +30,7 @@ STRUCTURE_CHANGE_CHART = "structure_change_chart"  # ★ 新增：结构变化�
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
 INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
 INDUSTRY_MARKET_SHARE = "industry_market_share"  # ★ 新增：行业市场份额
+SOLVENCY_DISCLOSURE_OVERVIEW = "solvency_disclosure_overview"  # 行业合计偿付能力披露
 COMPANY_LINE_TREND = "company_line_trend"                # ★ 新增：每家公司一个跨期折线小图
 
 
@@ -138,11 +139,16 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     ),
     "行业整体保费规模与结构": ChartPlan(
         INDUSTRY_PREMIUM_STRUCTURE,
-        "近五年行业保费合计堆叠柱（车险/非车险）叠加车险、非车险及合计趋势线",
+        "固定行业历史与上传年度数据合并的车险/非车险堆叠柱，"
+        "附车险、非车险与合计趋势线，支持近5年、近10年与全部年度切换",
     ),
     "行业市场份额": ChartPlan(
         INDUSTRY_MARKET_SHARE,
         "最新年度按公司类别的保费、净利润、承保利润市场份额与金额对比",
+    ),
+    "偿付能力披露整体情况": ChartPlan(
+        SOLVENCY_DISCLOSURE_OVERVIEW,
+        "按行业合计口径计算综合/核心偿付能力充足率，并以卡片展示实际资本与最低资本",
     ),
 }
 

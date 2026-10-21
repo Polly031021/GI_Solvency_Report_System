@@ -6,6 +6,7 @@ import io
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from types import SimpleNamespace
 
 import fitz
 import pandas as pd
@@ -34,8 +35,16 @@ from services.solvency_rule_table_extractor import (
     page_has_searchable_text,
     preview_page_engine,
 )
+from services.batch_workflow import document_pdf_bytes, extract_document_tables
 from services.solvency_table_extractor import TABLE_SIGNATURES
 
+from .batch_workspace import (
+    batch_documents,
+    failed_batch_companies,
+    render_batch_status,
+    replace_document,
+    selected_batch_document,
+)
 from .cache import read_gold_manifest, render_pdf_page
 from .helpers import dedupe_column_names
 from .session import llm_credentials_ready
@@ -239,6 +248,11 @@ def build_tables_from_page_results(
             None,
         )
         target_terms = _target_frame_terms(table_match, base_table_id)
+        table_config = (
+            dict(table_match.table_config)
+            if table_match is not None and isinstance(table_match.table_config, dict)
+            else {}
+        )
         # 按页码排序
         page_dfs.sort(key=lambda x: x[0])
 
@@ -322,11 +336,31 @@ def build_tables_from_page_results(
             if looks_like_header(_candidate):
                 _header_candidates.append((_i, _candidate))
 
+        _canonical_headers = [
+            str(item).strip()
+            for item in (table_config.get("canonical_headers") or ())
+            if str(item).strip()
+        ]
         if _header_candidates:
             # 选"丰富度最高"的作为统一表头
             _start_idx, _header_row = max(
                 _header_candidates, key=lambda item: header_richness(item[1])
             )
+        elif _canonical_headers:
+            # Some non-life reports put the section title at the top of the
+            # extracted grid and omit the visible header.  Do not promote that
+            # title to the header: use the profile's canonical header and keep
+            # every extracted row as data.
+            _width = max((len(row) for row in _all_rows), default=0)
+            _header_row = [
+                canonical_header_cell(
+                    _canonical_headers[index]
+                    if index < len(_canonical_headers)
+                    else f"列{index + 1}"
+                )
+                for index in range(_width)
+            ]
+            _start_idx = -1
         else:
             _start_idx = 0
             _header_row = [canonical_header_cell(c) for c in _all_rows[0]]
@@ -1199,7 +1233,7 @@ def _render_extraction_results() -> None:
             )
 
 
-def render_extraction_tab(active_profile: ReportProfile) -> None:
+def _render_extraction_single_tab(active_profile: ReportProfile) -> None:
     """STEP2 表格智能转换。"""
     st.subheader("表格智能转换")
     st.caption(
@@ -1245,6 +1279,278 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
         st.dataframe(df, width="stretch", hide_index=True)
         _render_number_quality_panel()
         _render_extraction_results()
+
+
+def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
+    """STEP2 batch: rule extraction by default, shared results for STEP3."""
+    st.subheader("批量表格提取")
+    st.caption(
+        "批量默认让文字页走规则法，图片型页面自动转视觉大模型；"
+        "可在下方关闭图片页视觉兜底。所有公司共用 STEP1 已确认的页码。"
+    )
+    documents = render_batch_status(active_profile, detail_key="extraction")
+    if not documents:
+        st.info("请先在 STEP1 的“批量处理（多公司）”中上传 PDF 并确认页码。")
+        return
+
+    with st.expander("批量提取设置", expanded=True):
+        method = st.selectbox(
+            "提取方式",
+            [MODE_RULE, MODE_AUTO, MODE_LLM, MODE_VISION],
+            key="batch_extraction_method",
+            help=(
+                "默认“全部规则法”。智能模式仅对规则法失败的文字页或扫描页调用模型；"
+                "全部大模型/图片模式会让 token 消耗随文件数和页数线性增长。"
+            ),
+        )
+        allow_llm_fallback = st.toggle(
+            "规则法失败时允许大模型兜底",
+            key="batch_allow_llm_fallback",
+            disabled=method not in {MODE_AUTO, MODE_LLM},
+            help="默认关闭。批量开启前请评估文件数、页数和模型单价。",
+        )
+        scan_vision_fallback = st.toggle(
+            "图片型页面自动使用视觉大模型",
+            key="batch_scan_vision_fallback",
+            help=(
+                "仅对没有可检索文字的页面调用视觉模型；文字页仍走规则法。"
+                "这是批量处理扫描版 PDF 的必要兜底。"
+            ),
+        )
+        if scan_vision_fallback and not llm_credentials_ready():
+            st.warning(
+                "当前未配置完整 AI 接口；图片型页面将无法识别，并在提取日志中标记失败。",
+                icon=":material/warning:",
+            )
+        whole_page = st.toggle(
+            "整页全表提取",
+            key="batch_whole_page",
+        )
+        concurrency_columns = st.columns(2)
+        with concurrency_columns[0]:
+            document_workers = st.slider(
+                "公司级并发数",
+                min_value=1,
+                max_value=4,
+                key="batch_document_workers",
+                help="同时处理多少家公司的 PDF；建议 2–3，视觉模型接口限流时降低。",
+            )
+        with concurrency_columns[1]:
+            workers = st.slider(
+                "每份 PDF 的页级并发数",
+                min_value=1,
+                max_value=12,
+                key="batch_workers",
+                help="单份 PDF 内部同时处理多少页；规则法可提高，视觉模型接口限流时降低。",
+            )
+        if method != MODE_RULE:
+            st.warning(
+                "当前不是纯规则法。批量运行会逐页调用大模型，token 消耗可能显著增加。",
+                icon=":material/warning:",
+            )
+        method_explanation = {
+            MODE_RULE: (
+                "规则法：文字页用 pdfplumber 线框/文字对齐；"
+                + ("图片页自动转视觉大模型。" if scan_vision_fallback else "图片页不调用模型。")
+            ),
+            MODE_AUTO: (
+                "混合方法：文字版页面先用规则法，规则失败后"
+                + ("允许" if allow_llm_fallback else "不调用")
+                + "大模型兜底；扫描版页面走视觉模型。"
+            ),
+            MODE_LLM: "大模型文本优先，必要时图片重试，Token 消耗较高。",
+            MODE_VISION: "全部页面转图片交给视觉模型，Token 消耗最高。",
+        }[method]
+        st.info(
+            f"当前批量提取逻辑：**{method}**\n\n{method_explanation}"
+        )
+
+    confirmed = [
+        (company, document)
+        for company, document in documents.items()
+        if document.get("pages_confirmed")
+    ]
+    def run_extraction(target_documents: list[tuple[str, dict]]) -> None:
+        nonlocal documents
+        if method in {MODE_LLM, MODE_VISION} and not llm_credentials_ready():
+            st.error("当前提取方式需要 AI 配置；请改用默认规则法。")
+            return
+        method_label = method + (
+            " + 图片页视觉兜底" if scan_vision_fallback else ""
+        )
+        progress = st.progress(0, text="正在批量提取…")
+        updated_documents = dict(documents)
+        api_key = st.session_state.llm_api_key
+        base_url = st.session_state.llm_base_url
+        model_name = st.session_state.llm_model
+        def extract_document(company: str, document: dict):
+            outcome = extract_document_tables(
+                company=company,
+                pdf_bytes=document_pdf_bytes(document),
+                matches=document.get("matches") or [],
+                method=method,
+                allow_llm_fallback=allow_llm_fallback,
+                vision_for_scanned_pages=scan_vision_fallback,
+                whole_page=whole_page,
+                api_key=api_key,
+                base_url=base_url,
+                model=model_name,
+                max_workers=workers,
+            )
+            return company, document, outcome
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, int(document_workers))
+        ) as pool:
+            futures = {
+                pool.submit(extract_document, company, document): company
+                for company, document in target_documents
+            }
+            for index, future in enumerate(as_completed(futures), 1):
+                company = futures[future]
+                try:
+                    company, document, outcome = future.result()
+                except Exception as exc:
+                    document = documents[company]
+                    outcome = SimpleNamespace(
+                        tables=[],
+                        logs=[],
+                        status="异常",
+                        note=str(exc)[:300],
+                    )
+                updated = dict(document)
+                updated.update(
+                    {
+                        "raw_tables": outcome.tables,
+                        "extraction_logs": outcome.logs,
+                        "extraction_status": outcome.status,
+                        "extraction_note": outcome.note,
+                        "extraction_method": method_label,
+                        "standard_data": pd.DataFrame(columns=STANDARD_COLUMNS),
+                        "standard_summary": pd.DataFrame(),
+                        "standard_diagnostics": pd.DataFrame(),
+                        "standard_workbook_bytes": b"",
+                        "standard_status": "",
+                        "standard_note": "",
+                    }
+                )
+                updated_documents[company] = updated
+                replace_document(active_profile, company, updated)
+                progress.progress(
+                    index / max(len(target_documents), 1),
+                    text=(
+                        f"已提取 {index}/{len(target_documents)}：{company}"
+                        f"｜{outcome.status}｜{method_label}"
+                    ),
+                )
+        st.session_state.batch_documents = updated_documents
+        success_count = sum(
+            bool(document.get("raw_tables"))
+            for document in updated_documents.values()
+        )
+        st.session_state.batch_last_operation = (
+            f"批量提取完成：{success_count}/{len(updated_documents)} 份，逻辑：{method_label}"
+        )
+        failed_names = [
+            company
+            for company in (name for name, _ in target_documents)
+            if not updated_documents.get(company, {}).get("raw_tables")
+        ]
+        if failed_names:
+            st.error(
+                f"提取失败（{len(failed_names)} 家）：" + "、".join(failed_names)
+            )
+        else:
+            st.success(
+                f"批量提取完成：{success_count}/{len(updated_documents)} 份 PDF 取得中间表。"
+            )
+        documents = batch_documents(active_profile)
+
+    if st.button(
+        f"批量提取全部已确认文件（{len(confirmed)} 份）",
+        type="primary",
+        key="batch_extract_all_documents",
+        disabled=not confirmed,
+    ):
+        run_extraction(confirmed)
+
+    failed_documents = [
+        company
+        for company in failed_batch_companies(documents, "extraction")
+        if company in documents
+    ]
+    retry_names = st.multiselect(
+        "指定公司重新处理",
+        list(documents),
+        default=[name for name in failed_documents if name in documents],
+        key=f"batch_retry_companies_{active_profile.profile_id}",
+        help="可只选择一家失败公司重跑，不必重新处理整个批次。",
+    )
+    if st.button(
+        f"重新处理选中公司（{len(retry_names)} 家）",
+        key="batch_retry_selected_documents",
+        disabled=not retry_names,
+    ):
+        run_extraction(
+            [
+                (company, documents[company])
+                for company in retry_names
+                if company in documents
+            ]
+        )
+
+    current = selected_batch_document(
+        active_profile,
+        documents,
+        key_prefix="extraction",
+    )
+    if current is None:
+        return
+    tables = current.get("raw_tables") or []
+    if not tables:
+        st.info(
+            f"{current['company']} 尚无提取结果。"
+            f"{current.get('extraction_note', '')}"
+        )
+        return
+    st.markdown(f"#### 中间表预览：{current['company']}")
+    selected_index = st.selectbox(
+        "选择目标表",
+        range(len(tables)),
+        format_func=lambda index: (
+            f"{tables[index].table_name}｜第"
+            f"{','.join(map(str, tables[index].source_pages or [tables[index].page]))}页"
+        ),
+        key=f"batch_table_preview_{active_profile.profile_id}_{current['company']}",
+    )
+    table = tables[selected_index]
+    st.caption(
+        f"提取方式：{table.strategy}｜单位：{getattr(table, 'unit', '未识别')}"
+    )
+    st.dataframe(
+        table.to_frame(),
+        width="stretch",
+        hide_index=True,
+    )
+    logs = current.get("extraction_logs") or []
+    if logs:
+        with st.expander(f"提取日志（{len(logs)} 页）", expanded=False):
+            st.dataframe(
+                pd.DataFrame(logs),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+def render_extraction_tab(active_profile: ReportProfile) -> None:
+    """STEP2: single-file editor and multi-file extraction workspace."""
+    single_tab, batch_tab = st.tabs(
+        ["📄 单份处理（当前 PDF）", "🗂️ 批量处理（多公司）"]
+    )
+    with single_tab:
+        _render_extraction_single_tab(active_profile)
+    with batch_tab:
+        _render_extraction_batch_tab(active_profile)
 
 
 def _render_number_quality_panel() -> None:

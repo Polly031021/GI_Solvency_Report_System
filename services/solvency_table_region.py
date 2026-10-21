@@ -158,6 +158,13 @@ def _snap_to_table_rules(
     return (x0, max(0.0, top), x1, min(float(page.height), bottom))
 
 
+def _first_data_line(texts: list[str]) -> int | None:
+    for index, text in enumerate(texts):
+        if sum(character.isdigit() for character in text) >= 2:
+            return index
+    return None
+
+
 def _variant_profile(
     lines: list[dict],
     boundary: dict,
@@ -168,6 +175,8 @@ def _variant_profile(
     start_items = tuple(boundary.get("start_items", ()))
     end_groups = end_item_groups(table_id, boundary)
     end_items = tuple(item for group in end_groups[:1] for item in group)
+    end_mode = str(boundary.get("end_mode", "") or "").strip()
+    stop_terms = tuple(boundary.get("stop_terms", ()) or ())
 
     def first_hit(items: tuple[str, ...], *, require_value: bool) -> int | None:
         for index, text in enumerate(texts):
@@ -178,6 +187,26 @@ def _variant_profile(
     start_index = first_hit(start_items, require_value=True)
     if start_index is None:
         start_index = first_hit(start_items, require_value=False)
+
+    if end_mode == "page_tail":
+        continuation = start_index is None
+        if start_index is None:
+            start_index = _first_data_line(texts)
+        if start_index is None:
+            return 0, None, None
+        stop_index = next(
+            (
+                index
+                for index in range(start_index + 1, len(texts))
+                if any(line_has_item(texts[index], item) for item in stop_terms)
+            ),
+            None,
+        )
+        end_index = (stop_index - 1) if stop_index is not None else len(texts) - 1
+        if end_index < start_index:
+            return 0, None, None
+        return (3 if continuation else 4), start_index, end_index
+
     end_index = None
     search_from = (start_index + 1) if start_index is not None else 0
     for index in range(search_from, len(texts)):
@@ -189,14 +218,9 @@ def _variant_profile(
         return 4, start_index, end_index
     if start_index is None and end_index is not None:
         # 续页：本页只有表格尾部，从页首取到终止项目
-        first_data = next(
-            (
-                index
-                for index, text in enumerate(texts)
-                if sum(character.isdigit() for character in text) >= 2
-            ),
-            0,
-        )
+        first_data = _first_data_line(texts)
+        if first_data is None:
+            first_data = 0
         return 3, first_data, end_index
     if start_index is not None:
         return 2, start_index, None

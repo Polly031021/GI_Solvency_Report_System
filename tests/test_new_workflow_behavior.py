@@ -27,6 +27,7 @@ from services.solvency_step3_standardizer import (  # noqa: E402
     standardize_to_target,
     step3_metric_catalog,
 )
+from services.semantic_period_fallback import resolve_period_labels_with_llm  # noqa: E402
 from ui.cache import profile_registry_token  # noqa: E402
 from ui.session import new_state_defaults  # noqa: E402
 from ui.step2_extraction import (  # noqa: E402
@@ -281,6 +282,207 @@ def test_blank_capital_components_are_zero_filled() -> None:
     print("PASS 资本明细空白按0生成记录")
 
 
+def test_all_recognized_numeric_placeholders_are_zero_filled() -> None:
+    """已识别指标的空值、短横线和双短横线都应标准化为 0。"""
+    table = FlexibleTable(
+        table_id="SOLVENCY_MAIN",
+        table_name="偿付能力充足率指标",
+        page=1,
+        rows=[
+            ["项目", "本季度末数", "上季度末数"],
+            ["认可资产", "-", ""],
+            ["认可负债", "--", "1,000"],
+            ["实际资本", "", "2,000"],
+        ],
+        unit="万元",
+    )
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    result = standardize_to_target(
+        [table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    current = result.data[result.data["期间口径"] == "本季度末数"]
+    assert set(current["指标编码"]) >= {
+        "RECOGNIZED_ASSETS",
+        "RECOGNIZED_LIABILITIES",
+        "ACTUAL_CAPITAL",
+    }
+    assert current["数值"].eq(0).all()
+    assert current["备注"].astype(str).str.contains(
+        "原始值空白或占位符，按0处理",
+        regex=False,
+    ).all()
+    print("PASS 所有已识别数值指标的空白/占位符按0标准化")
+
+
+def test_supplement_rows_keep_company_and_report_period() -> None:
+    """补漏匹配在 normalizer 未产出任何记录时也必须继承报告元数据。"""
+    table = FlexibleTable(
+        table_id="ACTUAL_CAPITAL",
+        table_name="S02-实际资本明细表",
+        page=33,
+        rows=[
+            ["项目", "列2"],
+            ["实际资本", "2,469,438"],
+        ],
+        unit="万元",
+    )
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    result = standardize_to_target(
+        [table],
+        taxonomy,
+        {
+            "公司": "测试财险",
+            "报告期": "2025Q4",
+            "报告年度": 2025,
+            "报告季度": "Q4",
+            "来源文件": "测试财险.pdf",
+        },
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    row = result.data[result.data["指标编码"].eq("ACTUAL_CAPITAL")].iloc[0]
+    assert row["公司"] == "测试财险"
+    assert row["报告期"] == "2025Q4"
+    assert row["数值"] == 2_469_438
+    assert "补漏匹配" in str(row["备注"])
+    print("PASS 补漏匹配记录继承公司和报告期")
+
+
+def test_source_unit_is_converted_to_standard_unit() -> None:
+    """Step3 必须把元等来源单位统一换算为字典标准单位万元。"""
+    table = FlexibleTable(
+        table_id="ACTUAL_CAPITAL",
+        table_name="S02-实际资本明细表",
+        page=1,
+        rows=[
+            ["行次", "项目", "本季度末数", "上季度末数"],
+            ["1", "实际资本", "10,000", "20,000"],
+        ],
+        unit="元",
+        unit_source="元",
+    )
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    result = standardize_to_target(
+        [table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    row = result.data[result.data["指标编码"].eq("ACTUAL_CAPITAL")].iloc[0]
+    assert row["数值"] == 1
+    assert row["单位"] == "万元"
+    assert "已换算为万元" in str(row["备注"])
+    print("PASS 来源单位元统一换算为万元")
+
+
+def test_semantic_period_aliases_and_three_year_average() -> None:
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    annual_table = FlexibleTable(
+        table_id="OPERATING_METRICS",
+        table_name="主要经营指标（财险）",
+        page=1,
+        rows=[
+            ["指标名称", "本年度（末）"],
+            ["保险业务收入", "1,000"],
+        ],
+        unit="万元",
+    )
+    result = standardize_to_target(
+        [annual_table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    annual_row = result.data[result.data["指标编码"].eq("INSURANCE_REVENUE")].iloc[0]
+    assert annual_row["期间口径"] == "本年累计数"
+
+    three_year_table = FlexibleTable(
+        table_id="THREE_YEAR_INVESTMENT_RETURN",
+        table_name="近三年（综合）投资收益率",
+        page=1,
+        rows=[
+            ["项目", "近三年平均"],
+            ["近三年平均投资收益率", "1.23%"],
+        ],
+        unit="%",
+    )
+    result = standardize_to_target(
+        [three_year_table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    three_year_row = result.data[
+        result.data["指标编码"].eq("INVESTMENT_RETURN")
+        & result.data["期间口径"].eq("近三年平均")
+    ]
+    assert not three_year_row.empty
+    print("PASS 本年度（末）语义归一及近三年平均指标")
+
+
+def test_unknown_period_can_use_llm_semantic_fallback() -> None:
+    table = FlexibleTable(
+        table_id="OPERATING_METRICS",
+        table_name="主要经营指标（财险）",
+        page=1,
+        rows=[
+            ["指标名称", "观察窗口X"],
+            ["保险业务收入", "1,000"],
+        ],
+        unit="万元",
+    )
+
+    def post_func(url, *, headers=None, json=None, timeout=None):
+        content = '{"观察窗口X":"本年累计数"}'
+        return SimpleNamespace(
+            ok=True,
+            status_code=200,
+            headers={},
+            json=lambda: {
+                "choices": [
+                    {"message": {"content": content}}
+                ]
+            },
+        )
+
+    mapping, message = resolve_period_labels_with_llm(
+        [table],
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        model="test-model",
+        post_func=post_func,
+    )
+    assert mapping == {"观察窗口X": "本年累计数"}
+    assert "1 个表头" in message
+    print("PASS 本地无法识别期间时的大模型语义兜底")
+
+
 def test_lcr_period_wording_is_normalized() -> None:
     """LCR1/LCR3 的“三个月/一年”应匹配到未来3个月/12个月口径。"""
     taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
@@ -304,6 +506,26 @@ def test_lcr_period_wording_is_normalized() -> None:
     print("PASS LCR期限写法归一化匹配")
 
 
+def test_quant_risk_before_feature_factor_is_distinct() -> None:
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    base = resolve_metric_match(
+        "量化风险最低资本",
+        taxonomy,
+        table_id="MINIMUM_CAPITAL",
+    )
+    before_factor = resolve_metric_match(
+        "量化风险最低资本（未考虑特征系数前）",
+        taxonomy,
+        table_id="MINIMUM_CAPITAL",
+    )
+    assert str(base.metric.get("指标编码")) == "QUANT_RISK_CAPITAL"
+    assert (
+        str(before_factor.metric.get("指标编码"))
+        == "QUANT_RISK_CAPITAL_BEFORE_FEATURE_FACTOR"
+    )
+    print("PASS 量化风险最低资本与未考虑特征系数前分开映射")
+
+
 if __name__ == "__main__":
     test_defaults_are_auto_and_whole_page()
     test_whole_page_rule_keeps_every_table()
@@ -312,5 +534,11 @@ if __name__ == "__main__":
     test_combined_table_keeps_page_blocks_for_step3()
     test_profile_token_and_whole_page_keys()
     test_blank_capital_components_are_zero_filled()
+    test_all_recognized_numeric_placeholders_are_zero_filled()
+    test_supplement_rows_keep_company_and_report_period()
+    test_source_unit_is_converted_to_standard_unit()
+    test_semantic_period_aliases_and_three_year_average()
+    test_unknown_period_can_use_llm_semantic_fallback()
     test_lcr_period_wording_is_normalized()
+    test_quant_risk_before_feature_factor_is_distinct()
     print("全部通过")

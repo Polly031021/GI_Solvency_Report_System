@@ -20,6 +20,9 @@ from services.solvency_step7_charts import (  # noqa: E402
 
 COMPANIES = (
     "人保财险",
+    "平安产险",
+    "太保财险",
+    "国寿财产",
     "紫金财产",
     "富邦财险",
     "比亚迪保险",
@@ -69,9 +72,11 @@ def test_market_share_uses_latest_complete_year_and_categories() -> None:
     data = prepare_market_share_data(_market_frame())
     assert data is not None
     assert data.year == "2025"
-    assert len(data.categories) == len(COMPANIES)
+    assert data.top_grouping == "split"
+    assert len(data.categories) < len(COMPANIES)
     assert set(data.company_detail["公司类别"]) == {
-        "前十大",
+        "前三大",
+        "前4-10",
         "大型公司",
         "中型公司",
         "小型公司",
@@ -79,8 +84,36 @@ def test_market_share_uses_latest_complete_year_and_categories() -> None:
         "自保公司",
         "农业保险",
     }
+    top3 = set(
+        data.company_detail.loc[
+            data.company_detail["公司类别"].eq("前三大"), "公司"
+        ]
+    )
+    assert top3 == {"人保财险", "平安产险", "太保财险"}
+    top4 = set(
+        data.company_detail.loc[
+            data.company_detail["公司类别"].eq("前4-10"), "公司"
+        ]
+    )
+    assert top4 == {"国寿财产"}
     for column in ("保费占比", "净利润占比", "承保利润占比"):
         assert abs(float(data.categories[column].sum()) - 1.0) < 1e-6
+
+
+def test_market_share_can_merge_top10_again() -> None:
+    data = prepare_market_share_data(_market_frame(), top_grouping="merged")
+    assert data is not None
+    assert data.top_grouping == "merged"
+    categories = set(data.company_detail["公司类别"])
+    assert "前十大" in categories
+    assert "前三大" not in categories
+    assert "前4-10" not in categories
+    top10 = set(
+        data.company_detail.loc[
+            data.company_detail["公司类别"].eq("前十大"), "公司"
+        ]
+    )
+    assert top10 == {"人保财险", "平安产险", "太保财险", "国寿财产"}
 
 
 def test_market_share_chart_structure() -> None:
@@ -98,10 +131,13 @@ def test_market_share_chart_structure() -> None:
     assert bars.layout.yaxis.range[0] == 0.0
     assert bars.layout.yaxis.title.text == "保费（亿元）"
     assert bars.layout.yaxis2.title.text == "利润（亿元）"
+    assert bars.layout.legend.x == 0
+    assert bars.layout.legend.xanchor == "left"
     assert not bars.layout.shapes
 
 
 if __name__ == "__main__":
     test_market_share_uses_latest_complete_year_and_categories()
+    test_market_share_can_merge_top10_again()
     test_market_share_chart_structure()
-    print("PASS 行业市场份额：最新完整年度、公司类别与饼图/柱状图结构")
+    print("PASS 行业市场份额：最新完整年度、前三大/前4-10拆分、合并口径与图表结构")

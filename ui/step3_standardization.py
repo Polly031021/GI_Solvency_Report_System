@@ -16,6 +16,7 @@ from services.solvency_dataset_adapter import standard_workbook_bytes
 from services.registered_capital_extractor import append_registered_capital
 from services.solvency_step3_standardizer import (
     _target_summary,
+    batch_result_workbook_bytes,
     read_target_template,
     result_workbook_bytes,
     standardize_to_target,
@@ -28,7 +29,19 @@ from services.batch_processor import (
     locate_one_pdf_bytes,
     process_one_pdf_bytes,
 )
+from services.batch_workflow import (
+    document_pdf_bytes,
+    merge_standard_frames,
+    standardize_document_tables,
+)
+from services.semantic_period_fallback import resolve_period_labels_with_llm
 
+from .batch_workspace import (
+    batch_documents,
+    failed_batch_companies,
+    render_batch_status,
+    replace_document,
+)
 from .cache import (
     cached_step3_target_template,
     dataframe_to_xlsx,
@@ -228,6 +241,16 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
             PEER_GROUP_CONFIG.stat().st_mtime_ns,
         )
         company_type_map = {}
+    period_llm_fallback = st.toggle(
+        "本地无法识别期间描述时使用大模型语义兜底",
+        value=False,
+        key="step3_period_llm_fallback",
+        disabled=not llm_credentials_ready(),
+        help=(
+            "只发送无法由本地规则识别的表头描述，一次返回标准期间映射；"
+            "不会发送整张表格。未配置AI接口时不可用。"
+        ),
+    )
     standardize_submitted = st.button(
         "启动目标表标准填报",
         type="primary",
@@ -276,6 +299,16 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     template_label = target_upload.name
 
                 status_box.write("正在匹配披露指标、识别期间口径并统一计量单位…")
+                period_overrides: dict[str, str] = {}
+                if period_llm_fallback:
+                    period_overrides, period_message = resolve_period_labels_with_llm(
+                        st.session_state.raw_tables,
+                        api_key=st.session_state.llm_api_key,
+                        base_url=st.session_state.llm_base_url,
+                        model=st.session_state.llm_model,
+                    )
+                    if period_message:
+                        status_box.write(period_message)
                 _metadata_company = str(
                     st.session_state.metadata.get("公司", "") or ""
                 ).strip()
@@ -309,6 +342,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     company_type_map=company_type_map,
                     include_derived=include_derived,
                     template_warnings=template_warnings,
+                    period_overrides=period_overrides,
                 )
 
                 status_box.write("正在生成 STEP5 可直接读取的标准窄表工作簿…")
@@ -917,6 +951,385 @@ def _render_step3_batch_tab(active_profile: ReportProfile, is_project_member: bo
     _render_batch_results(active_profile)
 
 
+def _render_shared_batch_standardization(
+    active_profile: ReportProfile,
+    is_project_member: bool,
+) -> None:
+    """STEP3 batch standardizes every PDF already extracted in the shared pool."""
+    st.subheader("批量标准化与合并下载")
+    st.caption(
+        "直接使用 STEP2 共享文件池中的全部中间表。标准化完成后，"
+        "所有公司的指标会合并到同一个标准数据工作表，并生成填报汇总与匹配诊断；"
+        "下载文件与单份流程的 STEP3 Excel 格式一致。"
+    )
+    if not is_project_member:
+        st.info("批量处理仅对项目组成员开放。", icon=":material/lock:")
+        return
+    documents = render_batch_status(active_profile, detail_key="standardization")
+    if not documents:
+        st.info("请先在 STEP1/STEP2 的批量流程中上传、定位并提取 PDF。")
+        return
+    extracted = [
+        (company, document)
+        for company, document in documents.items()
+        if document.get("raw_tables")
+    ]
+    if not extracted:
+        st.info("共享文件池中还没有 STEP2 中间表，请先完成批量提取。")
+        return
+    st.info(
+        "当前步骤逻辑：**本地标准化（不调用大模型）**。"
+        "系统按 STEP2 中间表匹配指标、归一期间与单位，并补算派生指标。"
+    )
+    standardization_workers = st.slider(
+        "公司级标准化并发数",
+        min_value=1,
+        max_value=4,
+        key="batch_standardization_workers",
+        help="同时标准化多少家公司；本地计算建议 2–3。",
+    )
+    batch_period_llm_fallback = st.toggle(
+        "本地无法识别期间时使用大模型语义兜底",
+        value=False,
+        key="batch_step3_period_llm_fallback",
+        disabled=not llm_credentials_ready(),
+        help="每家公司只发送本地无法识别的表头描述，不发送整张表格。",
+    )
+
+    def run_standardization(target_documents: list[tuple[str, dict]]) -> None:
+        nonlocal documents
+        context = build_context_from_profile(
+            active_profile,
+            api_key=st.session_state.llm_api_key,
+            base_url=st.session_state.llm_base_url,
+            model=st.session_state.llm_model,
+            use_vision=False,
+        )
+        progress = st.progress(0, text="正在批量标准化…")
+        updated_documents = dict(documents)
+        semantic_api_key = st.session_state.llm_api_key
+        semantic_base_url = st.session_state.llm_base_url
+        semantic_model = st.session_state.llm_model
+        def standardize_document(company: str, document: dict):
+            period_overrides: dict[str, str] = {}
+            period_message = ""
+            if batch_period_llm_fallback:
+                period_overrides, period_message = resolve_period_labels_with_llm(
+                    document.get("raw_tables") or [],
+                    api_key=semantic_api_key,
+                    base_url=semantic_base_url,
+                    model=semantic_model,
+                )
+            outcome = standardize_document_tables(
+                company=company,
+                pdf_name=document.get("pdf_name", f"{company}.pdf"),
+                pdf_bytes=document_pdf_bytes(document),
+                tables=document.get("raw_tables") or [],
+                context=context,
+                period_overrides=period_overrides,
+            )
+            outcome["period_overrides"] = period_overrides
+            outcome["period_message"] = period_message
+            return company, document, outcome
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, int(standardization_workers))
+        ) as pool:
+            futures = {
+                pool.submit(standardize_document, company, document): company
+                for company, document in target_documents
+            }
+            for index, future in enumerate(as_completed(futures), 1):
+                company = futures[future]
+                try:
+                    company, document, outcome = future.result()
+                except Exception as exc:
+                    document = documents[company]
+                    outcome = {
+                        "data": pd.DataFrame(columns=STANDARD_COLUMNS),
+                        "summary": pd.DataFrame(),
+                        "diagnostics": pd.DataFrame(),
+                        "workbook_bytes": b"",
+                        "状态": "异常",
+                        "说明": str(exc)[:300],
+                        "warnings": [],
+                    }
+                updated = dict(document)
+                updated.update(
+                    {
+                        "standard_data": outcome["data"],
+                        "standard_summary": outcome["summary"],
+                        "standard_diagnostics": outcome["diagnostics"],
+                        "standard_workbook_bytes": outcome["workbook_bytes"],
+                        "standard_status": outcome["状态"],
+                        "standard_note": outcome["说明"],
+                        "standard_warnings": outcome["warnings"],
+                        "period_semantic_message": outcome.get(
+                            "period_message", ""
+                        ),
+                    }
+                )
+                updated_documents[company] = updated
+                replace_document(active_profile, company, updated)
+                progress.progress(
+                    index / max(len(target_documents), 1),
+                    text=(
+                        f"已标准化 {index}/{len(target_documents)}：{company}"
+                        f"｜{outcome['状态']}"
+                    ),
+                )
+
+        st.session_state.batch_documents = updated_documents
+        all_summaries = [
+            document["standard_summary"].assign(
+                公司=company,
+                报告期=document.get("metadata", {}).get("报告期", ""),
+            )
+            for company, document in updated_documents.items()
+            if isinstance(document.get("standard_summary"), pd.DataFrame)
+            and not document["standard_summary"].empty
+        ]
+        all_diagnostics = [
+            document["standard_diagnostics"].assign(公司=company)
+            for company, document in updated_documents.items()
+            if isinstance(document.get("standard_diagnostics"), pd.DataFrame)
+            and not document["standard_diagnostics"].empty
+        ]
+        all_warnings = [
+            f"{company}：{warning}"
+            for company, document in updated_documents.items()
+            for warning in document.get("standard_warnings", [])
+        ]
+        merged = merge_standard_frames(
+            document.get("standard_data")
+            for document in updated_documents.values()
+        )
+        summary_frame = (
+            pd.concat(all_summaries, ignore_index=True)
+            if all_summaries
+            else pd.DataFrame()
+        )
+        diagnostics_frame = (
+            pd.concat(all_diagnostics, ignore_index=True)
+            if all_diagnostics
+            else pd.DataFrame()
+        )
+        st.session_state.standard_data = merged
+        st.session_state.standard_target_summary = summary_frame
+        st.session_state.normalization_diagnostics = diagnostics_frame
+        st.session_state.standardization_warnings = all_warnings
+        st.session_state.standard_template_label = "批量共享文件池"
+        st.session_state.standard_workbook_bytes = batch_result_workbook_bytes(
+            merged,
+            summary_frame,
+            diagnostics_frame,
+        )
+        st.session_state.validation_results = pd.DataFrame()
+        st.session_state.validation_evidence = pd.DataFrame()
+        st.session_state.step3_focus = {}
+        st.session_state.batch_last_operation = (
+            f"批量标准化完成：{len(merged):,} 条指标记录"
+        )
+        failed_names = [
+            company
+            for company in (name for name, _ in target_documents)
+            if updated_documents.get(company, {}).get("standard_status") != "成功"
+        ]
+        if failed_names:
+            st.error(
+                f"标准化失败（{len(failed_names)} 家）：" + "、".join(failed_names)
+            )
+        else:
+            st.success(
+                f"批量标准化完成：{merged['公司'].nunique() if not merged.empty else 0} 家公司，"
+                f"共 {len(merged):,} 条标准指标记录。"
+            )
+        documents = batch_documents(active_profile)
+
+    if st.button(
+        f"批量标准化并合并（{len(extracted)} 家）",
+        type="primary",
+        key="batch_standardize_shared_documents",
+    ):
+        run_standardization(extracted)
+
+    failed_standardization = failed_batch_companies(
+        documents,
+        "standardization",
+    )
+    retry_standardization = st.multiselect(
+        "指定公司重新标准化",
+        [company for company, _ in extracted],
+        default=[
+            company for company in failed_standardization
+            if company in {name for name, _ in extracted}
+        ],
+        key=f"batch_retry_standardization_{active_profile.profile_id}",
+    )
+    if st.button(
+        f"重新标准化选中公司（{len(retry_standardization)} 家）",
+        key="batch_retry_standardization_selected",
+        disabled=not retry_standardization,
+    ):
+        run_standardization(
+            [
+                (company, documents[company])
+                for company in retry_standardization
+                if company in documents
+            ]
+        )
+
+    merged_current = merge_standard_frames(
+        document.get("standard_data")
+        for document in documents.values()
+    )
+    if merged_current.empty:
+        st.info("尚无批量标准化结果。")
+        return
+    st.markdown("#### 合并结果")
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("公司数", merged_current["公司"].nunique(), border=True)
+    metric_cols[1].metric("指标记录", f"{len(merged_current):,}", border=True)
+    metric_cols[2].metric(
+        "指标数",
+        merged_current["指标编码"].nunique(),
+        border=True,
+    )
+    metric_cols[3].metric(
+        "报告期",
+        merged_current["报告期"].nunique(),
+        border=True,
+    )
+
+    # Build the batch summary from the shared document pool, not from a
+    # previous single-file run that may still sit in session_state.
+    summary_frames = []
+    for company, document in documents.items():
+        summary = document.get("standard_summary")
+        if isinstance(summary, pd.DataFrame) and not summary.empty:
+            summary_frames.append(
+                summary.assign(
+                    公司=company,
+                    报告期=document.get("metadata", {}).get("报告期", ""),
+                )
+            )
+    summary_current = (
+        pd.concat(summary_frames, ignore_index=True)
+        if summary_frames
+        else pd.DataFrame()
+    )
+    diagnostics_frames = []
+    for company, document in documents.items():
+        diagnostics = document.get("standard_diagnostics")
+        if isinstance(diagnostics, pd.DataFrame) and not diagnostics.empty:
+            diagnostics_frames.append(diagnostics.assign(公司=company))
+    diagnostics_current = (
+        pd.concat(diagnostics_frames, ignore_index=True)
+        if diagnostics_frames
+        else pd.DataFrame()
+    )
+
+    st.markdown("#### 各公司缺填指标")
+    if (
+        summary_current.empty
+        or "填报状态" not in summary_current.columns
+        or "公司" not in summary_current.columns
+    ):
+        st.info("尚无填报汇总，请先执行批量标准化。")
+    else:
+        missing_current = summary_current[
+            ~summary_current["填报状态"].astype(str).eq("已填报")
+        ].copy()
+        if missing_current.empty:
+            st.success("当前批次所有公司的目标指标均已填报。")
+        else:
+            missing_counts = (
+                missing_current.groupby("公司")
+                .size()
+                .sort_values(ascending=False)
+            )
+            select_col, count_col = st.columns([1.6, 1])
+            with select_col:
+                selected_company = st.selectbox(
+                    "切换公司查看缺填指标",
+                    missing_counts.index.astype(str).tolist(),
+                    key=(
+                        f"batch_missing_company_"
+                        f"{active_profile.profile_id}"
+                    ),
+                )
+            with count_col:
+                st.metric(
+                    "该公司缺填指标",
+                    int(missing_counts.loc[selected_company]),
+                    border=True,
+                )
+            display_columns = [
+                column
+                for column in (
+                    "指标编码",
+                    "指标名称",
+                    "一级模块",
+                    "二级模块",
+                    "填报状态",
+                    "报告期",
+                )
+                if column in missing_current.columns
+            ]
+            company_missing = missing_current[
+                missing_current["公司"].astype(str).eq(str(selected_company))
+            ]
+            st.dataframe(
+                company_missing[display_columns],
+                width="stretch",
+                hide_index=True,
+            )
+            with st.expander("查看全部公司缺填汇总"):
+                all_columns = [
+                    column
+                    for column in ("公司", *display_columns)
+                    if column in missing_current.columns
+                ]
+                st.dataframe(
+                    missing_current[all_columns].sort_values(
+                        ["公司", "指标编码"]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    st.download_button(
+        "下载全部公司标准数据（与单份流程同格式）",
+        lambda: batch_result_workbook_bytes(
+            merged_current,
+            summary_current,
+            diagnostics_current,
+        ),
+        f"{active_profile.profile_id}_全部公司标准数据.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        icon=":material/download:",
+        key="batch_download_merged_standard_workbook",
+    )
+    st.caption(
+        "文件包含“标准数据”“填报汇总”“匹配诊断”三个工作表，"
+        "与单份流程下载的 STEP3 Excel 格式一致。"
+    )
+    preview_columns = [
+        column
+        for column in (
+            "公司", "报告期", "指标编码", "指标名称", "期间口径",
+            "数值", "单位", "来源工作表", "来源页码", "备注",
+        )
+        if column in merged_current.columns
+    ]
+    st.dataframe(
+        merged_current[preview_columns].head(500),
+        width="stretch",
+        hide_index=True,
+    )
+
+
 def render_standardization_tab(
     active_profile: ReportProfile,
     taxonomy: pd.DataFrame,
@@ -924,9 +1337,9 @@ def render_standardization_tab(
 ) -> None:
     """STEP3 标准化：单份处理 + 批量处理。"""
     _step3_single_tab, _step3_batch_tab = st.tabs(
-        ["📄 单份处理（当前 PDF）", "🗂️ 批量处理（多家公司）"]
+        ["📄 单份处理（当前 PDF）", "🗂️ 批量处理（共享文件池）"]
     )
     with _step3_single_tab:
         _render_step3_single_tab(active_profile, taxonomy)
     with _step3_batch_tab:
-        _render_step3_batch_tab(active_profile, is_project_member)
+        _render_shared_batch_standardization(active_profile, is_project_member)

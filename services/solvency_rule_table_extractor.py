@@ -127,6 +127,21 @@ def _target_terms(
         )
         if str(item).strip()
     )
+    if str(config.get("boundary_end_mode", "") or "").strip() == "page_tail":
+        # Continuation pages often start mid-table and no longer repeat the
+        # first-page labels, so accept the configured continuation vocabulary.
+        configured = tuple(
+            dict.fromkeys(
+                [
+                    *configured,
+                    *(
+                        str(item).strip()
+                        for item in (config.get("continuation_terms") or ())
+                        if str(item).strip()
+                    ),
+                ]
+            )
+        )
     if configured:
         return configured
     return tuple(TABLE_SIGNATURES.get(table_id, ()))
@@ -663,6 +678,20 @@ def _llm_vision_attempt(
     return full
 
 
+def _has_target_region(table_config: Mapping[str, object] | None) -> bool:
+    """Return whether the profile gives both ends of the target table.
+
+    When a table has explicit start/end items, whole-page recognition is the
+    wrong tool for pages that contain several tables: it merges the preceding
+    table into the target and produces a garbled layout.  In that case the
+    existing region-first candidate path is both safer and more accurate.
+    """
+    config = table_config or {}
+    start_items = config.get("start_item_terms") or ()
+    end_items = config.get("end_item_terms") or ()
+    return bool(start_items) and bool(end_items)
+
+
 def extract_page_with_method(
     *,
     pdf_bytes: bytes,
@@ -685,6 +714,10 @@ def extract_page_with_method(
     ready = credentials_ready(api_key, base_url, model)
     if has_text is None:
         has_text = page_has_searchable_text(grid)
+    # A configured start/end pair is an explicit target-table region.  When
+    # that region can be located, ignore the global "whole page" switch so a
+    # page with two tables cannot prepend the preceding table to the target.
+    effective_whole_page = bool(whole_page)
     cached_source: list[str] = []
     cached_region: list[TableRegion | None] = []
 
@@ -706,6 +739,11 @@ def extract_page_with_method(
             )
         return cached_region[0]
 
+    if whole_page and _has_target_region(table_config) and region() is not None:
+        # Region-first is safe for text pages.  Scanned pages have no text
+        # layer, so the locator returns None and the old whole-page path stays.
+        effective_whole_page = False
+
     def vision() -> PageExtractionOutcome:
         return _llm_vision_attempt(
             pdf_bytes=pdf_bytes,
@@ -716,11 +754,11 @@ def extract_page_with_method(
             base_url=base_url,
             model=model,
             source_text=source(),
-            region=None if whole_page else region(),
+            region=None if effective_whole_page else region(),
             grid=grid,
             table_config=table_config,
             strategy_id=strategy_id,
-            whole_page=whole_page,
+            whole_page=effective_whole_page,
         )
 
     if method == MODE_VISION:
@@ -747,7 +785,7 @@ def extract_page_with_method(
                 base_url=base_url,
                 model=model,
                 source_text=source(),
-                whole_page=whole_page,
+                whole_page=effective_whole_page,
             )
             if text_outcome.succeeded:
                 return text_outcome
@@ -779,7 +817,7 @@ def extract_page_with_method(
             table_config=table_config,
             strategy_id=strategy_id,
             grid=grid,
-            whole_page=whole_page,
+            whole_page=effective_whole_page,
         )
 
     # ---------- 智能模式：文字版优先规则法，扫描版直接走视觉大模型 ----------
@@ -792,7 +830,7 @@ def extract_page_with_method(
             table_config=table_config,
             strategy_id=strategy_id,
             grid=grid,
-            whole_page=whole_page,
+            whole_page=effective_whole_page,
         )
         if rule_outcome.succeeded:
             return rule_outcome
@@ -809,7 +847,7 @@ def extract_page_with_method(
             base_url=base_url,
             model=model,
             source_text=source(),
-            whole_page=whole_page,
+            whole_page=effective_whole_page,
         )
         if text_outcome.succeeded:
             text_outcome.note = f"{rule_outcome.note}→已转文本大模型；{text_outcome.note}"

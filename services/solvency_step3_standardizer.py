@@ -9,6 +9,7 @@ while the output remains the canonical narrow table consumed by STEP5.
 import io
 from dataclasses import dataclass
 from copy import copy
+from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -19,6 +20,10 @@ from .solvency_dataset_adapter import (
     write_standard_workbook_sheets,
 )
 from .solvency_metric_registry import DERIVED_METRICS
+from .solvency_company_identity import (
+    resolve_company_identity,
+    resolve_peer_group,
+)
 from .solvency_normalizer import (
     CAPITAL_COMPONENT_ZERO_CODES,
     CAPITAL_COMPONENT_ZERO_TABLE_IDS,
@@ -51,6 +56,16 @@ _PERIOD_DEDUP_ALIASES: dict[str, str] = {
     "期初数": "上季度末数",
     "本年度累计数": "本年累计数",
     "本年数": "本年累计数",          # ★ 新增
+    "本年度": "本年累计数",
+    "本年度末": "本年累计数",
+    "年度累计": "本年累计数",
+    "全年累计": "本年累计数",
+    "全年": "本年累计数",
+    "本期累计": "本年累计数",
+    "累计": "本年累计数",
+    "上年度": "上季度末数",
+    "上年末": "上季度末数",
+    "上年度末": "上季度末数",
     "季度预测数": "下季度末预测数",
     "下季度预测数": "下季度末预测数",  # ★ 新增
     "本季度": "本季度末数",
@@ -293,6 +308,18 @@ def _period_from_header(header_cells, col_index: int) -> str:
     # 优先识别"近三年"类口径
     if "近三年" in text or "三年平均" in text or "3年平均" in text:
         return "近三年平均"
+    if (
+        any(
+            token in text
+            for token in ("本年度", "年度累计", "全年", "本期累计")
+        )
+        and "预测" not in text
+    ):
+        return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
     if "下季度" in text or "下季" in text or "预测" in text:
         return "下季度末预测数"
     if "本年度累计" in text or "本年累计" in text or "本年数" in text:
@@ -326,8 +353,15 @@ def _period_from_row_label(label: str) -> str:
     # 只有"近三年"+"平均"同时出现，才认为这一行是近三年平均值
     if "近三年" in text and "平均" in text:
         return "近三年平均"
-    if "本年累计" in text or "本年度累计" in text:
+    if any(
+        token in text
+        for token in ("本年累计", "本年度累计", "本年度", "年度累计", "全年", "本期累计")
+    ):
         return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
     return ""
 
 def _dependency_closure(target_codes: set[str]) -> set[str]:
@@ -344,6 +378,23 @@ def _dependency_closure(target_codes: set[str]) -> set[str]:
                 required.add(dependency)
                 pending.append(dependency)
     return required
+
+
+def _block_has_metric_header(rows: Sequence[Sequence[str]]) -> bool:
+    terms = (
+        "指标名称",
+        "项目",
+        "行次",
+        "本季度数",
+        "本年累计数",
+        "本季度末数",
+        "上季度末数",
+    )
+    for row in rows[:3]:
+        text = "".join(str(cell) for cell in row)
+        if sum(term in text for term in terms) >= 2:
+            return True
+    return False
 
 
 def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
@@ -364,7 +415,37 @@ def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
             if not rows:
                 continue
             local = copy(table)
-            local.rows = [list(row) for row in rows]
+            block_rows = [list(row) for row in rows]
+            raw_headers = (
+                (getattr(table, "table_config", None) or {}).get(
+                    "canonical_headers"
+                )
+                or ()
+            )
+            if isinstance(raw_headers, str):
+                raw_headers = (
+                    raw_headers.replace("，", "、")
+                    .replace(",", "、")
+                    .replace("|", "、")
+                    .split("、")
+                )
+            canonical_headers = [
+                str(item).strip()
+                for item in raw_headers
+                if str(item).strip()
+            ]
+            if canonical_headers and not _block_has_metric_header(block_rows):
+                width = max((len(row) for row in block_rows), default=0)
+                block_rows = [
+                    [
+                        canonical_headers[index]
+                        if index < len(canonical_headers)
+                        else ""
+                        for index in range(width)
+                    ],
+                    *block_rows,
+                ]
+            local.rows = block_rows
             block_page = (
                 block.get("page")
                 if isinstance(block, dict)
@@ -476,6 +557,7 @@ def standardize_to_target(
     company_type_map: Mapping[str, str] | None = None,
     include_derived: bool,
     template_warnings: Sequence[str] = (),
+    period_overrides: Mapping[str, str] | None = None,
 ) -> Step3StandardizationResult:
     """Fill a target list and return the canonical STEP5-compatible narrow table."""
     # ★ 修复：报告期兜底 —— 从 metadata / 文件名 / 首文文本依次抓
@@ -525,6 +607,7 @@ def standardize_to_target(
         peer_group_map=peer_group_map,
         default_peer_group=default_peer_group,
         company_type_map=company_type_map,
+        period_overrides=period_overrides,
     )
     enriched = append_derived_metrics(normalized) if include_derived else normalized
     data = enriched[
@@ -623,6 +706,37 @@ def standardize_to_target(
 
         _supp_rows = []
         _template = data.iloc[0].to_dict() if not data.empty else {}
+        if not _template:
+            _raw_company = str(metadata.get("公司", "") or "").strip()
+            if not _raw_company:
+                _raw_company = Path(
+                    str(metadata.get("来源文件", "") or "")
+                ).stem
+            _identity = resolve_company_identity(
+                _raw_company,
+                company_type_map,
+                fallback_company_type=company_type,
+            )
+            _resolved_peer = resolve_peer_group(
+                _raw_company,
+                peer_group_map,
+                fallback_peer_group=default_peer_group,
+            )
+            _template = {
+                "公司": _identity.standard_name,
+                "原始公司名称": _identity.original_name,
+                "标准公司名称": _identity.standard_name,
+                "公司统一编码": _identity.company_code,
+                "公司类型": _identity.company_type,
+                "同业分类": _resolved_peer,
+                "报告类型": report_profile_id,
+                "报告年度": metadata.get("报告年度", ""),
+                "报告季度": metadata.get("报告季度", ""),
+                "报告期": metadata.get("报告期", ""),
+                "披露日期": metadata.get("披露日期", ""),
+                "来源文件": metadata.get("来源文件", ""),
+                "导入批次": metadata.get("导入批次", ""),
+            }
 
         for _table in tables:
             _rows = getattr(_table, "rows", None) or []
@@ -1039,6 +1153,17 @@ def standardize_to_target(
             warnings.append(
                 f"已将 {_blank_zero_count} 条资本明细空白值按0处理，请核对源表是否为空白。"
             )
+        _placeholder_zero_count = int(
+            data["备注"]
+            .astype(str)
+            .str.contains("原始值空白或占位符，按0处理", regex=False)
+            .sum()
+        )
+        if _placeholder_zero_count:
+            warnings.append(
+                f"已将 {_placeholder_zero_count} 条已识别指标的空白/占位符数值按0标准化，"
+                "原始值已保留在备注中。"
+            )
 
     # ---------- 统一模块/单位/数据类型，以 target_catalog 为准 ----------
     if not data.empty and not target_catalog.empty:
@@ -1054,6 +1179,7 @@ def standardize_to_target(
         for target_col, source_col in (
             ("一级模块", "一级模块"),
             ("二级模块", "二级模块"),
+            ("指标名称", "指标名称"),
             ("单位", "标准单位"),
             ("数据类型", "数据类型"),
         ):
@@ -1306,6 +1432,33 @@ def target_template_workbook_bytes(
         )
         _format_workbook(writer)
     return output.getvalue()
+
+def batch_result_workbook_bytes(
+    data: pd.DataFrame,
+    target_summary: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+) -> bytes:
+    """Build the same multi-sheet workbook as the single-file STEP3 result.
+
+    Batch output used to be a single-sheet merge, which made the downloaded
+    file incompatible with the single-file flow.  This keeps the shared
+    standard-data sheet plus the 填报汇总 and 匹配诊断 sheets.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_standard_workbook_sheets(writer, data)
+        target_summary.to_excel(writer, sheet_name="填报汇总", index=False)
+        if diagnostics is None or diagnostics.empty:
+            pd.DataFrame(columns=["状态", "原因"]).to_excel(
+                writer,
+                sheet_name="匹配诊断",
+                index=False,
+            )
+        else:
+            diagnostics.to_excel(writer, sheet_name="匹配诊断", index=False)
+        _format_workbook(writer)
+    return output.getvalue()
+
 
 def result_workbook_bytes(result: Step3StandardizationResult) -> bytes:
     output = io.BytesIO()

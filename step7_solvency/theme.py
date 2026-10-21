@@ -25,6 +25,56 @@ def render_report_style() -> None:
         [class*="st-key-s7_trend_group_"],
         .solvency-report-title, .solvency-module-title,
         .solvency-report-analysis, .solvency-report-footnote,
+        /* STEP7 industry-overview insight card: one summary surface per module. */
+        .s7-insight-card {
+            --s7-insight-accent:#00338D;
+            position:relative; box-sizing:border-box;
+            border:1px solid #E2E8F0; border-left:5px solid var(--s7-insight-accent);
+            border-radius:12px; padding:13px 18px 12px; margin:6px 0 14px;
+            background:linear-gradient(135deg,#FFFFFF 0%,#F8FBFF 55%,#EEF4FF 100%);
+            box-shadow:0 6px 18px rgba(0,51,141,.06);
+            break-inside:avoid-page; page-break-inside:avoid;
+            font-family:Microsoft YaHei, 微软雅黑, sans-serif;
+        }
+        .s7-insight-card__top {
+            display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+            margin:0 0 7px;
+        }
+        .s7-insight-card__eyebrow {
+            display:inline-flex; align-items:center;
+            background:var(--s7-insight-accent); color:#FFFFFF;
+            border-radius:999px; padding:2px 9px;
+            font-size:10px; font-weight:700; letter-spacing:.6px;
+        }
+        .s7-insight-card__title {
+            color:#0C233C; font-size:12px; font-weight:700; letter-spacing:.3px;
+        }
+        .s7-insight-card__headline {
+            color:#1E293B; font-size:18px; font-weight:650; line-height:1.45;
+            margin:0 0 5px;
+        }
+        .s7-insight-card__value {
+            color:var(--s7-insight-accent); font-size:22px; font-weight:900;
+            margin:0 4px;
+        }
+        .s7-insight-card__delta {
+            display:inline-flex; align-items:center;
+            border-radius:999px; padding:1px 8px; margin-left:4px;
+            font-size:12px; font-weight:800; vertical-align:2px;
+        }
+        .s7-insight-card__delta--up {background:#EAF7EE;color:#146C12;border:1px solid #BFE5C8;}
+        .s7-insight-card__delta--down {background:#FDECEC;color:#B0191C;border:1px solid #F5C2C2;}
+        .s7-insight-card__delta--neutral {background:#EEF4FF;color:#00338D;border:1px solid #C7D7F5;}
+        .s7-insight-card__bullets {
+            display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+            gap:3px 18px; margin:4px 0 0; padding-left:17px;
+            color:#334155; font-size:12px; line-height:1.6;
+        }
+        .s7-insight-card__bullets li::marker {color:var(--s7-insight-accent);}
+        .s7-insight-card__foot {
+            color:#64748B; font-size:10px; line-height:1.5;
+            margin-top:6px; padding-top:5px; border-top:1px dashed #D8E2F0;
+        }
         .solvency-chart-legend {
             font-family:Microsoft YaHei, 微软雅黑, sans-serif;
         }
@@ -120,6 +170,10 @@ def render_report_style() -> None:
             width:22px; height:0; border-top:3px solid var(--legend-color);
         }
         .solvency-chart-legend__symbol--dash {border-top-style:dashed;}
+        [class*="st-key-"][class*="_industry_premium_chart"] [data-testid="stVegaLiteChart"] {
+            width:fit-content!important; max-width:100%!important;
+            margin-left:auto!important; margin-right:auto!important;
+        }
         .solvency-analysis-ai {color:#D84315; font-size:12px; margin-top:5px;}
         .solvency-analysis-ai--error {color:#C00000;}
         .solvency-report-analysis {
