@@ -27,6 +27,7 @@ PENDING_DEFINITION = "pending_definition"
 CAPABILITY_RADAR = "capability_radar"          # ★ 新增
 UNDERWRITING_EFFICIENCY_SCATTER = "underwriting_efficiency_scatter"  # 承保效益五年年度散点图
 STRUCTURE_CHANGE_CHART = "structure_change_chart"  # ★ 新增：结构变化组合图
+PREMIUM_GROWTH_STRUCTURE = "premium_growth_structure"  # 车险结构 + 总保费增速
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
 INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
 INDUSTRY_MARKET_SHARE = "industry_market_share"  # ★ 新增：行业市场份额
@@ -124,6 +125,10 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     "承保规模": ChartPlan(
         STRUCTURE_CHANGE_CHART,
         "车险与非车险保费占比及同比增速",
+    ),
+    "保费增速": ChartPlan(
+        PREMIUM_GROWTH_STRUCTURE,
+        "每家公司近五年车险/非车险结构占比与总保费同比增速",
     ),
     "经营效益": ChartPlan(
         STRUCTURE_CHANGE_CHART,

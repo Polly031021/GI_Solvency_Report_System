@@ -46,6 +46,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     MARKET_CREDIT_MATRIX,
     PENDING_DEFINITION,
     PERFORMANCE_PATTERN_GRID,
+    PREMIUM_GROWTH_STRUCTURE,
     RISK_RATIO_SCATTER,
     SINGLE_METRIC_TREND,
     SOLVENCY_MATRIX,
@@ -54,7 +55,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     TREND_WITH_COMPANY_BARS,
     UNDERWRITING_EFFICIENCY_SCATTER,
 )
-from services.step7_excel_config import Step7Module  # noqa: E402
+from services.step7_excel_config import Step7Module, load_step7_config  # noqa: E402
 
 QUANT_CODES = (
     "INSURANCE_RISK_CAPITAL",
@@ -112,6 +113,12 @@ MODULE_SPECS = (
     ("能力五边形", CAPABILITY_RADAR, ("PREMIUM_GROWTH", "ROE", "TOTAL_ASSETS", "ACTUAL_CAPITAL", "COMBINED_SOLVENCY_RATIO"), {}),
     ("承保效益", UNDERWRITING_EFFICIENCY_SCATTER, (), {}),
     ("承保规模", STRUCTURE_CHANGE_CHART, ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"), {}),
+    (
+        "保费增速",
+        PREMIUM_GROWTH_STRUCTURE,
+        ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"),
+        {"years": 5, "annual_scope": "本年累计数"},
+    ),
     ("经营效益", STRUCTURE_CHANGE_CHART, ("NET_PROFIT", "SIGNED_PREMIUM"), {}),
     ("资本规模", STRUCTURE_CHANGE_CHART, ("CORE_T1_CAPITAL", "ANC_T1_CAPITAL", "ACTUAL_CAPITAL"), {}),
     ("公司业绩展示", PERFORMANCE_PATTERN_GRID, ("SIGNED_PREMIUM", "NET_PROFIT"), {}),
@@ -281,8 +288,73 @@ def test_default_step7_config_without_upload() -> None:
     print("PASS STEP7 默认配置自动加载")
 
 
+def test_premium_growth_template_module() -> None:
+    """The premium-growth entry must render from the bundled template."""
+    template_path = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    if not template_path.exists():
+        print("SKIP 保费增速模板测试：未找到 Step7 模板")
+        return
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "经营与偿付能力联动分析"
+    at.session_state["company_nav_level_two"] = "保费增速"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    page_text = "\n".join(item.value for item in at.caption)
+    assert "右轴折线为总保费同比增速" in page_text
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "头部（1 家）" in markdown_text
+    assert "中小（1 家）" in markdown_text
+    print("PASS 经营与偿付能力联动分析：保费增速图正常")
+
+
+def test_capital_ratio_template_modules() -> None:
+    """The bundled template must include both annual capital-ratio charts."""
+    template_path = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    modules = load_step7_config(template_path)
+    selected = {
+        module.chart_name: module
+        for module in modules
+        if module.level_one == "关键偿付数据概览"
+        and module.level_two == "资本充足率"
+    }
+    assert set(selected) == {"综合充足率变化", "核心充足率变化"}
+    assert all(module.chart_kind == CAPITAL_RATIO_COMBO for module in selected.values())
+    assert all(module.requires_all for module in selected.values())
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "关键偿付数据概览"
+    at.session_state["company_nav_level_two"] = "资本充足率"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    caption_text = "\n".join(item.value for item in at.caption)
+    assert "按年度口径展示" in caption_text
+    print("PASS 关键偿付数据概览：综合/核心充足率变化年度图正常")
+
+
 if __name__ == "__main__":
     test_excel_driven_step7_charts()
     test_industry_premium_template_module()
     test_default_step7_config_without_upload()
+    test_premium_growth_template_module()
+    test_capital_ratio_template_modules()
     print("全部通过")

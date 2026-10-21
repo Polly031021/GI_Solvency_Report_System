@@ -24,6 +24,7 @@ from services.solvency_step7_charts import (
     HISTORICAL_SOURCE,
     INDUSTRY_PREMIUM_WINDOWS,
     UPLOAD_SOURCE,
+    annual_period_order,
     build_capability_radar_chart,
     build_company_line_trend_chart,
     build_industry_premium_structure_chart,
@@ -31,6 +32,10 @@ from services.solvency_step7_charts import (
     build_market_share_pies,
     market_share_category_colors,
     build_structure_change_chart,
+    build_premium_growth_structure_chart,
+    group_premium_growth_panels,
+    prepare_premium_growth_panel,
+    premium_growth_axis_domain,
     build_capital_amount_combo,
     build_capital_ratio_combo_chart,
     capital_ratio_amount_axis_domain,
@@ -60,6 +65,7 @@ from .fragments import (
 )
 from .rendering import (
     chart_without_internal_title,
+    convert_unit,
     render_chart_legend,
     render_company_chart_grid,
 )
@@ -128,6 +134,102 @@ def render_plan_structure_change_chart(chart_name, frame):
                         st.code(traceback.format_exc())
 
 
+def render_plan_premium_growth_structure(
+    chart_name,
+    frame,
+    *,
+    unit_mode: str,
+    module_override,
+):
+    """Render per-company 100% premium structure with total-premium growth."""
+    companies = ordered_companies(frame)
+    if not companies:
+        st.warning("当前没有公司数据。")
+        return
+
+    cfg = module_override.chart_config if module_override else {}
+    try:
+        years = max(1, min(int(cfg.get("years", 5)), 10))
+    except (TypeError, ValueError):
+        years = 5
+    total_code = str(cfg.get("total_code", "SIGNED_PREMIUM")).strip()
+    motor_code = str(cfg.get("motor_code", "SIGNED_PREMIUM_MOTOR")).strip()
+    annual_scope = str(cfg.get("annual_scope", "本年累计数")).strip()
+    group_column = str(cfg.get("group_column", "同业分类")).strip() or "同业分类"
+    converted = convert_unit(frame, unit_mode)
+
+    panels = [
+        prepare_premium_growth_panel(
+            converted,
+            company,
+            years=years,
+            total_code=total_code,
+            motor_code=motor_code,
+            annual_scope=annual_scope,
+            group_column=group_column,
+        )
+        for company in companies
+    ]
+    panels = [panel for panel in panels if not panel.bar_frame.empty]
+    if not panels:
+        st.warning(
+            f"没有可用于绘图的年度累计保费数据。请检查 {total_code}、"
+            f"{motor_code} 及期间口径“{annual_scope or '本年累计数'}”。"
+        )
+        return
+
+    growth_domain = premium_growth_axis_domain(panels)
+    has_growth = any(not panel.line_frame.empty for panel in panels)
+    st.caption(
+        f"公司按“{group_column}”分组，每家公司展示最近 {years} 个年度："
+        "左轴为车险/非车险的 100% 结构占比，"
+        "右轴折线为总保费同比增速；非车险按“总签单保费 - 车险”计算。"
+        "首年若缺少上一年度基数，则不显示折线点。"
+    )
+    legend_items = [
+        ("#00338D", "车险", "square"),
+        ("#00B8F5", "非车险", "square"),
+        ("#E36C0A", "总保费同比增速", "line"),
+    ]
+    if any(panel.bar_frame["类别"].astype(str).eq("未拆分").any() for panel in panels):
+        legend_items.append(("#D9E2EC", "未拆分", "square"))
+    render_chart_legend(legend_items)
+    if not has_growth:
+        st.caption("当前各公司都没有可比的连续年度保费基数，因此图内暂不显示同比增速折线。")
+
+    columns_per_row = 2
+    for group_index, (group_name, group_panels) in enumerate(
+        group_premium_growth_panels(panels)
+    ):
+        st.markdown(
+            f"<div style='margin:18px 0 8px;font-size:14px;font-weight:700;"
+            f"color:#00338D;border-left:4px solid #00338D;padding-left:8px;'>"
+            f"{group_name}（{len(group_panels)} 家）</div>",
+            unsafe_allow_html=True,
+        )
+        for index in range(0, len(group_panels), columns_per_row):
+            batch = group_panels[index : index + columns_per_row]
+            cols = st.columns(len(batch), gap="large")
+            for column, panel in zip(cols, batch):
+                with column:
+                    try:
+                        chart = build_premium_growth_structure_chart(
+                            panel,
+                            growth_domain=growth_domain,
+                            unit_label=unit_mode,
+                        )
+                        st.altair_chart(
+                            chart,
+                            width="stretch",
+                            key=(
+                                f"premium_growth_{group_index}_{index}_"
+                                f"{panel.company}"
+                            ),
+                        )
+                    except Exception as exc:
+                        st.error(f"❌ {panel.company} 保费增速图渲染失败：{exc}")
+
+
 def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
     companies = ordered_companies(frame)
     if not companies:
@@ -140,6 +242,29 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
     pattern_overrides: dict = cfg.get("pattern_overrides") or {}
 
     periods_list = sorted(frame["报告期"].dropna().astype(str).unique().tolist())
+
+    def _metric_label(code: str, fallback: str) -> str:
+        known = {
+            "SIGNED_PREMIUM": "签单保费",
+            "NET_PROFIT": "净利润",
+        }
+        if code in known:
+            return known[code]
+        names = (
+            frame.loc[frame["指标编码"].astype(str).eq(code), "指标名称"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        names = names[names.ne("")]
+        if not names.empty:
+            return str(names.iloc[0])
+        return fallback
+
+    revenue_label = _metric_label(revenue_code, "收入")
+    profit_label = _metric_label(profit_code, "利润")
+    revenue_rank_title = f"{revenue_label}排名"
+    profit_rank_title = f"{profit_label}排名"
 
     # ---------- 1. 计算每家公司、每个报告期的收入/利润排名 ----------
     _df = frame.copy()
@@ -213,8 +338,8 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
 
     # ---------- 4. 展示说明 ----------
     st.caption(
-        f"横轴为「{revenue_code}」在样本内的排名，纵轴为「{profit_code}」排名；"
-        "反向坐标（第 1 名在右上角）。"
+        f"横轴为「{revenue_rank_title}」，纵轴为「{profit_rank_title}」；"
+        "数值越小表示排名越靠前，第 1 名位于右上角。"
         "每家小图的坐标轴按该公司自身排名范围自适应缩放，便于看出排名波动；"
         "刻度数字仍为真实名次。公司按利润排名年度轨迹归类为："
         "逐年提升 / 稳健经营 / V形反转 / 大起大落 / 持续恶化。"
@@ -255,45 +380,54 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
             hide_index=True,
         )
 
-    # ---------- 5. 分列并排渲染 ----------
-    _pattern_cols = st.columns(len(active_patterns), gap="small")
-    for _col, _pattern in zip(_pattern_cols, active_patterns):
-        with _col:
-            # 列标题（模仿参考图的橙红色横幅）
-            st.markdown(
-                f"<div style='background:#D94330; color:#FFFFFF; "
-                f"text-align:center; padding:6px 0; border-radius:3px; "
-                f"font-weight:700; font-size:13px; margin-bottom:10px;'>"
-                f"{escape(_pattern)}</div>",
-                unsafe_allow_html=True,
-            )
-            # 该列下的公司，纵向堆叠
-            for _company in grouped[_pattern]:
-                # ★ 新增：在公司图上方显示公司名（红色小标题）
-                st.markdown(
-                    f"<div style='text-align:center; "
-                    f"font-size:11px; font-weight:700; color:#C8102E; "
-                    f"margin:6px 0 2px; white-space:nowrap; "
-                    f"overflow:hidden; text-overflow:ellipsis;' "
-                    f"title='{escape(_company)}'>"
-                    f"{escape(_company)}</div>",
-                    unsafe_allow_html=True,
-                )
-                try:
-                    _chart = build_performance_pattern_trajectory(
-                        frame,
-                        _company,
-                        periods_list,
-                        revenue_code=revenue_code,
-                        profit_code=profit_code,
+    # ---------- 5. 按模式纵向分组，组内公司横向网格排列 ----------
+    try:
+        grid_cols = int(cfg.get("grid_cols", 4) or 4)
+    except (TypeError, ValueError):
+        grid_cols = 4
+    grid_cols = max(3, min(5, grid_cols))
+    for _pattern in active_patterns:
+        _companies = grouped[_pattern]
+        # 模式标题横幅（整行）
+        st.markdown(
+            f"<div style='background:#D94330; color:#FFFFFF; "
+            f"text-align:center; padding:6px 0; border-radius:3px; "
+            f"font-weight:700; font-size:13px; margin:14px 0 10px;'>"
+            f"{escape(_pattern)}（{len(_companies)} 家）</div>",
+            unsafe_allow_html=True,
+        )
+        # 该组公司按 grid_cols 横向分批，每批一行
+        for _start in range(0, len(_companies), grid_cols):
+            _batch = _companies[_start : _start + grid_cols]
+            _cols = st.columns(grid_cols, gap="small")
+            for _slot, _company in enumerate(_batch):
+                with _cols[_slot]:
+                    st.markdown(
+                        f"<div style='text-align:center; "
+                        f"font-size:12px; font-weight:700; color:#C8102E; "
+                        f"margin:6px 0 2px; white-space:nowrap; "
+                        f"overflow:hidden; text-overflow:ellipsis;' "
+                        f"title='{escape(_company)}'>"
+                        f"{escape(_company)}</div>",
+                        unsafe_allow_html=True,
                     )
-                    st.altair_chart(
-                        _chart,  # ★ 改动：不再清空 title
-                        width="content",
-                        key=f"{key_prefix}_pattern_{_pattern}_{_company}",
-                    )
-                except ValueError as _exc:
-                    st.warning(f"{_company}：{_exc}")
+                    try:
+                        _chart = build_performance_pattern_trajectory(
+                            frame,
+                            _company,
+                            periods_list,
+                            revenue_code=revenue_code,
+                            profit_code=profit_code,
+                            x_title=revenue_rank_title,
+                            y_title=profit_rank_title,
+                        )
+                        st.altair_chart(
+                            _chart,
+                            width="stretch",
+                            key=f"{key_prefix}_pattern_{_pattern}_{_company}",
+                        )
+                    except ValueError as _exc:
+                        st.warning(f"{_company}：{_exc}")
 
 
 def render_plan_key_metrics_table(frame, highlight_company):
@@ -386,6 +520,10 @@ def render_plan_capital_ratio_combo(
     periods,
 ):
     cfg = module_override.chart_config if module_override else {}
+    chart_periods = annual_period_order(periods)
+    if not chart_periods:
+        st.warning("当前没有可用于年度组合图的报告期数据。")
+        return
     if chart_name == "综合充足率变化":
         amount_groups = cfg.get("amount_groups") or {
             "实际资本": ("ACTUAL_CAPITAL",),
@@ -407,16 +545,16 @@ def render_plan_capital_ratio_combo(
     shared_amount_domain = capital_ratio_amount_axis_domain(
         converted,
         amount_groups,
-        periods,
+        chart_periods,
     )
     grouped_amount_domain = capital_ratio_amount_axis_domain(
         converted,
         grouped_amount_groups,
-        periods,
+        chart_periods,
         stacked=False,
     )
     st.caption(
-        "上方 KPMG Pink 折线展示对应充足率，下方堆叠柱展示资本规模；"
+        "按年度口径展示：上方 KPMG Pink 折线为对应充足率，下方堆叠柱为资本规模；"
         "同组所有公司统一使用同一金额纵轴范围，便于直接比较资本规模。"
     )
     st.markdown("**堆叠柱组合图**")
@@ -434,13 +572,14 @@ def render_plan_capital_ratio_combo(
         lambda company_frame: build_capital_ratio_combo_chart(
             company_frame,
             amount_groups,
-            periods,
+            chart_periods,
             chart_name,
             ratio_code=ratio_code,
             ratio_label=ratio_label,
             shared_amount_domain=shared_amount_domain,
             dense_layout=dense_company_panels,
             panel_count=company_panel_count,
+            annual_labels=True,
         ),
         key_prefix=f"{key_prefix}_{ratio_code}_combo",
         highlight_company=highlight_company,
@@ -461,7 +600,7 @@ def render_plan_capital_ratio_combo(
         lambda company_frame: build_capital_ratio_combo_chart(
             company_frame,
             grouped_amount_groups,
-            periods,
+            chart_periods,
             chart_name,
             ratio_code=ratio_code,
             ratio_label=ratio_label,
@@ -469,6 +608,7 @@ def render_plan_capital_ratio_combo(
             dense_layout=dense_company_panels,
             panel_count=company_panel_count,
             bar_layout="grouped",
+            annual_labels=True,
         ),
         key_prefix=f"{key_prefix}_{ratio_code}_grouped_combo",
         highlight_company=highlight_company,
