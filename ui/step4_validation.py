@@ -8,7 +8,10 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from services.report_profiles import ReportProfile
-from services.solvency_validator import validate_standard_data_detailed
+from services.solvency_validator import (
+    validate_rule_configuration,
+    validate_standard_data_detailed,
+)
 
 from .cache import read_rules, validation_results_to_xlsx
 from .config import WORKFLOW_TAB_LABELS
@@ -37,13 +40,18 @@ def _format_metric(value: Any, unit: str = "") -> str:
         number = float(value)
     except (TypeError, ValueError):
         return str(value)
+    use_small_precision = number != 0 and abs(number) < 0.01
     if unit == "%":
-        return f"{number:,.2f}%"
+        return f"{number:,.4f}%" if use_small_precision else f"{number:,.2f}%"
     if unit == "倍":
-        return f"{number:,.2f} 倍"
+        return f"{number:,.4f} 倍" if use_small_precision else f"{number:,.2f} 倍"
     if unit:
-        return f"{number:,.2f} {unit}"
-    return f"{number:,.2f}"
+        return (
+            f"{number:,.4f} {unit}"
+            if use_small_precision
+            else f"{number:,.2f} {unit}"
+        )
+    return f"{number:,.4f}" if use_small_precision else f"{number:,.2f}"
 
 
 def _actual_unit(row: pd.Series) -> str:
@@ -238,9 +246,57 @@ def render_validation_tab(
     """STEP4 勾稽检查。"""
     st.subheader(f"{active_profile.profile_name}勾稽检查")
     st.caption(
-        "检查 STEP3 标准窄表的数据规范、六项关键指标完整性、公式勾稽和跨表一致性；"
-        "检查过程只读，不会自动修改标准化结果。失败项会给出原因，并可下钻到对应的 STEP3 记录。"
+        "对当前标准数据中的全部公司批量执行勾稽检查。公式、适用期间和容差均来自"
+        " config/solvency_validation_rules.xlsx；检查过程只读，失败项可下钻到 STEP3 记录。"
     )
+    rules = read_rules(
+        str(rules_path),
+        rules_path.stat().st_mtime_ns if rules_path.exists() else 0,
+    )
+    with st.expander("勾稽规则配置与语法校验", expanded=False):
+        st.caption(
+            f"配置文件：{rules_path}。修改 Excel 后点击“重新读取规则配置”即可生效，"
+            "无需修改代码。右值表达式支持指标编码、数字、括号和 + - * /。"
+        )
+        config_check = validate_rule_configuration(rules, taxonomy)
+        config_ok = bool(
+            not config_check.empty
+            and config_check["状态"].astype(str).eq("通过").all()
+        )
+        if config_ok:
+            st.success(config_check.iloc[-1]["说明"])
+        else:
+            st.error("规则配置存在错误，请先修正后再执行勾稽检查。")
+            st.dataframe(config_check, width="stretch", hide_index=True)
+        with st.container(horizontal=True):
+            st.download_button(
+                "下载勾稽规则配置",
+                rules_path.read_bytes(),
+                "solvency_validation_rules.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                icon=":material/download:",
+                key="download_validation_rule_config",
+            )
+            if st.button(
+                "重新读取规则配置",
+                key="reload_validation_rule_config",
+                icon=":material/refresh:",
+            ):
+                read_rules.clear()
+                st.rerun()
+        rule_columns = [
+            column
+            for column in (
+                "规则ID", "规则名称", "适用期间", "容差", "容差单位",
+                "启用", "校验方式", "左值指标", "右值表达式", "规则说明",
+            )
+            if column in rules.columns
+        ]
+        st.dataframe(
+            rules[rule_columns],
+            width="stretch",
+            hide_index=True,
+        )
     with st.expander("查看勾稽检查逻辑与失败项说明", expanded=False):
         st.markdown(
             """
@@ -248,8 +304,9 @@ def render_validation_tab(
               期间口径是否允许、数值是否可解析，以及同一来源是否存在重复或冲突记录。
             - **完整性**：检查当前期末的六项核心指标（认可资产、认可负债、实际资本、最低资本、
               核心偿付能力充足率、综合偿付能力充足率）；若 STEP3 中存在上期或下期预测数据，也会一并检查。
-            - **公式勾稽**：校验实际资本构成、实际资本=认可资产-认可负债、核心/综合偿付能力溢额、
-              核心/综合偿付能力充足率、最低资本构成；容差取勾稽规则表中的配置值。
+            - **公式勾稽**：按配置文件校验充足率、溢额、认可资产、实际资本、最低资本及量化风险、
+              非寿险保险风险、市场风险、信用风险的分项构成。
+            - **容差**：默认要求披露值与公式计算值的差额绝对值小于 0.0001；可在规则表中逐条调整。
             - **跨表一致性**：同一指标在不同来源工作表披露时应一致。系统优先以主要指标表为基准，
               与实际资本表、最低资本表等其他来源比对，而不是简单取最大值和最小值。
             - **失败原因**：每条未通过、缺失、需复核或执行错误的检查项都会给出具体原因；
@@ -261,19 +318,43 @@ def render_validation_tab(
     if st.session_state.standard_data.empty:
         st.info("请先完成 STEP3 标准化。")
     elif st.button(
-        "执行勾稽检查",
+        (
+            f"批量执行勾稽检查"
+            f"（{st.session_state.standard_data['公司'].nunique()} 家公司）"
+        ),
         type="primary",
         key="validate_data",
         icon=":material/fact_check:",
+        disabled=not config_ok,
     ):
+        validation_progress = st.progress(
+            0,
+            text="正在批量执行数据规范、完整性与公式勾稽…",
+        )
         results, evidence = validate_standard_data_detailed(
             st.session_state.standard_data,
-            read_rules(str(rules_path)),
+            rules,
             taxonomy,
+            progress_callback=lambda index, total, company: (
+                validation_progress.progress(
+                    index / max(total, 1),
+                    text=(
+                        f"已检查 {index}/{total} 家公司：{company}"
+                        f"｜逻辑：配置化公式勾稽，容差 < 0.0001"
+                    ),
+                )
+            ),
+        )
+        validation_progress.progress(
+            1.0,
+            text=f"勾稽检查完成：{len(results):,} 个检查项",
         )
         st.session_state.validation_results = results
         st.session_state.validation_evidence = evidence
         st.session_state.step3_focus = {}
+        st.session_state.batch_last_operation = (
+            f"批量勾稽检查完成：{len(results):,} 个检查项"
+        )
 
     validation_results = st.session_state.validation_results
     validation_evidence = st.session_state.get("validation_evidence", pd.DataFrame())
@@ -315,6 +396,20 @@ def render_validation_tab(
             st.info("公式勾稽未发现阻断项，但仍有重复记录等事项需要人工复核。")
         else:
             st.success("第一阶段勾稽检查已通过，可以继续进入 STEP5 数据集成。")
+
+        company_summary = (
+            validation_results.groupby(["company", "status"], dropna=False)
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+            .rename(columns={"company": "公司"})
+        )
+        st.markdown("#### 按公司汇总")
+        st.dataframe(
+            company_summary,
+            width="stretch",
+            hide_index=True,
+        )
 
         available_statuses = [
             status

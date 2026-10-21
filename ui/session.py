@@ -7,7 +7,7 @@ from threading import Lock
 import pandas as pd
 import streamlit as st
 from services.solvency_normalizer import STANDARD_COLUMNS, upgrade_standard_frame
-from services.solvency_rule_table_extractor import DEFAULT_METHOD
+from services.solvency_rule_table_extractor import DEFAULT_METHOD, MODE_RULE
 
 from .config import DEFAULT_PROFILE_ID, STANDARD_SCHEMA_VERSION
 
@@ -17,6 +17,18 @@ def new_state_defaults() -> dict[str, object]:
     return {
         "pdf_bytes": None,
         "pdf_name": "",
+        "batch_documents": {},
+        "batch_active_company": "",
+        "batch_extraction_method": MODE_RULE,
+        "batch_allow_llm_fallback": False,
+        "batch_scan_vision_fallback": True,
+        "batch_whole_page": True,
+        "batch_workers": 6,
+        "batch_document_workers": 2,
+        "batch_locate_workers": 4,
+        "batch_standardization_workers": 2,
+        "batch_last_operation": "",
+        "batch_progress": {},
         "metadata": {},
         "document_type_profile": None,
         "page_matches": [],

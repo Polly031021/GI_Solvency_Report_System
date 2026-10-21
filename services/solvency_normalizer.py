@@ -94,6 +94,11 @@ CAPITAL_COMPONENT_ZERO_TABLE_IDS = frozenset({
     "SOLVENCY_MAIN",
 })
 
+# 已识别指标但数值单元为空、短横线或“未披露”等占位符时，统一按 0 标准化。
+# 该规则覆盖全部数值型指标，而不只限于资本明细；备注会保留原始值，
+# 便于分析师回到来源页核对“披露为零”与“确实未填报”的差异。
+MISSING_NUMERIC_ZERO_MARKER = "原始值空白或占位符，按0处理"
+
 
 PERIOD_TERMS = [
     # 偿付能力主表/实际资本表/最低资本表常用
@@ -127,8 +132,17 @@ PERIOD_ALIASES = {
     "下季度末": "下季度末预测数",
     "本季度": "本季度数",
     "上季度": "上季度数",
+    "上年度": "上季度末数",
+    "上年末": "上季度末数",
+    "上年度末": "上季度末数",
     "本年累计": "本年累计数",
     "本年度累计": "本年累计数",
+    "本年度": "本年累计数",
+    "年度累计": "本年累计数",
+    "全年累计": "本年累计数",
+    "全年": "本年累计数",
+    "本期累计": "本年累计数",
+    "累计": "本年累计数",
     "期末": "期末数",
     "期初": "期初数",
     "本季末": "本季度末数",
@@ -370,10 +384,6 @@ def parse_numeric(value):
         return np.nan
 
 
-_TAIL_MODIFIER_RE = re.compile(
-    r"[（(](未考虑特征系数前|未考虑特征系数|考虑特征系数前)[）)]$"
-)
-
 # ★ 新增：剥掉形如 "(=1+2+3)" 或 "（=1.1+1.2-1.3）" 的公式后缀
 _FORMULA_SUFFIX_RE = re.compile(r"[（(]\s*=\s*[^）)]*[）)]")
 
@@ -392,7 +402,8 @@ _LEADING_ROW_NUMBER_RE = re.compile(
 
 def _normalize_label(value: str) -> str:
     text = _FORMULA_SUFFIX_RE.sub("", str(value or ""))   # ★ 先剥公式后缀
-    text = _TAIL_MODIFIER_RE.sub("", text)
+    # “未考虑特征系数前”是量化风险最低资本的独立口径；保留该后缀，
+    # 避免与基础“量化风险最低资本”合并成同一个指标。
     text = _INLINE_UNIT_PATTERN.sub("", text)
     text = _LEADING_ROW_NUMBER_RE.sub("", text)           # ★ 再剥前导行号
     text = re.sub(r"^\s*其中\s*[:：]?", "", text)          # ★ 剥“其中：”前缀
@@ -712,6 +723,18 @@ def _period_header(row: list[str], index: int) -> str:
         "",
         current,
     ).strip()
+    if (
+        any(
+            token in current
+            for token in ("本年度", "年度累计", "全年", "本期累计")
+        )
+        and "预测" not in current
+    ):
+        return "本年累计数"
+    if any(token in current for token in ("上年度", "上年末")):
+        return "上季度末数"
+    if current == "累计" or current.endswith("累计"):
+        return "本年累计数"
 
     _PERIOD_TERMS_SORTED = sorted(PERIOD_TERMS, key=len, reverse=True)
     
@@ -729,6 +752,7 @@ _STOCK_PERIOD_INDICATORS = {
     "RECOGNIZED_ASSETS", "RECOGNIZED_LIABILITIES", "ACTUAL_CAPITAL",
     "CORE_T1_CAPITAL", "CORE_T2_CAPITAL", "ANC_T1_CAPITAL", "ANC_T2_CAPITAL",
     "MINIMUM_CAPITAL", "QUANT_RISK_CAPITAL", "CONTROL_RISK_CAPITAL",
+    "QUANT_RISK_CAPITAL_BEFORE_FEATURE_FACTOR",
     "ADDITIONAL_CAPITAL",
     "CORE_SOLVENCY_SURPLUS", "COMBINED_SOLVENCY_SURPLUS",
     "CORE_SOLVENCY_RATIO", "COMBINED_SOLVENCY_RATIO",
@@ -780,8 +804,18 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         "期初数": "上季度末数",
         "本年累计数": "本年累计数",
         "本年度累计数": "本年累计数",
+        "本年度": "本年累计数",
+        "本年度末": "本年累计数",
+        "年度累计": "本年累计数",
+        "全年累计": "本年累计数",
+        "全年": "本年累计数",
+        "本期累计": "本年累计数",
+        "累计": "本年累计数",
         "本季度末数": "本季度末数",
         "上季度末数": "上季度末数",
+        "上年度": "上季度末数",
+        "上年末": "上季度末数",
+        "上年度末": "上季度末数",
         "下季度末预测数": "下季度末预测数",
         "本季末": "本季度末数",
         "上季末": "上季度末数",
@@ -812,6 +846,47 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
 
     return mapping.get(period, period)
 
+
+def infer_period_label(value: object) -> str:
+    """Infer a canonical period from a human-readable header label.
+
+    Returns an empty string when local semantic rules cannot decide. The
+    optional LLM fallback only receives these unresolved labels.
+    """
+    text = re.sub(r"\s+", "", str(value or ""))
+    if not text:
+        return ""
+    if any(
+        token in text
+        for token in ("近三年", "近3年", "三年平均", "3年平均")
+    ) or re.search(r"20\d{2}年(?:至|到|-|—)20\d{2}年", text):
+        return "近三年平均"
+    if any(token in text for token in ("下季度", "下季末", "预测")):
+        return "下季度末预测数"
+    if any(
+        token in text
+        for token in ("本年度", "年度累计", "全年", "本期累计")
+    ):
+        return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
+    if "本年累计" in text:
+        return "本年累计数"
+    if any(token in text for token in ("本季度末", "本季末")):
+        return "本季度末数"
+    if any(token in text for token in ("上季度末", "上季末", "期初")):
+        return "上季度末数"
+    if any(token in text for token in ("本季度", "本期")):
+        return "本季度数"
+    if any(token in text for token in ("上季度", "上期")):
+        return "上季度数"
+    if "期末" in text:
+        return "期末数"
+    return ""
+
+
 def normalize_tables(
     tables: list[ExtractedTable],
     taxonomy: pd.DataFrame,
@@ -824,6 +899,7 @@ def normalize_tables(
     peer_group_map: Mapping[str, str] | None = None,
     default_peer_group: str = "",
     company_type_map: Mapping[str, str] | None = None,
+    period_overrides: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
     company_type = normalize_company_type(company_type, allowed_company_types)
     company_identity = resolve_company_identity(
@@ -948,6 +1024,7 @@ def normalize_tables(
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
                 blank_capital_zero = False
+                placeholder_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
                     if not value:
@@ -964,7 +1041,8 @@ def normalize_tables(
                             numeric_value = 0.0
                             blank_capital_zero = True
                         else:
-                            continue
+                            numeric_value = 0.0
+                            placeholder_zero = True
                     value = numeric_value
                     _metric_code_for_unit = str(metric.get("指标编码", "")).strip()
                     if _metric_code_for_unit in _UNIT_CONVERT_EXEMPT_CODES:
@@ -979,7 +1057,12 @@ def normalize_tables(
                         if target_unit in _CURRENCY_UNIT_IN_YUAN and not source_unit:
                             note = "未识别原始单位，数值未换算"
                         else:
-                            value, note = _convert_unit(value, source_unit, target_unit)
+                            value, conversion_note = _convert_unit(
+                                value,
+                                source_unit,
+                                target_unit,
+                            )
+                            note = conversion_note
 
                     # ★ 新增：百分比类指标的合理性兜底校验
                     # 某些 PDF 表格（如"流动性风险监测指标"）里，"占比/增速"
@@ -1010,9 +1093,30 @@ def normalize_tables(
                         note = "资本明细空白，按0处理" + (
                             f"；{note}" if note else ""
                         )
+                    elif placeholder_zero:
+                        original = str(raw_value).strip() or "空值"
+                        note = (
+                            f"{MISSING_NUMERIC_ZERO_MARKER}"
+                            f"（原始值：{original}）"
+                            + (f"；{note}" if note else "")
+                        )
 
                 header_index = max(0, column_index - header_offset)
                 period = _period_header(headers, header_index)
+                if period_overrides:
+                    raw_period_header = str(headers[header_index]).strip()
+                    override = period_overrides.get(raw_period_header)
+                    if not override:
+                        override = next(
+                            (
+                                mapped
+                                for label, mapped in period_overrides.items()
+                                if label and label in raw_period_header
+                            ),
+                            "",
+                        )
+                    if override:
+                        period = override
                 
                 # ★ 近三年投资收益率表强制期间 = "近三年平均"
                 if "近三年" in str(getattr(table, "table_name", "")):

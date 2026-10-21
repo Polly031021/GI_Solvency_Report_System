@@ -41,6 +41,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     FINANCING_TABLE,
     INDUSTRY_PREMIUM_STRUCTURE,
     INDUSTRY_MARKET_SHARE,
+    SOLVENCY_DISCLOSURE_OVERVIEW,
     KEY_METRICS_TABLE,
     MARKET_CREDIT_MATRIX,
     PENDING_DEFINITION,
@@ -126,6 +127,17 @@ MODULE_SPECS = (
         ("SIGNED_PREMIUM", "NET_PROFIT", "COMBINED_RATIO"),
         {"min_coverage": 0.8},
     ),
+    (
+        "偿付能力披露整体情况",
+        SOLVENCY_DISCLOSURE_OVERVIEW,
+        (
+            "ACTUAL_CAPITAL",
+            "MINIMUM_CAPITAL",
+            "CORE_T1_CAPITAL",
+            "CORE_T2_CAPITAL",
+        ),
+        {},
+    ),
 )
 
 
@@ -192,6 +204,32 @@ def test_industry_premium_template_module() -> None:
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.metric) >= 4, "行业保费结构页的四个指标卡未渲染"
+    range_widget = next(
+        widget
+        for widget in at.segmented_control
+        if str(widget.key).endswith("_industry_premium_range_all_default")
+    )
+    assert range_widget.options == ["近5年", "近10年", "全部"]
+    assert range_widget.value == "全部"
+    range_caption = "\n".join(item.value for item in at.caption)
+    assert "固定行业数据" in range_caption
+    default_markdown = "\n".join(item.value for item in at.markdown)
+    assert "历年保费规模与同比增速" in default_markdown
+    assert "justify-content:flex-start" in default_markdown
+
+    range_widget.set_value("近5年").run()
+    assert not at.exception, [e.value for e in at.exception]
+    five_year_markdown = "\n".join(item.value for item in at.markdown)
+    assert "近五年保费规模与同比增速" in five_year_markdown
+
+    next(
+        widget
+        for widget in at.segmented_control
+        if str(widget.key).endswith("_industry_premium_range_all_default")
+    ).set_value("近10年").run()
+    assert not at.exception, [e.value for e in at.exception]
+    ten_year_markdown = "\n".join(item.value for item in at.markdown)
+    assert "近十年保费规模与同比增速" in ten_year_markdown
 
     # Selecting “全部” must render the full industry pool, not keep the
     # previously selected single chart.
@@ -207,7 +245,20 @@ def test_industry_premium_template_module() -> None:
     markdown_text = "\n".join(item.value for item in at.markdown)
     assert "公司类别市场份额" in markdown_text
     assert "公司类别金额对比" in markdown_text
-    print("PASS 行业概览：保费结构、全部切换与市场份额均正常")
+    assert "justify-content:flex-start" in markdown_text
+
+    at.session_state["company_nav_level_two"] = "偿付能力披露整体情况"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    metric_labels = [item.label for item in at.metric]
+    assert "综合偿付能力充足率" in metric_labels
+    assert "核心偿付能力充足率" in metric_labels
+    assert "实际资本合计" in metric_labels
+    assert "最低资本合计" in metric_labels
+    assert "偿付能力披露整体情况" in "\n".join(
+        item.value for item in at.markdown
+    )
+    print("PASS 行业概览：保费结构、全部切换、市场份额与偿付能力整体情况均正常")
 
 
 def test_default_step7_config_without_upload() -> None:

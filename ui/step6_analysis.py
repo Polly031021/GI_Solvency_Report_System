@@ -503,3 +503,21 @@ def render_analysis_tab(
         if not module_frame.empty:
             settings = _render_step6_config_panel(module_frame)
             _render_step6_chart_panel(settings, source_label)
+
+
+def render_analysis_sidebar(
+    active_profile: ReportProfile,
+    is_project_member: bool,
+    analysis_source: pd.DataFrame,
+) -> None:
+    """Render shared STEP7/STEP8 navigation without executing STEP6 content."""
+    industry_source = report_scope_frame(
+        visualization_metric_frame(analysis_source),
+        INDUSTRY_REPORT,
+    )
+    _render_step6_sidebar(
+        active_profile,
+        is_project_member,
+        True,
+        navigation_metric_codes(industry_source),
+    )

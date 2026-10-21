@@ -127,6 +127,30 @@ def test_rule_mode_offline():
     print(f"PASS 规则法定位: pages={match.pages} 置信度={match.confidence}% 依据={match.confidence_basis}")
 
 
+def test_rule_vision_mode_keeps_text_pages_off_text_model():
+    pdf = build_pdf()
+    calls = 0
+
+    def forbidden_post(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("文字页规则+图片视觉模式不应调用文本大模型")
+
+    matches, message = locate_tables_hybrid(
+        pdf,
+        FEATURE_CONFIG,
+        api_key="sk-test",
+        base_url="https://example.invalid/v1",
+        model="test-model",
+        mode="rule_vision",
+        post_func=forbidden_post,
+    )
+    assert calls == 0
+    assert matches[0].pages
+    assert "可检索文字页使用规则法" in message, message
+    print("PASS 文字页规则、图片页视觉混合模式不调用文本模型")
+
+
 def test_rule_mode_llm_verify_agree():
     pdf = build_pdf()
     matches, message = locate_tables_hybrid(
@@ -574,6 +598,7 @@ if __name__ == "__main__":
     test_document_type_text()
     test_document_type_scanned()
     test_rule_mode_offline()
+    test_rule_vision_mode_keeps_text_pages_off_text_model()
     test_rule_mode_llm_verify_agree()
     test_rule_mode_llm_verify_disagree()
     test_s05_single_row_tail_with_terminal_substring()

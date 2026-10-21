@@ -248,7 +248,22 @@ def render_report_metric(
             )
 
 
-def render_chart_legend(items: Iterable[tuple[str, str, str]]) -> None:
+def render_chart_legend(
+    items: Iterable[tuple[str, str, str]],
+    *,
+    align: str = "right",
+) -> None:
+    """Render a standalone legend with a consistent report alignment."""
+    justify_content = {
+        "left": "flex-start",
+        "center": "center",
+        "right": "flex-end",
+    }.get(str(align).strip().lower(), "flex-end")
+    margin = (
+        "2px 0 8px"
+        if justify_content == "flex-start"
+        else "2px 10px 8px 0"
+    )
     legend_html = "".join(
         (
             f"<span class='solvency-chart-legend__item'>"
@@ -258,7 +273,8 @@ def render_chart_legend(items: Iterable[tuple[str, str, str]]) -> None:
         for color, label, shape in items
     )
     st.markdown(
-        f"<div class='solvency-chart-legend'>{legend_html}</div>",
+        f"<div class='solvency-chart-legend' "
+        f"style='justify-content:{justify_content};margin:{margin}'>{legend_html}</div>",
         unsafe_allow_html=True,
     )
 

@@ -20,12 +20,18 @@ sys.path.insert(0, str(ROOT))
 
 from services import solvency_rule_table_extractor as router  # noqa: E402
 from services.batch_extraction import FlexibleTable  # noqa: E402
+from services.batch_extraction import detect_table_unit  # noqa: E402
 from services.solvency_ai_table_extractor import PageGrid, build_pdf_grids  # noqa: E402
 from services.table_number_repair import (  # noqa: E402
     build_number_index,
     repair_frame,
     repair_number_text,
     repair_thousand_separators,
+)
+from services.solvency_table_extractor import (  # noqa: E402
+    _merge_split_cjk_label,
+    _merge_wrapped_table_rows,
+    _reconstruct_logical_columns,
 )
 from ui.step2_extraction import (  # noqa: E402
     _add_column,
@@ -126,6 +132,39 @@ def test_repair_european_separators():
     assert repair_number_text("12.345.678,90")[0] == "12,345,678.90"
     assert repair_number_text("1.234,56")[0] == "1,234.56"
     print("PASS 欧式千分位写法还原")
+
+
+def test_text_alignment_split_label_is_repaired():
+    """文字对齐把标签首字拆成独立列时，应重新合并为一个指标名称。"""
+    rows = [
+        ["1", "核", "心一级资本", "34,034,737,015.50", "33,827,747,615.99"],
+        ["2", "认", "可资产", "7,798,723", "7,908,241"],
+    ]
+    repaired = _merge_split_cjk_label(rows)
+    assert repaired[0] == [
+        "1",
+        "核心一级资本",
+        "34,034,737,015.50",
+        "33,827,747,615.99",
+    ]
+    assert repaired[1] == ["2", "认可资产", "7,798,723", "7,908,241"]
+    print("PASS 文字对齐标签首字断列修复")
+
+
+def test_wrapped_metric_rows_are_joined_without_swallowing_independent_rows():
+    rows = [
+        ["行次", "项目", "本季度末数", "上季度末数"],
+        ["1", "量化风险最低资本（未考虑", "100", "90"],
+        ["", "特征系数前）", "", ""],
+        ["2", "最低资本", "200", "180"],
+        ["", "其中：控制风险最低资本", "20", "18"],
+    ]
+    repaired, events = _merge_wrapped_table_rows(rows)
+    assert repaired[1][1] == "量化风险最低资本（未考虑特征系数前）"
+    assert repaired[2][1] == "最低资本"
+    assert repaired[3][1] == "其中：控制风险最低资本"
+    assert len(events) == 1
+    print("PASS 换行指标逻辑行合并，且不吞并其中/独立项目")
 
 
 def test_repair_large_single_dot_uses_source_integer():
@@ -395,6 +434,31 @@ def test_step2_unit_detected_but_not_converted():
     assert out_grid == grid, out_grid
     assert out_grid[1][1] == "8,393,334,151.18", out_grid[1][1]
     print("PASS STEP2单位识别但不换算:", unit)
+
+
+def test_table_unit_ignores_row_level_unit_labels():
+    rows = [
+        ["指标名称（单位：万元）", "本季度数", "本年累计数"],
+        ["基本每股收益(元)", "1.065", "1.065"],
+        ["车险车均保费（元）", "1,097.19", "1,023.39"],
+    ]
+    assert detect_table_unit(rows) == "万元"
+    print("PASS 表单位优先，行级(元)不覆盖整表万元")
+
+
+def test_interleaved_header_columns_are_reconstructed():
+    rows = [
+        ["", "指标名称", "", "本季度数", "", "上季度可比数"],
+        ["保险业务收入", "", "880,244.17", "", "3,573,594.47", ""],
+        ["净利润", "", "-17,940.38", "", "167,935.69", ""],
+    ]
+    repaired = _reconstruct_logical_columns(rows)
+    assert repaired == [
+        ["指标名称", "本季度数", "上季度可比数"],
+        ["保险业务收入", "880,244.17", "3,573,594.47"],
+        ["净利润", "-17,940.38", "167,935.69"],
+    ]
+    print("PASS 众安式交错空列重建为真实三列")
 
 
 def test_editor_column_operations():
@@ -817,12 +881,16 @@ if __name__ == "__main__":
     test_repair_handles_full_width_and_reconstruction()
     test_repair_single_group_needs_source_evidence()
     test_repair_european_separators()
+    test_text_alignment_split_label_is_repaired()
+    test_wrapped_metric_rows_are_joined_without_swallowing_independent_rows()
     test_repair_large_single_dot_uses_source_integer()
     test_region_locate_middle_table_on_multi_table_page()
     test_rule_extraction_picks_middle_table_only()
     test_config_terms_pick_target_among_page_tables()
     test_profile_start_end_terms_isolate_target_table()
     test_step2_unit_detected_but_not_converted()
+    test_table_unit_ignores_row_level_unit_labels()
+    test_interleaved_header_columns_are_reconstructed()
     test_editor_column_operations()
     test_editor_frame_roundtrip_keeps_header_editable()
     test_vision_crop_uses_region_then_falls_back()
