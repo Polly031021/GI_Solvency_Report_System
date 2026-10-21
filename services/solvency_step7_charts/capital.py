@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Mapping
 
 import altair as alt
@@ -34,6 +35,54 @@ from .primitives import (
     report_period_color_map,
 )
 from .trend import metric_bar_axis_domain
+from .structure import display_period_label
+
+
+def _period_year_quarter(value: object) -> tuple[int | None, int]:
+    text = str(value or "").strip()
+    year_match = re.search(r"(20\d{2})", text)
+    if not year_match:
+        return None, 0
+    year = int(year_match.group(1))
+    quarter_match = re.search(
+        r"(?:Q|第)\s*([1-4])(?:\s*季度)?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not quarter_match:
+        quarter_match = re.search(r"([1-4])\s*季度", text)
+    if quarter_match:
+        return year, int(quarter_match.group(1))
+    chinese_quarter = re.search(r"第?([一二三四])季度", text)
+    if chinese_quarter:
+        return year, {"一": 1, "二": 2, "三": 3, "四": 4}[chinese_quarter.group(1)]
+    return year, 0
+
+
+def annual_period_order(period_order: Iterable[str]) -> list[str]:
+    """Keep one annual observation per year and prefer Q4 over partial quarters."""
+    periods = list(dict.fromkeys(str(period) for period in period_order if str(period).strip()))
+    grouped: dict[str, list[tuple[int, str]]] = {}
+    unparsed: list[str] = []
+    for period in periods:
+        year, quarter = _period_year_quarter(period)
+        if year is None:
+            unparsed.append(period)
+            continue
+        grouped.setdefault(str(year), []).append((quarter, period))
+
+    selected: list[str] = []
+    for year in sorted(grouped):
+        candidates = grouped[year]
+        q4 = [period for quarter, period in candidates if quarter == 4]
+        undated = [period for quarter, period in candidates if quarter == 0]
+        if q4:
+            selected.append(q4[-1])
+        elif undated:
+            selected.append(undated[-1])
+        else:
+            selected.append(max(candidates, key=lambda item: item[0])[1])
+    return [*selected, *unparsed]
 
 
 def solvency_ratio_axis_domain(
@@ -207,6 +256,7 @@ def build_capital_ratio_combo_chart(
     dense_layout: bool = False,
     panel_count: int = 1,
     bar_layout: str = "stacked",
+    annual_labels: bool = False,
 ) -> alt.Chart:
     """Build one company panel: ratio line above stacked or grouped capital bars."""
     if bar_layout not in {"stacked", "grouped"}:
@@ -214,6 +264,9 @@ def build_capital_ratio_combo_chart(
     periods = list(period_order)
     source_codes = tuple(code for codes in amount_groups.values() for code in codes)
     source = clean_numeric(frame[frame["指标编码"].astype(str).isin(source_codes)])
+    source = source[source["报告期"].astype(str).isin(periods)].copy()
+    if source.empty:
+        raise ValueError(f"{title}缺少可绘制的年度资本金额。")
     pivot = source.pivot_table(
         index=["公司", "报告期"],
         columns="指标编码",
@@ -256,6 +309,9 @@ def build_capital_ratio_combo_chart(
     if len(companies) != 1:
         raise ValueError(f"{title}需要按公司分别绘制。")
     company = companies[0]
+    period_labels = [display_period_label(period) for period in periods]
+    period_label_map = dict(zip(periods, period_labels))
+    components["显示期"] = components["报告期"].astype(str).map(period_label_map)
     period_font_size, value_font_size, _ = panel_typography(
         panel_count,
         dense_layout,
@@ -297,6 +353,8 @@ def build_capital_ratio_combo_chart(
             clean_numeric(frame[frame["指标编码"].astype(str).eq(ratio_code)])
         )[["公司", "报告期", "数值"]].drop_duplicates(["公司", "报告期"], keep="last")
         line_rows = line_rows.rename(columns={"数值": "线值"})
+    line_rows = line_rows[line_rows["报告期"].astype(str).isin(periods)].copy()
+    line_rows["显示期"] = line_rows["报告期"].astype(str).map(period_label_map)
     line_rows["线标签"] = line_rows["线值"].map(
         lambda value: "" if pd.isna(value) else f"{float(value):,.1f}%"
     )
@@ -307,6 +365,9 @@ def build_capital_ratio_combo_chart(
     labels = list(amount_groups)
     label_color_map = {label: label_color_for_fill(color) for label, color in zip(labels, colors)}
     components["标签颜色"] = components["组成类别"].map(label_color_map).fillna("#0C233C")
+    period_label_font_size = (
+        max(6, period_font_size - 1) if annual_labels else period_font_size
+    )
     period_axis = alt.Axis(
         title=None,
         domain=False,
@@ -314,7 +375,7 @@ def build_capital_ratio_combo_chart(
         labelAngle=0,
         labelPadding=8,
         labelColor="#7A8496",
-        labelFontSize=period_font_size,
+        labelFontSize=period_label_font_size,
         labelLimit=80,
     )
     amount_axis = alt.Axis(
@@ -340,8 +401,8 @@ def build_capital_ratio_combo_chart(
     amount_scale = alt.Scale(domain=list(amount_domain), zero=True, nice=False)
     combo_period_scale = compact_period_scale(panel_count, dense_layout)
     period_x = alt.X(
-        "报告期:N",
-        sort=periods,
+        "显示期:N" if annual_labels else "报告期:N",
+        sort=period_labels if annual_labels else periods,
         axis=period_axis,
         scale=combo_period_scale,
     )
@@ -387,7 +448,11 @@ def build_capital_ratio_combo_chart(
         .encode(**bar_encoding)
     )
     label_encoding: dict[str, object] = {
-        "x": alt.X("报告期:N", sort=periods, scale=combo_period_scale),
+        "x": alt.X(
+            "显示期:N" if annual_labels else "报告期:N",
+            sort=period_labels if annual_labels else periods,
+            scale=combo_period_scale,
+        ),
         "y": alt.Y("标签位置:Q", axis=amount_axis, scale=amount_scale),
         "text": "数值标签:N",
         "color": alt.Color("标签颜色:N", scale=None, legend=None),
@@ -416,8 +481,8 @@ def build_capital_ratio_combo_chart(
         )
         .encode(
             x=alt.X(
-                "报告期:N",
-                sort=periods,
+                "显示期:N" if annual_labels else "报告期:N",
+                sort=period_labels if annual_labels else periods,
                 axis=None,
                 scale=combo_period_scale,
             ),
@@ -443,8 +508,8 @@ def build_capital_ratio_combo_chart(
         )
         .encode(
             x=alt.X(
-                "报告期:N",
-                sort=periods,
+                "显示期:N" if annual_labels else "报告期:N",
+                sort=period_labels if annual_labels else periods,
                 axis=None,
                 scale=combo_period_scale,
             ),
@@ -467,8 +532,8 @@ def build_capital_ratio_combo_chart(
         )
         .encode(
             x=alt.X(
-                "报告期:N",
-                sort=periods,
+                "显示期:N" if annual_labels else "报告期:N",
+                sort=period_labels if annual_labels else periods,
                 axis=None,
                 scale=combo_period_scale,
             ),

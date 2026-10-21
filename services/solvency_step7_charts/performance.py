@@ -104,12 +104,12 @@ def build_performance_pattern_trajectory(
     line_color: str = "#C8102E",
     panel_width: int = 190,
     panel_height: int = 190,
-    compact: bool = True,
+    x_title: str = "签单保费排名",
+    y_title: str = "净利润排名",
 ) -> alt.Chart:
     """构建单家公司的收入—利润排名轨迹图（分列展示版）。
 
-    compact=True 时隐藏轴标题（因为列头已经表达），
-    只保留刻度标签。
+    横轴为收入排名、纵轴为利润排名；坐标轴反向，第 1 名位于右上角。
     """
     df = frame.copy()
     df["数值"] = pd.to_numeric(df["数值"], errors="coerce")
@@ -224,7 +224,9 @@ def build_performance_pattern_trajectory(
     y_ticks = max(2, int(prof_hi - prof_lo + 1))
 
     x_axis = alt.Axis(
-        title=None,
+        title=x_title,
+        titleFontSize=8,
+        titlePadding=5,
         labelFontSize=7,
         tickCount=x_ticks,
         tickMinStep=1,
@@ -233,7 +235,10 @@ def build_performance_pattern_trajectory(
         ticks=False,
     )
     y_axis = alt.Axis(
-        title=None,
+        title=y_title,
+        titleFontSize=8,
+        titleAngle=90,
+        titlePadding=4,
         labelFontSize=7,
         tickCount=y_ticks,
         tickMinStep=1,
@@ -268,8 +273,8 @@ def build_performance_pattern_trajectory(
         tooltip=[
             "公司:N",
             "报告期:N",
-            alt.Tooltip("收入排名:Q", format=".0f"),
-            alt.Tooltip("利润排名:Q", format=".0f"),
+            alt.Tooltip("收入排名:Q", title=x_title, format=".0f"),
+            alt.Tooltip("利润排名:Q", title=y_title, format=".0f"),
         ],
     )
 
@@ -343,8 +348,8 @@ def build_performance_pattern_trajectory(
             tooltip=[
                 "公司:N",
                 "报告期:N",
-                alt.Tooltip("收入排名:Q", format=".0f"),
-                alt.Tooltip("利润排名:Q", format=".0f"),
+                alt.Tooltip("收入排名:Q", title=x_title, format=".0f"),
+                alt.Tooltip("利润排名:Q", title=y_title, format=".0f"),
                 alt.Tooltip("同坐标年份数:Q", title="同坐标年份数", format=".0f"),
             ],
         )
