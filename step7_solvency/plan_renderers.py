@@ -20,8 +20,14 @@ from services.solvency_navigation import (
     metric_codes_for_chart,
 )
 from services.solvency_step7_charts import (
+    BREAKEVEN_COLOR,
+    CAPITAL_AMOUNT_CODES,
     CAPITAL_STRUCTURE_COLORS,
+    COMPONENT_LABELS,
+    EXPENSE_COLOR,
+    LOSS_COLOR,
     annual_period_order,
+    build_loss_expense_panel_chart,
     build_capability_radar_chart,
     build_company_line_trend_chart,
     build_industry_premium_structure_chart,
@@ -31,11 +37,17 @@ from services.solvency_step7_charts import (
     build_structure_change_chart,
     build_premium_growth_structure_chart,
     group_premium_growth_panels,
+    group_loss_expense_panels,
+    loss_expense_axis_domain,
     prepare_premium_growth_panel,
+    prepare_loss_expense_panel,
     premium_growth_axis_domain,
     build_capital_amount_combo,
     build_capital_ratio_combo_chart,
     capital_ratio_amount_axis_domain,
+    capital_structure_industry_ratios,
+    quant_risk_industry_sentence,
+    insurance_risk_industry_sentence,
     build_company_period_bar_chart,
     build_component_stack_chart,
     build_effect_diverging_chart,
@@ -99,7 +111,7 @@ def render_plan_structure_change_chart(chart_name, frame):
         return
 
     periods = sorted(frame["报告期"].dropna().unique().tolist())
-    columns_per_row = 2
+    columns_per_row = 4
 
     for i in range(0, len(companies), columns_per_row):
         batch = companies[i : i + columns_per_row]
@@ -201,9 +213,9 @@ def render_plan_premium_growth_structure(
         )
         for index in range(0, len(group_panels), columns_per_row):
             batch = group_panels[index : index + columns_per_row]
-            cols = st.columns(len(batch), gap="large")
-            for column, panel in zip(cols, batch):
-                with column:
+            cols = st.columns(columns_per_row, gap="small")
+            for slot, panel in enumerate(batch):
+                with cols[slot]:
                     try:
                         chart = build_premium_growth_structure_chart(
                             panel,
@@ -220,6 +232,83 @@ def render_plan_premium_growth_structure(
                         )
                     except Exception as exc:
                         st.error(f"❌ {panel.company} 保费增速图渲染失败：{exc}")
+
+
+def render_plan_loss_expense_combo(
+    chart_name,
+    frame,
+    *,
+    module_override,
+):
+    """Render five-year loss/expense stacks for every selected company."""
+    companies = ordered_companies(frame)
+    if not companies:
+        st.warning("当前没有公司数据。")
+        return
+    cfg = module_override.chart_config if module_override else {}
+    try:
+        years = max(1, min(int(cfg.get("years", 5) or 5), 10))
+    except (TypeError, ValueError):
+        years = 5
+    group_column = str(cfg.get("group_column", "同业分类")).strip() or "同业分类"
+    panels = [
+        prepare_loss_expense_panel(
+            frame,
+            company,
+            years=years,
+            group_column=group_column,
+        )
+        for company in companies
+    ]
+    panels = [panel for panel in panels if not panel.bar_frame.empty]
+    if not panels:
+        st.warning("当前没有同时具备赔付率和费用率的年度数据。")
+        return
+
+    y_domain = loss_expense_axis_domain(panels)
+    st.caption(
+        f"每家公司展示最近 {years} 个年度：下方为赔付率，上方为费用率，"
+        "柱高合计为综合成本率；红色虚线为 100% 盈亏平衡线。"
+        "柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。"
+    )
+    render_chart_legend(
+        [
+            (LOSS_COLOR, "赔付率", "square"),
+            (EXPENSE_COLOR, "费用率", "square"),
+            (BREAKEVEN_COLOR, "100% 盈亏平衡线", "dash"),
+        ]
+    )
+
+    columns_per_row = 4
+    for group_index, (group_name, group_panels) in enumerate(
+        group_loss_expense_panels(panels)
+    ):
+        st.markdown(
+            f"<div style='margin:18px 0 8px;font-size:14px;font-weight:700;"
+            f"color:#00338D;border-left:4px solid #00338D;padding-left:8px;'>"
+            f"{escape(group_name)}（{len(group_panels)} 家）</div>",
+            unsafe_allow_html=True,
+        )
+        for index in range(0, len(group_panels), columns_per_row):
+            batch = group_panels[index : index + columns_per_row]
+            cols = st.columns(columns_per_row, gap="small")
+            for slot, panel in enumerate(batch):
+                with cols[slot]:
+                    try:
+                        chart = build_loss_expense_panel_chart(
+                            panel,
+                            y_domain=y_domain,
+                        )
+                        st.altair_chart(
+                            chart,
+                            width="stretch",
+                            key=(
+                                f"{chart_name}_{group_index}_{index}_"
+                                f"{panel.company}"
+                            ),
+                        )
+                    except Exception as exc:
+                        st.error(f"❌ {panel.company} 赔付率/费用率图渲染失败：{exc}")
 
 
 def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
@@ -403,6 +492,13 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
                         f"{escape(_company)}</div>",
                         unsafe_allow_html=True,
                     )
+                    st.markdown(
+                        f"<div style='text-align:left;font-size:9px;"
+                        f"color:#6B7480;margin:0 0 3px;padding-left:2px;"
+                        f"white-space:nowrap;'>"
+                        f"{escape(profit_rank_title)}</div>",
+                        unsafe_allow_html=True,
+                    )
                     try:
                         _chart = build_performance_pattern_trajectory(
                             frame,
@@ -516,7 +612,7 @@ def render_plan_capital_ratio_combo(
     if not chart_periods:
         st.warning("当前没有可用于年度组合图的报告期数据。")
         return
-    if chart_name == "综合充足率变化":
+    if chart_name in {"综合充足率变化", "综合偿付能力充足率"}:
         amount_groups = cfg.get("amount_groups") or {
             "实际资本": ("ACTUAL_CAPITAL",),
             "最低资本": ("MINIMUM_CAPITAL",),
@@ -530,20 +626,10 @@ def render_plan_capital_ratio_combo(
         }
         ratio_code = "CORE_SOLVENCY_RATIO"
         ratio_label = "核心偿付能力充足率（%）"
-    grouped_amount_groups = cfg.get("grouped_amount_groups") or {
-        "实际资本": ("ACTUAL_CAPITAL",),
-        "最低资本": ("MINIMUM_CAPITAL",),
-    }
     shared_amount_domain = capital_ratio_amount_axis_domain(
         converted,
         amount_groups,
         chart_periods,
-    )
-    grouped_amount_domain = capital_ratio_amount_axis_domain(
-        converted,
-        grouped_amount_groups,
-        chart_periods,
-        stacked=False,
     )
     st.caption(
         "按年度口径展示：上方 KPMG Pink 折线为对应充足率，下方堆叠柱为资本规模；"
@@ -576,35 +662,6 @@ def render_plan_capital_ratio_combo(
         key_prefix=f"{key_prefix}_{ratio_code}_combo",
         highlight_company=highlight_company,
     )
-    st.markdown("**并列柱组合图**")
-    st.caption("新增视图：每个报告期的两项资本各自成柱，" "上方仍保留对应充足率折线。")
-    render_chart_legend(
-        [
-            *[
-                (KPMG_CAPITAL_COMBO_COLORS[index], label, "square")
-                for index, label in enumerate(grouped_amount_groups)
-            ],
-            ("#FD349C", ratio_label, "line"),
-        ]
-    )
-    render_company_chart_grid(
-        converted,
-        lambda company_frame: build_capital_ratio_combo_chart(
-            company_frame,
-            grouped_amount_groups,
-            chart_periods,
-            chart_name,
-            ratio_code=ratio_code,
-            ratio_label=ratio_label,
-            shared_amount_domain=grouped_amount_domain,
-            dense_layout=dense_company_panels,
-            panel_count=company_panel_count,
-            bar_layout="grouped",
-            annual_labels=True,
-        ),
-        key_prefix=f"{key_prefix}_{ratio_code}_grouped_combo",
-        highlight_company=highlight_company,
-    )
 
 
 def render_plan_capital_structure_combo(
@@ -625,6 +682,44 @@ def render_plan_capital_structure_combo(
         converted,
         capital_structure_groups,
         periods,
+    )
+    core_codes = capital_structure_groups.get("核心资本", ())
+    ancillary_codes = capital_structure_groups.get("附属资本", ())
+    industry_ratios = capital_structure_industry_ratios(
+        converted,
+        core_codes,
+        ancillary_codes,
+        periods,
+    )
+    if industry_ratios is None:
+        industry_ratio_text = (
+            "最新报告期行业平均核心资本及附属资本占实际资本的比例暂无可计算数据。"
+        )
+    else:
+        core_ratio, ancillary_ratio, _ = industry_ratios
+        industry_ratio_text = (
+            f"行业平均核心资本占实际资本的比例约{core_ratio:.1f}%，"
+            f"附属资本占比约{ancillary_ratio:.1f}%。"
+        )
+    st.markdown(
+        '<div class="solvency-report-analysis">'
+        '<p class="solvency-note-default">'
+        f"{escape('核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本，'
+                 '附属资本是指在破产清算状态下可以吸收损失的资本。')}"
+        "</p>"
+        '<p class="solvency-note-default">'
+        f"{escape(industry_ratio_text)}"
+        "</p>"
+        '<p class="solvency-note-default">'
+        f"{escape('小型、外资系、农业保险和自保公司的核心资本占比较为相似，处于80%至100%区间；'
+                 '资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。')}"
+        "</p>"
+        '<p class="solvency-note-default">'
+        f"{escape('部分集团子公司、大型公司及中型公司的附属资本占比较高，通常是在保司偿付能力充足率持续承压的情况下，'
+                 '通过发行次级定期债务、资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。')}"
+        "</p>"
+        "</div>",
+        unsafe_allow_html=True,
     )
     st.caption(
         "上方 KPMG Pink 折线展示核心资本占实际资本的比例，下方堆叠柱展示核心资本与附属资本；"
@@ -649,6 +744,7 @@ def render_plan_capital_structure_combo(
             shared_amount_domain=shared_amount_domain,
             dense_layout=dense_company_panels,
             panel_count=company_panel_count,
+            annual_labels=bool(cfg.get("annual_labels")),
         ),
         key_prefix=f"{key_prefix}_core_capital_structure",
         highlight_company=highlight_company,
@@ -663,11 +759,63 @@ def render_plan_component_stack(
     highlight_company,
     key_prefix,
     periods,
+    module_override=None,
 ):
     specs = COMPONENT_STACK_SPECS.get(chart_name, ())
     if not specs:
         st.warning(f"“{chart_name}”尚未配置组成指标。")
         return
+    negative_component_codes = (
+        (
+            "NON_LIFE_INSURANCE_RISK_DIVERSIFICATION_EFFECT",
+        )
+        if chart_name == "保险风险构成"
+        else (
+            ("QUANT_RISK_DIVERSIFICATION_EFFECT",)
+            if chart_name == "量化风险最低资本构成"
+            else (
+                ("MARKET_RISK_DIVERSIFICATION_EFFECT",)
+                if chart_name == "各类市场风险占比"
+                else (
+                    ("CREDIT_RISK_DIVERSIFICATION_EFFECT",)
+                    if chart_name == "各类信用风险占比"
+                    else ()
+                )
+            )
+        )
+    )
+    if chart_name == "量化风险最低资本构成":
+        summary_sentence = quant_risk_industry_sentence(
+            converted,
+            specs,
+            periods,
+            negative_component_codes=negative_component_codes,
+        )
+        if summary_sentence:
+            st.markdown(
+                '<div class="solvency-report-analysis">'
+                f'<p class="solvency-note-default">{escape(summary_sentence)}</p>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    elif chart_name == "保险风险构成":
+        summary_sentence = insurance_risk_industry_sentence(
+            converted,
+            periods,
+            group_column=str(
+                module_override.chart_config.get("group_column", "同业分类")
+                if module_override
+                else "同业分类"
+            ).strip()
+            or "同业分类",
+        )
+        if summary_sentence:
+            st.markdown(
+                '<div class="solvency-report-analysis">'
+                f'<p class="solvency-note-default">{escape(summary_sentence)}</p>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
     if chart_name == "计入各级资本的保单未来盈余构成占比":
         st.caption(
             "各色块表示计入相应资本层级的保单未来盈余占该公司已披露保单未来盈余明细合计的比例；"
@@ -677,6 +825,11 @@ def render_plan_component_stack(
         st.caption(
             "柱高按各构成项目/量化风险最低资本的比例展示，实际金额仅保留在悬浮信息中；"
             "数据标签与对应比例折线图一致，负向抵减项目位于零线下方。"
+        )
+    elif chart_name == "保险风险构成":
+        st.caption(
+            "柱高按各构成项目/非寿险业务保险风险最低资本的比例展示，实际金额仅保留在悬浮信息中；"
+            "负向风险分散位于零线下方。"
         )
     elif chart_name == "各类市场风险占比":
         st.caption(
@@ -690,20 +843,6 @@ def render_plan_component_stack(
         )
     else:
         st.caption("按公司分面展示构成；负向抵减项目位于零线下方，所有颜色均来自 KPMG 色卡。")
-    negative_component_codes = (
-        (
-            "QUANT_RISK_DIVERSIFICATION_EFFECT",
-            "CONTRACT_LOSS_ABSORPTION_EFFECT",
-        )
-        if chart_name == "量化风险最低资本构成"
-        else (
-            ("MARKET_RISK_DIVERSIFICATION_EFFECT",)
-            if chart_name == "各类市场风险占比"
-            else (
-                ("CREDIT_RISK_DIVERSIFICATION_EFFECT",) if chart_name == "各类信用风险占比" else ()
-            )
-        )
-    )
     proportion_stack = chart_name in COMPONENT_STACK_DENOMINATOR_CODES
     shared_stack_domain = (
         component_stack_proportion_axis_domain(
@@ -725,6 +864,11 @@ def render_plan_component_stack(
         )
     )
     render_chart_legend([(color, label, "square") for _, label, color in specs])
+    annual_labels = bool(
+        module_override.chart_config.get("annual_labels")
+        if module_override
+        else False
+    )
     render_company_chart_grid(
         converted,
         lambda company_frame: build_component_stack_chart(
@@ -743,6 +887,7 @@ def render_plan_component_stack(
             shared_y_domain=shared_stack_domain,
             plot_proportions=proportion_stack,
             min_label_share=(0.10 if chart_name == "各类市场风险占比" else None),
+            annual_labels=annual_labels,
         ),
         key_prefix=f"{key_prefix}_component_stack",
         highlight_company=highlight_company,
@@ -750,28 +895,41 @@ def render_plan_component_stack(
 
 
 def render_plan_capital_amount_combo(
-    company_panel_count, converted, dense_company_panels, highlight_company, key_prefix, periods
+    company_panel_count,
+    converted,
+    dense_company_panels,
+    highlight_company,
+    key_prefix,
+    periods,
+    module_override=None,
 ):
     st.caption(
-        "100%堆叠柱显示核心一级、核心二级、附属一级和附属二级资本构成；"
+        "100%堆叠柱显示核心一级和附属一级资本构成；"
         "所有公司和报告期的柱高一致，色块高度代表结构占比，悬浮可查看占比和金额。"
     )
-    capital_codes = [
-        "CORE_T1_CAPITAL",
-        "CORE_T2_CAPITAL",
-        "ANC_T1_CAPITAL",
-        "ANC_T2_CAPITAL",
-    ]
+    capital_codes = list(CAPITAL_AMOUNT_CODES)
     expected_count = converted["公司"].nunique() * len(periods) * len(capital_codes)
     disclosed_count = (
         converted[converted["指标编码"].astype(str).isin(capital_codes)]
         .drop_duplicates(["公司", "报告期", "指标编码"])
         .shape[0]
     )
-    capital_legend = [(color, label, "square") for label, color in CAPITAL_STRUCTURE_COLORS.items()]
+    capital_legend = [
+        (
+            CAPITAL_STRUCTURE_COLORS[COMPONENT_LABELS[code]],
+            COMPONENT_LABELS[code],
+            "square",
+        )
+        for code in capital_codes
+    ]
     if disclosed_count < expected_count:
         capital_legend.append(("#B8BDC7", "未披露", "square"))
     render_chart_legend(capital_legend)
+    annual_labels = bool(
+        module_override.chart_config.get("annual_labels")
+        if module_override
+        else False
+    )
     render_company_chart_grid(
         converted,
         lambda company_frame: build_capital_amount_combo(
@@ -779,6 +937,7 @@ def render_plan_capital_amount_combo(
             periods,
             dense_layout=dense_company_panels,
             panel_count=company_panel_count,
+            annual_labels=annual_labels,
         ),
         key_prefix=f"{key_prefix}_capital_amount",
         highlight_company=highlight_company,

@@ -59,8 +59,9 @@ def _metric_codes() -> list[str]:
         codes.extend(entry.metric_codes)
     codes.extend([
         "REGISTERED_CAPITAL", "SIGNED_PREMIUM_MOTOR", "SIGNED_PREMIUM", "NET_PROFIT",
-        "RECOGNIZED_ASSETS", "MINIMUM_CAPITAL", "COMBINED_RATIO",
-        "CREDIT_RISK_TO_QUANT_CAPITAL",
+        "RECOGNIZED_ASSETS", "MINIMUM_CAPITAL", "QUANT_RISK_CAPITAL", "COMBINED_RATIO",
+        "CREDIT_RISK_TO_QUANT_CAPITAL", "LOSS_RATIO", "EXPENSE_RATIO",
+        "INVESTMENT_RETURN",
     ])
     return list(dict.fromkeys(code for code in codes if code))
 
@@ -81,6 +82,9 @@ def _row(
             "SIGNED_PREMIUM_MOTOR",
             "NET_PROFIT",
             "COMBINED_RATIO",
+            "LOSS_RATIO",
+            "EXPENSE_RATIO",
+            "INVESTMENT_RETURN",
         }
         else "本季度末数"
     )

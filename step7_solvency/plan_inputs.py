@@ -43,7 +43,10 @@ def chart_input_metric_codes(
         )
         codes.extend(ratio_codes.values())
 
-    if plan_kind == CAPITAL_RATIO_COMBO and chart_name == "核心充足率变化":
+    if plan_kind == CAPITAL_RATIO_COMBO and chart_name in {
+        "核心充足率变化",
+        "核心偿付能力充足率",
+    }:
         codes.append("ACTUAL_CAPITAL")
 
     return tuple(dict.fromkeys(codes))

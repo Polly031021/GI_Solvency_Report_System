@@ -19,6 +19,7 @@ from services.solvency_step7_chart_plans import (
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
     PREMIUM_GROWTH_STRUCTURE,
+    LOSS_EXPENSE_COST_RATIO,
     COMPONENT_STACK,
     EFFECT_DIVERGING,
     FINANCING_TABLE,
@@ -58,6 +59,7 @@ from .plan_renderers import (
     render_plan_solvency_ratio_combo,
     render_plan_structure_change_chart,
     render_plan_premium_growth_structure,
+    render_plan_loss_expense_combo,
     render_plan_underwriting_efficiency_scatter,
 )
 
@@ -109,6 +111,14 @@ def render_combination_analysis(
             chart_name,
             frame,
             unit_mode=unit_mode,
+            module_override=module_override,
+        )
+        return
+
+    if plan.kind == LOSS_EXPENSE_COST_RATIO:
+        render_plan_loss_expense_combo(
+            chart_name,
+            frame,
             module_override=module_override,
         )
         return
@@ -220,6 +230,7 @@ def render_combination_analysis(
             highlight_company,
             key_prefix,
             periods,
+            module_override,
         )
 
     elif plan.kind == CAPITAL_AMOUNT_COMBO:
@@ -230,6 +241,7 @@ def render_combination_analysis(
             highlight_company,
             key_prefix,
             periods,
+            module_override,
         )
     elif plan.kind == EFFECT_DIVERGING:
         render_plan_effect_diverging(chart_name, converted, key_prefix, module_override, periods)

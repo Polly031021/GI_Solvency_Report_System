@@ -80,9 +80,19 @@ def build_metric_trend_group(
         else alt.value(0.72)
     )
     value_tooltip = alt.Tooltip("数值:Q", format=label_format)
+    x_axis = (
+        alt.Axis(labelAngle=0)
+        if code
+        in {
+            "ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS",
+            "INVESTMENT_RETURN",
+            "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES",
+        }
+        else alt.Axis()
+    )
     base = alt.Chart(metric)
     lines = base.mark_line().encode(
-        x=alt.X("报告期:N", sort=periods, title="报告期"),
+        x=alt.X("报告期:N", sort=periods, title="报告期", axis=x_axis),
         y=alt.Y(
             "数值:Q",
             title=_axis_title(metric),
@@ -176,11 +186,107 @@ def prepare_metric_trend(
         metric["是否全局最大"] = False
         metric["是否全局最小"] = False
         metric["显示标签"] = metric["数值"].gt(label_threshold).fillna(False)
+    elif code in {
+        "ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS",
+        "INVESTMENT_RETURN",
+        "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES",
+    }:
+        metric["是否全局最大"] = metric.groupby("报告期")["数值"].transform(
+            lambda values: values.eq(values.max())
+        )
+        metric["是否全局最小"] = metric.groupby("报告期")["数值"].transform(
+            lambda values: values.eq(values.min())
+        )
+        metric["显示标签"] = metric[["是否追踪", "是否全局最大", "是否全局最小"]].any(axis=1)
     else:
         metric["是否全局最大"] = metric["数值"].eq(metric["数值"].max())
         metric["是否全局最小"] = metric["数值"].eq(metric["数值"].min())
         metric["显示标签"] = metric[["是否追踪", "是否全局最大", "是否全局最小"]].any(axis=1)
     return metric, periods, name, trend_y_domain(metric, code)
+
+
+def insurance_risk_liability_pressure_sentence(
+    frame: pd.DataFrame,
+    code: str,
+    period_order: Iterable[str],
+    *,
+    group_column: str = "同业分类",
+) -> str:
+    """Compare latest-year insurance-risk pressure by company category."""
+    periods = [str(period) for period in period_order]
+    if frame.empty or not periods or not group_column:
+        return ""
+    latest_period = periods[-1]
+    rows = frame[
+        frame["指标编码"].astype(str).eq(code)
+        & frame["报告期"].astype(str).eq(latest_period)
+    ].copy()
+    if rows.empty:
+        return ""
+    rows["数值"] = pd.to_numeric(rows["数值"], errors="coerce")
+    rows = rows.dropna(subset=["公司", "数值"]).copy()
+    if rows.empty:
+        return ""
+    if "期间口径" in rows.columns:
+        scope = rows["期间口径"].fillna("").astype(str).str.strip()
+        rows["_口径优先级"] = scope.str.contains("本年累计|期末|本季末|当期", na=False).map(
+            {True: 0, False: 1}
+        )
+        rows = rows.sort_values(["公司", "_口径优先级"], kind="stable")
+    rows = rows.drop_duplicates("公司", keep="first")
+    group_map: dict[str, str] = {}
+    if group_column in frame.columns:
+        group_rows = (
+            frame[["公司", group_column]]
+            .dropna()
+            .assign(
+                **{
+                    group_column: lambda data: data[group_column]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", "未分类")
+                }
+            )
+            .drop_duplicates("公司", keep="first")
+        )
+        group_map = dict(zip(group_rows["公司"].astype(str), group_rows[group_column]))
+    rows["公司分类"] = rows["公司"].astype(str).map(group_map).fillna("未分类")
+    group_means = rows.groupby("公司分类")["数值"].mean().sort_values()
+    if group_means.empty:
+        return ""
+    lowest_group = str(group_means.index[0])
+    lowest_mean = float(group_means.iloc[0])
+    others = rows[rows["公司分类"].ne(lowest_group)]["数值"]
+    if others.empty:
+        return (
+            f"最新年度{lowest_group}的非寿险保险风险压力因子平均值为"
+            f"{lowest_mean:.2f}%，当前样本不足以进行跨类型比较。"
+        )
+    others_mean = float(others.mean())
+    overall_mean = float(rows["数值"].mean())
+    difference = others_mean - lowest_mean
+    clearly_lower = difference >= max(0.25, abs(overall_mean) * 0.10)
+    group_text = lowest_group if lowest_group.endswith("公司") else f"{lowest_group}公司"
+    if clearly_lower and lowest_group == "外资系":
+        conclusion = (
+            f"{group_text}的非寿险保险风险压力因子平均值为{lowest_mean:.2f}%，"
+            f"明显低于其他类型公司的平均水平{others_mean:.2f}%，"
+            "体现了外资系保司在控制业务风险方面的严格程度。"
+        )
+    elif clearly_lower:
+        conclusion = (
+            f"{group_text}的非寿险保险风险压力因子平均值为{lowest_mean:.2f}%，"
+            f"明显低于其他类型公司的平均水平{others_mean:.2f}%，"
+            "体现了该类公司在控制保险业务风险方面相对审慎。"
+        )
+    else:
+        conclusion = (
+            "各类型公司的非寿险保险风险压力因子差异相对有限，"
+            f"平均最低的是{group_text}（{lowest_mean:.2f}%），"
+            f"其他类型公司平均为{others_mean:.2f}%。"
+        )
+    return conclusion
 
 
 def build_single_metric_trend_chart(

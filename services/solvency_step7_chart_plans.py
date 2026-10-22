@@ -28,6 +28,7 @@ CAPABILITY_RADAR = "capability_radar"          # ★ 新增
 UNDERWRITING_EFFICIENCY_SCATTER = "underwriting_efficiency_scatter"  # 承保效益五年年度散点图
 STRUCTURE_CHANGE_CHART = "structure_change_chart"  # ★ 新增：结构变化组合图
 PREMIUM_GROWTH_STRUCTURE = "premium_growth_structure"  # 车险结构 + 总保费增速
+LOSS_EXPENSE_COST_RATIO = "loss_expense_cost_ratio"
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
 INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
 INDUSTRY_MARKET_SHARE = "industry_market_share"  # ★ 新增：行业市场份额
@@ -75,7 +76,7 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     ),
     "资本规模与结构": ChartPlan(
         CAPITAL_AMOUNT_COMBO,
-        "核心一级、核心二级、附属一级和附属二级资本堆叠图",
+        "核心一级与附属一级资本堆叠图",
     ),
     "核心资本明细占比-待定": ChartPlan(
         PENDING_DEFINITION,
@@ -92,6 +93,10 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     "量化风险最低资本构成": ChartPlan(
         COMPONENT_STACK,
         "量化风险最低资本正负向构成堆叠图",
+    ),
+    "保险风险构成": ChartPlan(
+        COMPONENT_STACK,
+        "非寿险业务保险风险构成：巨灾、准备金、保费及风险分散",
     ),
     "各类保险风险（寿）占比": ChartPlan(
         COMPONENT_STACK,
@@ -128,6 +133,10 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     "保费增速": ChartPlan(
         PREMIUM_GROWTH_STRUCTURE,
         "每家公司近五年车险/非车险结构占比与总保费同比增速",
+    ),
+    "赔付率与费用率": ChartPlan(
+        LOSS_EXPENSE_COST_RATIO,
+        "每家公司近五年赔付率、费用率堆叠及综合成本率",
     ),
     "经营效益": ChartPlan(
         STRUCTURE_CHANGE_CHART,

@@ -14,12 +14,15 @@ from services.solvency_step6_analysis import (
     sort_report_periods,
 )
 from services.solvency_step7_charts import (
+    annual_period_order,
     build_company_bar_trend_chart,
     build_company_period_bar_chart,
     build_single_metric_trend_charts,
+    insurance_risk_liability_pressure_sentence,
     convert_multiple_units_to_percent,
     metric_bar_axis_domain,
     report_period_color_map,
+    display_period_label,
 )
 
 from .ai_analysis import ai_analysis_for_latest_period
@@ -109,6 +112,21 @@ def convert_unit(frame: pd.DataFrame, target: str) -> pd.DataFrame:
     return result
 
 
+def prepare_annual_metric_frame(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Keep one observation per year and replace report periods with years."""
+    annual_periods = annual_period_order(frame["报告期"])
+    if not annual_periods:
+        return frame.iloc[0:0].copy(), []
+    period_label_map = {
+        period: display_period_label(period) for period in annual_periods
+    }
+    result = frame[frame["报告期"].astype(str).isin(annual_periods)].copy()
+    result["报告期"] = result["报告期"].astype(str).map(period_label_map)
+    return result, [period_label_map[period] for period in annual_periods]
+
+
 def render_report_metric(
     frame: pd.DataFrame,
     code: str,
@@ -124,6 +142,7 @@ def render_report_metric(
     key_prefix: str,
     company_panels: bool = False,
     company_period_bars: bool = False,
+    annual_labels: bool = False,
 ) -> None:
     metric_frame = filter_analysis_frame(frame, metric_code=code, periods=periods)
     if metric_frame.empty:
@@ -131,13 +150,51 @@ def render_report_metric(
         return
     metric_frame = convert_unit(metric_frame, unit_mode)
     metric_frame = convert_multiple_units_to_percent(metric_frame)
+    if code == "ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS":
+        insight = (
+            "实际资本/认可资产率较高的公司，说明目前的综合偿付能力充足率较高，"
+            "但也说明还有提升资本利用率的空间。"
+        )
+        st.markdown(
+            '<div class="solvency-report-analysis">'
+            f'<p class="solvency-note-default">{escape(insight)}</p>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    if annual_labels:
+        metric_frame, ordered_periods = prepare_annual_metric_frame(metric_frame)
+        if not ordered_periods:
+            st.caption("当前没有可用于年度趋势图的报告期数据。")
+            return
+    else:
+        ordered_periods = sort_report_periods(metric_frame["报告期"])
+    if code == "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES":
+        risk_pressure_text = insurance_risk_liability_pressure_sentence(
+            metric_frame,
+            code,
+            ordered_periods,
+        )
+        st.markdown(
+            '<div class="solvency-report-analysis">'
+            '<p class="solvency-note-default">'
+            "以该指标体现公司保险风险最低资本相对认可负债的压力因子值，"
+            "比率越高说明负债对应的保险风险水平越高。"
+            "</p>"
+            + (
+                '<p class="solvency-note-default">'
+                f"{escape(risk_pressure_text)}</p>"
+                if risk_pressure_text
+                else ""
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
     metric_name = str(metric_frame.iloc[0]["指标名称"])
     st.caption(
         f"公司 {metric_frame['公司'].nunique()} 家　｜　"
         f"报告期 {metric_frame['报告期'].nunique()} 个　｜　"
         f"记录 {len(metric_frame):,} 条"
     )
-    ordered_periods = sort_report_periods(metric_frame["报告期"])
     latest_period = ordered_periods[-1]
     latest = metric_frame[metric_frame["报告期"].astype(str).eq(latest_period)].copy()
     latest["数值"] = pd.to_numeric(latest["数值"], errors="coerce")

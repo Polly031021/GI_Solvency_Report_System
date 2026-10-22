@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+import re
 
 import pandas as pd
 import streamlit as st
@@ -35,6 +36,7 @@ from services.solvency_step7_chart_plans import (
     chart_plan_for,
     PERFORMANCE_PATTERN_GRID,
 )
+from services.solvency_step7_charts import annual_period_order
 from services.solvency_report_notes import company_notes_template
 
 from .plans import render_combination_analysis
@@ -52,6 +54,46 @@ from .selection import (
 )
 from .specs import ALL_COMPANY_TYPES, PICTURE_DIR, SORT_ASCENDING, SORT_DESCENDING
 from .theme import render_report_style
+
+
+def configured_chart_periods(
+    periods: list[str],
+    chart_config: dict | None,
+) -> list[str]:
+    """Apply optional year limits and annual labels to one chart."""
+    config = chart_config or {}
+    ordered = sort_report_periods(periods)
+    try:
+        start_year = int(config.get("year_start"))
+    except (TypeError, ValueError):
+        start_year = None
+    try:
+        end_year = int(config.get("year_end"))
+    except (TypeError, ValueError):
+        end_year = None
+
+    if start_year is not None or end_year is not None:
+        limited: list[str] = []
+        for period in ordered:
+            match = re.search(r"(20\d{2})", str(period))
+            if not match:
+                continue
+            year = int(match.group(1))
+            if start_year is not None and year < start_year:
+                continue
+            if end_year is not None and year > end_year:
+                continue
+            limited.append(period)
+        ordered = limited
+    if config.get("annual_labels"):
+        ordered = annual_period_order(ordered)
+    try:
+        year_limit = int(config.get("years"))
+    except (TypeError, ValueError):
+        year_limit = None
+    if year_limit is not None and year_limit > 0:
+        ordered = ordered[-year_limit:]
+    return ordered
 
 
 def show_step_7_solvency(
@@ -282,6 +324,17 @@ def show_step_7_solvency(
             module_requires_all = module.requires_all  # ★ 改用 Excel 的值
             module_entry_metric_codes = module.metric_codes
 
+        chart_periods = configured_chart_periods(
+            selected_periods,
+            module.chart_config if module else {},
+        )
+        if not chart_periods:
+            st.warning(f"“{chart_name}”在配置的年度范围内没有可用数据。")
+            continue
+        chart_scope = scoped[
+            scoped["报告期"].fillna("").astype(str).isin(chart_periods)
+        ].copy()
+
         # 标题：Excel 有二级就拼上，没有就省掉；二级与图表同名时只保留一次。
         title_parts = []
         for part in (level_one, level_two, chart_name):
@@ -321,7 +374,7 @@ def show_step_7_solvency(
                 else:
                     plan_kind = chart_plan_for(chart_name).kind
 
-                available_codes = set(scoped["指标编码"].fillna("").astype(str))
+                available_codes = set(chart_scope["指标编码"].fillna("").astype(str))
                 missing_codes = [c for c in module_entry_metric_codes if c not in available_codes]
 
                 if module_requires_all and missing_codes:
@@ -336,9 +389,9 @@ def show_step_7_solvency(
                     )
                     for code in codes_for_this_chart:
                         render_report_metric(
-                            scoped,
+                            chart_scope,
                             code,
-                            periods=selected_periods,
+                            periods=chart_periods,
                             show_labels=show_labels,
                             decimals=decimals,
                             unit_mode=unit_mode,
@@ -349,13 +402,18 @@ def show_step_7_solvency(
                             key_prefix=f"s7_{chart_index}",
                             company_panels=(plan_kind == COMPANY_BAR_TREND),
                             company_period_bars=(plan_kind == TREND_WITH_COMPANY_BARS),
+                            annual_labels=bool(
+                                module.chart_config.get("annual_labels")
+                                if module
+                                else False
+                            ),
                         )
                 else:
                     try:
                         render_combination_analysis(
-                            scoped,
+                            chart_scope,
                             chart_name,
-                            periods=selected_periods,
+                            periods=chart_periods,
                             unit_mode=unit_mode,
                             highlight_company=highlight_company,
                             key_prefix=f"s7_{chart_index}",

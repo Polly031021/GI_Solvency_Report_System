@@ -60,12 +60,23 @@ COMPONENT_STACK_SPECS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("POLICY_SURPLUS_ANC_T2", "计入附属二级资本", CAPITAL_STRUCTURE_COLORS["附属二级资本"]),
     ),
     "量化风险最低资本构成": (
-        ("INSURANCE_RISK_CAPITAL", "保险风险（寿）", KPMG_QUANT_RISK_COLORS[0]),
-        ("NON_LIFE_INSURANCE_RISK_CAPITAL", "保险风险（非寿）", KPMG_QUANT_RISK_COLORS[1]),
+        ("NON_LIFE_INSURANCE_RISK_CAPITAL", "非寿险业务保险风险", KPMG_QUANT_RISK_COLORS[1]),
         ("MARKET_RISK_CAPITAL", "市场风险", KPMG_QUANT_RISK_COLORS[2]),
         ("CREDIT_RISK_CAPITAL", "信用风险", KPMG_QUANT_RISK_COLORS[3]),
-        ("QUANT_RISK_DIVERSIFICATION_EFFECT", "风险分散效应", KPMG_QUANT_RISK_COLORS[4]),
-        ("CONTRACT_LOSS_ABSORPTION_EFFECT", "损失吸收效应", KPMG_QUANT_RISK_COLORS[5]),
+        ("QUANT_RISK_DIVERSIFICATION_EFFECT", "风险分散", KPMG_QUANT_RISK_COLORS[4]),
+    ),
+    "保险风险构成": (
+        (
+            "NON_LIFE_PREMIUM_RESERVE_RISK_CAPITAL",
+            "保费及准备金风险",
+            KPMG_QUANT_RISK_COLORS[1],
+        ),
+        ("NON_LIFE_CATASTROPHE_RISK_CAPITAL", "巨灾风险", KPMG_QUANT_RISK_COLORS[0]),
+        (
+            "NON_LIFE_INSURANCE_RISK_DIVERSIFICATION_EFFECT",
+            "风险分散",
+            KPMG_QUANT_RISK_COLORS[4],
+        ),
     ),
     "各类保险风险（寿）占比": (
         ("LOSS_OCCURRENCE_RISK_CAPITAL", "损失发生风险", KPMG_BRIGHT_CHART_COLORS[0]),
@@ -102,6 +113,7 @@ QUANT_RISK_STACK_RATIO_CODES = {
 }
 COMPONENT_STACK_DENOMINATOR_CODES = {
     "量化风险最低资本构成": "QUANT_RISK_CAPITAL",
+    "保险风险构成": "NON_LIFE_INSURANCE_RISK_CAPITAL",
     "各类市场风险占比": "MARKET_RISK_CAPITAL",
     "各类信用风险占比": "CREDIT_RISK_CAPITAL",
 }

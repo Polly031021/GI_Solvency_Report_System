@@ -235,10 +235,7 @@ def build_performance_pattern_trajectory(
         ticks=False,
     )
     y_axis = alt.Axis(
-        title=y_title,
-        titleFontSize=8,
-        titleAngle=90,
-        titlePadding=4,
+        title=None,
         labelFontSize=7,
         tickCount=y_ticks,
         tickMinStep=1,

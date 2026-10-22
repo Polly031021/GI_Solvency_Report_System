@@ -103,6 +103,8 @@ def test_chart_uses_independent_left_and_right_axes() -> None:
     spec_text = str(spec)
     assert "'orient': 'right'" in spec_text
     assert "总保费同比增速" in spec_text
+    assert "'title': '年份'" in spec_text
+    assert "'width': 280" in spec_text
 
 
 def test_groups_follow_company_category_order() -> None:

@@ -214,7 +214,7 @@ COMPANY_NAVIGATION: tuple[NavigationEntry, ...] = (
     ),
     NavigationEntry(COMPANY_OVERVIEW_LEVEL, "资本使用效率", "核心资本/注册资本", ("CORE_CAPITAL_TO_REGISTERED_CAPITAL",)),
     NavigationEntry(COMPANY_OVERVIEW_LEVEL, "资本使用效率", "实际资本/认可资产率", ("ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS",)),
-    NavigationEntry(ACTUAL_CAPITAL_LEVEL, "行业资本分级", "资本规模与结构", ("CORE_T1_CAPITAL", "CORE_T2_CAPITAL", "ANC_T1_CAPITAL", "ANC_T2_CAPITAL"), True),
+    NavigationEntry(ACTUAL_CAPITAL_LEVEL, "行业资本分级", "资本规模与结构", ("CORE_T1_CAPITAL", "ANC_T1_CAPITAL"), True),
     NavigationEntry(ACTUAL_CAPITAL_LEVEL, "核心资本", "核心资本明细占比-待定", (), always_available=True),
     NavigationEntry(ACTUAL_CAPITAL_LEVEL, "附属资本", "附属资本明细占比-待定", (), always_available=True),
     # NavigationEntry(
@@ -230,9 +230,21 @@ COMPANY_NAVIGATION: tuple[NavigationEntry, ...] = (
         "风险构成情况",
         "量化风险最低资本构成",
         (
-            "INSURANCE_RISK_CAPITAL", "NON_LIFE_INSURANCE_RISK_CAPITAL",
-            "MARKET_RISK_CAPITAL", "CREDIT_RISK_CAPITAL",
-            "QUANT_RISK_DIVERSIFICATION_EFFECT", "CONTRACT_LOSS_ABSORPTION_EFFECT",
+            "NON_LIFE_INSURANCE_RISK_CAPITAL",
+            "MARKET_RISK_CAPITAL",
+            "CREDIT_RISK_CAPITAL",
+            "QUANT_RISK_DIVERSIFICATION_EFFECT",
+        ),
+        True,
+    ),
+    NavigationEntry(
+        MINIMUM_CAPITAL_LEVEL,
+        "保险风险",
+        "保险风险构成",
+        (
+            "NON_LIFE_PREMIUM_RESERVE_RISK_CAPITAL",
+            "NON_LIFE_CATASTROPHE_RISK_CAPITAL",
+            "NON_LIFE_INSURANCE_RISK_DIVERSIFICATION_EFFECT",
         ),
         True,
     ),

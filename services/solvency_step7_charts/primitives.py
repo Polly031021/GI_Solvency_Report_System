@@ -30,9 +30,7 @@ REGULATORY_LIMITS = {
 }
 CAPITAL_AMOUNT_CODES = (
     "CORE_T1_CAPITAL",
-    "CORE_T2_CAPITAL",
     "ANC_T1_CAPITAL",
-    "ANC_T2_CAPITAL",
 )
 COMPONENT_LABELS = {
     "CORE_T1_CAPITAL": "核心一级资本",
@@ -59,7 +57,7 @@ CAPITAL_STRUCTURE_COLORS = {
 CAPITAL_COMPONENT_ORDER = {label: index for index, label in enumerate(list(COMPONENT_COLORS)[:4])}
 MIN_INSIDE_LABEL_SHARE = 0.045
 TREND_LABEL_FORMATS = {
-    "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES": ",.5f",
+    "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES": ",.2f",
     "LIFE_INSURANCE_RISK_TO_QUANT_CAPITAL": ",.1f",
     "NON_LIFE_INSURANCE_RISK_TO_QUANT_CAPITAL": ",.1f",
     "MARKET_RISK_TO_QUANT_CAPITAL": ",.1f",
@@ -81,9 +79,7 @@ TREND_AXIS_FORMATS = {
 TREND_LABEL_THRESHOLDS = {
     "POLICY_SURPLUS_CORE_TO_CORE_CAPITAL": 40.0,
 }
-COMPACT_TREND_SCALE_CODES = {
-    "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES",
-}
+COMPACT_TREND_SCALE_CODES: set[str] = set()
 
 
 def report_period_color_map(period_order: Iterable[str]) -> dict[str, str]:
@@ -239,22 +235,13 @@ def convert_multiple_units_to_percent(frame: pd.DataFrame) -> pd.DataFrame:
         return result
     units = result["单位"].fillna("").astype(str).str.strip()
     multiple_mask = units.eq("倍")
-    metric_codes = (
-        result.get("指标编码", pd.Series("", index=result.index)).fillna("").astype(str).str.strip()
-    )
-    non_life_liability_mask = metric_codes.eq("NON_LIFE_INSURANCE_RISK_TO_LIABILITIES")
-    permille_from_multiple = non_life_liability_mask & multiple_mask
-    permille_from_percent = non_life_liability_mask & units.isin({"%", "％"})
-    percent_mask = multiple_mask & ~non_life_liability_mask
-    if not (percent_mask | permille_from_multiple | permille_from_percent).any():
+    percent_mask = multiple_mask
+    if not percent_mask.any():
         return result
     numeric = pd.to_numeric(result["数值"], errors="coerce")
     result["数值"] = numeric
     result.loc[percent_mask, "数值"] = numeric.loc[percent_mask] * 100.0
     result.loc[percent_mask, "单位"] = "%"
-    result.loc[permille_from_multiple, "数值"] = numeric.loc[permille_from_multiple] * 1000.0
-    result.loc[permille_from_percent, "数值"] = numeric.loc[permille_from_percent] * 10.0
-    result.loc[permille_from_multiple | permille_from_percent, "单位"] = "‰"
     return result
 
 
