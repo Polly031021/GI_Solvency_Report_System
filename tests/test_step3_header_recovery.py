@@ -96,3 +96,20 @@ def test_exact_label_recovers_cross_table_metric():
     )
     assert len(frame) == 1
     assert frame.iloc[0]["指标编码"] == "COMBINED_SOLVENCY_RATIO"
+
+
+def test_dual_header_audit_qualifiers_are_distinct():
+    """期末/期初 × 审计后/审计前四列必须保留四个不同期间口径。"""
+    frame = _run(
+        [
+            ["项目", "期末数-审计后", "期末数-审计前", "期初数-审计后", "期初数-审计前"],
+            ["核心一级资本", "100", "110", "90", "95"],
+        ]
+    )
+    assert len(frame) == 4
+    assert set(frame["期间口径"]) == {
+        "本季度末数-审计后",
+        "本季度末数-审计前",
+        "上季度末数-审计后",
+        "上季度末数-审计前",
+    }
