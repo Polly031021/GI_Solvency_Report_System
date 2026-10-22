@@ -28,6 +28,11 @@ from services.report_style import (
     REPORT_GRID_COLOR,
 )
 
+try:
+    from .insight_cards import render_insight_card
+except ImportError:
+    from step7_solvency.insight_cards import render_insight_card
+
 
 DEFAULT_BREAKEVEN = 100.0
 
@@ -759,6 +764,81 @@ def render_underwriting_efficiency_scatter(
     counts = annual_underwriting_counts(annual, breakeven=breakeven)
     years = sorted(annual["年度"].dropna().astype(int).unique().tolist())
     count_chart = build_underwriting_count_chart(counts, years=years)
+
+    if years:
+        latest_year = int(years[-1])
+        latest_rows = annual[annual["年度"].eq(latest_year)].copy()
+        latest_rows["综合成本率"] = pd.to_numeric(
+            latest_rows["综合成本率"], errors="coerce"
+        )
+        latest_rows["保费"] = pd.to_numeric(latest_rows["保费"], errors="coerce")
+        priced = latest_rows.dropna(subset=["综合成本率", "保费"])
+        priced = priced[priced["保费"].gt(0)]
+        weighted_ratio = (
+            float(
+                (priced["综合成本率"] * priced["保费"]).sum()
+                / priced["保费"].sum()
+            )
+            if not priced.empty
+            else None
+        )
+        median_ratio = (
+            float(latest_rows["综合成本率"].median())
+            if latest_rows["综合成本率"].notna().any()
+            else None
+        )
+        latest_counts = counts[counts["年度"].eq(latest_year)]
+        profit_count = (
+            int(latest_counts.iloc[0]["盈利"]) if not latest_counts.empty else 0
+        )
+        loss_count = (
+            int(latest_counts.iloc[0]["亏损"]) if not latest_counts.empty else 0
+        )
+        previous_counts = counts[counts["年度"].eq(latest_year - 1)]
+        previous_profit = (
+            int(previous_counts.iloc[0]["盈利"])
+            if not previous_counts.empty
+            else None
+        )
+        profit_change = (
+            f"较 {latest_year - 1} 年 {profit_count - previous_profit:+d} 家"
+            if previous_profit is not None
+            else "无上年可比数据"
+        )
+        render_insight_card(
+            title="承保效益",
+            headline=f"{latest_year} 年行业承保效益",
+            value=(
+                f"加权综合成本率 {weighted_ratio:.1f}%"
+                if weighted_ratio is not None
+                else "加权综合成本率 —"
+            ),
+            delta=f"盈利 {profit_count} 家 / 亏损 {loss_count} 家",
+            delta_tone=(
+                "up"
+                if weighted_ratio is not None and weighted_ratio < breakeven
+                else "down"
+                if weighted_ratio is not None
+                else "neutral"
+            ),
+            bullets=[
+                f"盈利 {profit_count} 家，亏损 {loss_count} 家（{profit_change}）",
+                (
+                    f"综合成本率中位数 {median_ratio:.1f}%"
+                    if median_ratio is not None
+                    else "综合成本率中位数暂不可用"
+                ),
+                (
+                    f"样本公司数 {int(latest_counts.iloc[0]['有效公司数'])} 家"
+                    if not latest_counts.empty
+                    else "样本公司数暂不可用"
+                ),
+            ],
+            footnote=(
+                "加权综合成本率 = Σ（公司综合成本率 × 公司保费）/ Σ公司保费；"
+                "低于 100% 表示承保盈利。"
+            ),
+        )
 
     year_label = f"{years[0]}–{years[-1]}" if years else "—"
     st.caption(

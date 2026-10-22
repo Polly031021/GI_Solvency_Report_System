@@ -7,8 +7,10 @@ while the output remains the canonical narrow table consumed by STEP5.
 """
 
 import io
+import re
 from dataclasses import dataclass
 from copy import copy
+from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -19,13 +21,22 @@ from .solvency_dataset_adapter import (
     write_standard_workbook_sheets,
 )
 from .solvency_metric_registry import DERIVED_METRICS
+from .solvency_company_identity import (
+    resolve_company_identity,
+    resolve_peer_group,
+)
 from .solvency_normalizer import (
     CAPITAL_COMPONENT_ZERO_CODES,
     CAPITAL_COMPONENT_ZERO_TABLE_IDS,
     NARROW_TABLE_COLUMNS,
     STANDARD_COLUMNS,
+    _EXACT_LABEL_LOCKS,
+    _normalize_label,
+    _split_period_qualifier,
+    infer_period_label,
     normalize_tables,
 )
+from .solvency_table_boundaries import TABLE_CANONICAL_HEADERS
 from .solvency_table_extractor import ExtractedTable
 
 
@@ -44,6 +55,14 @@ TARGET_TEMPLATE_COLUMNS = [
 ]
 
 # 去重时把不同叫法归一到同一期间 key，仅用于去重，不改输出的"期间口径"字段
+_PERIOD_SORT_PRIORITY = {
+    "本季度末数": 0,
+    "上季度末数": 1,
+    "下季度末预测数": 2,
+    "本年累计数": 3,
+    "近三年平均": 4,
+}
+
 _PERIOD_DEDUP_ALIASES: dict[str, str] = {
     "本季度数": "本季度末数",
     "上季度数": "上季度末数",
@@ -51,6 +70,16 @@ _PERIOD_DEDUP_ALIASES: dict[str, str] = {
     "期初数": "上季度末数",
     "本年度累计数": "本年累计数",
     "本年数": "本年累计数",          # ★ 新增
+    "本年度": "本年累计数",
+    "本年度末": "本年累计数",
+    "年度累计": "本年累计数",
+    "全年累计": "本年累计数",
+    "全年": "本年累计数",
+    "本期累计": "本年累计数",
+    "累计": "本年累计数",
+    "上年度": "上季度末数",
+    "上年末": "上季度末数",
+    "上年度末": "上季度末数",
     "季度预测数": "下季度末预测数",
     "下季度预测数": "下季度末预测数",  # ★ 新增
     "本季度": "本季度末数",
@@ -64,7 +93,229 @@ _PERIOD_DEDUP_ALIASES: dict[str, str] = {
 
 def _dedup_period(period: object) -> str:
     text = str(period or "").strip()
-    return _PERIOD_DEDUP_ALIASES.get(text, text)
+    base, qualifier = _split_period_qualifier(text)
+    mapped = _PERIOD_DEDUP_ALIASES.get(base, base)
+    return f"{mapped}-{qualifier}" if qualifier else mapped
+
+
+def _value_decimal_places(value: object) -> int:
+    text = str(value if value is not None else "").strip()
+    text = text.replace(",", "").replace("，", "").replace("%", "").replace("％", "")
+    if "." not in text:
+        return 0
+    return len(text.rsplit(".", 1)[1].strip())
+
+
+def _numeric_values_equivalent(left: object, right: object) -> bool:
+    """判断两个数值是否只是显示精度不同。
+
+    先按两者中较少的有效小数位四舍五入，再要求相对差不超过 0.5%。
+    这样 91778.79 与 91778.7921、1.23 与 1.234 视为同一值；
+    1.2 与 1.23（相对差 2.4%）仍判为不同。
+    """
+    left_num = pd.to_numeric(left, errors="coerce")
+    right_num = pd.to_numeric(right, errors="coerce")
+    if pd.isna(left_num) or pd.isna(right_num):
+        return str(left or "").strip() == str(right or "").strip()
+    left_value = float(left_num)
+    right_value = float(right_num)
+    if left_value == right_value:
+        return True
+    decimals = min(
+        _value_decimal_places(left),
+        _value_decimal_places(right),
+        6,
+    )
+    if round(left_value, decimals) != round(right_value, decimals):
+        return False
+    scale = max(abs(left_value), abs(right_value), 1e-12)
+    return abs(left_value - right_value) / scale <= 0.005
+
+
+def _has_material_value_conflict(values: Sequence[object]) -> bool:
+    representatives: list[object] = []
+    for value in values:
+        if not any(_numeric_values_equivalent(value, item) for item in representatives):
+            representatives.append(value)
+    return len(representatives) > 1
+
+
+def _dedup_candidate_score(row: pd.Series) -> float:
+    """给同一指标/期间下的候选记录打分，分数高者保留。
+
+    数值有效最重要；补漏匹配、单位未识别、默认期间和空白按0的记录降权，
+    避免低质量候选在去重时顶掉正常披露值。
+    """
+    score = 0.0
+    numeric = pd.to_numeric(row.get("数值"), errors="coerce")
+    if pd.notna(numeric):
+        score += 20.0
+    note = str(row.get("备注", "") or "")
+    if "补漏匹配" in note:
+        score -= 8.0
+    if "未识别原始单位" in note:
+        score -= 4.0
+    if "期间未识别" in note or "按默认口径" in note:
+        score -= 3.0
+    if "按0处理" in note:
+        score -= 2.0
+    if str(row.get("行次", "") or "").strip():
+        score += 1.0
+    if str(row.get("单位", "") or "").strip():
+        score += 1.0
+    if str(row.get("来源工作表", "") or "").strip():
+        score += 1.0
+    # 同值不同精度时优先保留小数位更多的一条。
+    score += min(_value_decimal_places(row.get("数值")), 6) * 0.1
+    return score
+
+
+def _candidate_value_key(value: object) -> str:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.notna(numeric):
+        return f"num:{round(float(numeric), 6)}"
+    return f"text:{str(value or '').strip()}"
+
+
+def _deduplicate_candidates(
+    data: pd.DataFrame,
+    diagnostics: list[dict],
+) -> tuple[pd.DataFrame, int, int]:
+    """按候选得分去重，并记录同指标/同期间的口径冲突。
+
+    不再按来源工作表拆分重复项：一个指标在同一报告期同一期间只应保留
+    一条标准记录。若候选值不同，保留得分最高者，并在诊断中写明冲突值
+    和来源表，供人工核对。
+    """
+    if data.empty:
+        return data, 0, 0
+    working = data.copy()
+    working["_期间口径_去重"] = working["期间口径"].map(_dedup_period)
+    key_columns = [
+        "公司统一编码",
+        "报告期",
+        "指标编码",
+        "_期间口径_去重",
+    ]
+    existing_keys = [column for column in key_columns if column in working.columns]
+    if not existing_keys:
+        return data, 0, 0
+
+    kept_indexes: list = []
+    removed = 0
+    conflicts = 0
+    for _, group in working.groupby(existing_keys, sort=False, dropna=False):
+        if len(group) == 1:
+            kept_indexes.append(group.index[0])
+            continue
+        scored = sorted(
+            (
+                (_dedup_candidate_score(group.loc[index]), index)
+                for index in group.index
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        best_score, best_index = scored[0]
+        kept_indexes.append(best_index)
+        removed += len(group) - 1
+
+        group_values = [
+            group.loc[index].get("数值") for index in group.index
+        ]
+        if not _has_material_value_conflict(group_values):
+            continue
+        conflicts += 1
+        best_row = group.loc[best_index]
+        runner_index = next(
+            (
+                index
+                for _, index in scored[1:]
+                if not _numeric_values_equivalent(
+                    best_row.get("数值"),
+                    group.loc[index].get("数值"),
+                )
+            ),
+            scored[1][1],
+        )
+        runner_row = group.loc[runner_index]
+        best_value = str(best_row.get("数值", ""))
+        runner_value = str(runner_row.get("数值", ""))
+        diagnostics.append({
+            "目标表": str(best_row.get("来源工作表", "")),
+            "来源页码": str(best_row.get("来源页码", "")),
+            "原始项目": str(best_row.get("指标名称", "")),
+            "指标编码": str(best_row.get("指标编码", "")).strip(),
+            "状态": "口径冲突",
+            "原因": (
+                f"同一指标/期间存在 {len(group)} 条候选且取值不同"
+                f"（保留 {best_value}，其他如 {runner_value}），"
+                "已按候选得分保留最高分记录"
+            ),
+            "最佳候选": (
+                f"{best_value}@{best_row.get('来源工作表', '')}"
+            ),
+            "最佳得分": round(float(best_score), 2),
+            "第二候选": (
+                f"{runner_value}@{runner_row.get('来源工作表', '')}"
+            ),
+            "第二得分": round(float(scored[1][0]), 2),
+        })
+
+    kept_set = set(kept_indexes)
+    result = working.loc[
+        [index for index in working.index if index in kept_set]
+    ].drop(columns=["_期间口径_去重"])
+    # 保持原有展示顺序：本季度末数/上季度末数/预测/本年累计优先。
+    result["_期间排序"] = (
+        result["期间口径"].map(_dedup_period)
+        .map(lambda period: _PERIOD_SORT_PRIORITY.get(period, 99))
+    )
+    result = (
+        result.sort_values("_期间排序", kind="stable")
+        .drop(columns=["_期间排序"])
+        .reset_index(drop=True)
+    )
+    return result, removed, conflicts
+
+
+def _attach_diagnostic_status(
+    summary: pd.DataFrame,
+    diagnostics: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """把诊断状态映射到填报汇总，保留“未填报”兼容字段。
+
+    “填报状态”仍只有已填报/未填报；新增“诊断状态”细分未匹配、
+    期间未识别、值为空、口径冲突和歧义待确认。
+    """
+    if summary is None or summary.empty:
+        return summary
+    summary["诊断状态"] = ""
+    if (
+        diagnostics is None
+        or diagnostics.empty
+        or "状态" not in diagnostics.columns
+        or "指标编码" not in diagnostics.columns
+    ):
+        return summary
+
+    priority = ("口径冲突", "歧义待确认", "期间未识别", "值为空", "未匹配")
+    status_by_code: dict[str, str] = {}
+    for code, group in diagnostics.groupby("指标编码", dropna=False):
+        code_text = str(code or "").strip()
+        if not code_text:
+            continue
+        statuses = {str(value).strip() for value in group["状态"] if str(value).strip()}
+        for candidate in priority:
+            if candidate in statuses:
+                status_by_code[code_text] = candidate
+                break
+
+    mapped = summary["指标编码"].astype(str).str.strip().map(status_by_code)
+    filled = summary["填报状态"].astype(str).eq("已填报")
+    summary.loc[~filled, "诊断状态"] = mapped[~filled].fillna("未匹配")
+    summary.loc[filled & mapped.eq("口径冲突"), "诊断状态"] = "口径冲突"
+    return summary
+
 
 _CN_DIGITS = {
     # 小写
@@ -255,7 +506,7 @@ def read_target_template(
     return selected.reindex(columns=TARGET_TEMPLATE_COLUMNS), tuple(warnings)
 
 
-def _period_from_header(header_cells, col_index: int) -> str:
+def _period_from_header_base(header_cells, col_index: int) -> str:
     """从表头列名判断期间口径名称（与 solvency_normalizer.PERIOD_ALIASES 一致）。"""
     if not header_cells or col_index >= len(header_cells):
         return ""
@@ -293,6 +544,18 @@ def _period_from_header(header_cells, col_index: int) -> str:
     # 优先识别"近三年"类口径
     if "近三年" in text or "三年平均" in text or "3年平均" in text:
         return "近三年平均"
+    if (
+        any(
+            token in text
+            for token in ("本年度", "年度累计", "全年", "本期累计")
+        )
+        and "预测" not in text
+    ):
+        return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
     if "下季度" in text or "下季" in text or "预测" in text:
         return "下季度末预测数"
     if "本年度累计" in text or "本年累计" in text or "本年数" in text:
@@ -312,6 +575,22 @@ def _period_from_header(header_cells, col_index: int) -> str:
         return "期初数"
     return ""
 
+
+def _period_from_header(header_cells, col_index: int) -> str:
+    """期间解析入口：保留“审计后/审计前”等列限定词，避免双行表头互相覆盖。"""
+    if not header_cells or col_index >= len(header_cells):
+        return ""
+    raw = str(header_cells[col_index])
+    base = _period_from_header_base(header_cells, col_index)
+    qualifier = ""
+    for token in ("审计后", "审计前", "未经审计"):
+        if token in raw:
+            qualifier = token
+            break
+    if base and qualifier and qualifier not in base:
+        return f"{base}-{qualifier}"
+    return base
+
 def _period_from_row_label(label: str) -> str:
     """当表头列名是"列2"之类的占位符时，用数据行的行标签推断期间。
 
@@ -326,8 +605,15 @@ def _period_from_row_label(label: str) -> str:
     # 只有"近三年"+"平均"同时出现，才认为这一行是近三年平均值
     if "近三年" in text and "平均" in text:
         return "近三年平均"
-    if "本年累计" in text or "本年度累计" in text:
+    if any(
+        token in text
+        for token in ("本年累计", "本年度累计", "本年度", "年度累计", "全年", "本期累计")
+    ):
         return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
     return ""
 
 def _dependency_closure(target_codes: set[str]) -> set[str]:
@@ -346,25 +632,389 @@ def _dependency_closure(target_codes: set[str]) -> set[str]:
     return required
 
 
-def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
+_BLOCK_HEADER_LABEL_TERMS = (
+    "指标名称",
+    "项目",
+    "行次",
+    "序号",
+    "指标",
+    "监测指标",
+)
+_BLOCK_HEADER_PERIOD_TERMS = (
+    "本季度",
+    "上季度",
+    "本年累计",
+    "本年度累计",
+    "期末",
+    "期初",
+    "下季度",
+    "预测",
+    "账面价值",
+    "非认可",
+    "认可价值",
+)
+_BLOCK_SUBHEADER_TERMS = (
+    "审计后",
+    "审计前",
+    "账面价值",
+    "非认可",
+    "认可价值",
+    "预测",
+    "本季度",
+    "上季度",
+    "期末",
+    "期初",
+)
+_BLOCK_NUMBER_RE = re.compile(r"^[（(]?[-+]?[\d,]+(?:\.\d+)?[）)]?%?$")
+_DEFAULT_TABLE_HEADERS = {
+    **TABLE_CANONICAL_HEADERS,
+    "NON_LIFE_OPERATING_METRICS": ("指标名称", "本季度数", "本年累计数"),
+    "LIQUIDITY_MONITORING": ("指标名称", "本季度数", "本年累计数"),
+}
+
+
+def _is_block_numeric(value: object) -> bool:
+    text = str(value or "").strip().replace(",", "").replace("，", "")
+    if not text:
+        return False
+    return bool(_BLOCK_NUMBER_RE.fullmatch(text))
+
+
+def _block_header_score(row: Sequence[str]) -> tuple[int, int, int]:
+    text = "".join(str(cell or "") for cell in row)
+    label_hits = sum(term in text for term in _BLOCK_HEADER_LABEL_TERMS)
+    period_hits = sum(term in text for term in _BLOCK_HEADER_PERIOD_TERMS)
+    numeric = sum(_is_block_numeric(cell) for cell in row)
+    score = label_hits * 10 + min(period_hits, 4) * 4 - numeric * 3
+    return score, label_hits, period_hits
+
+
+def _locate_block_header_index(rows: Sequence[Sequence[str]]) -> int | None:
+    best: tuple[int, int] | None = None
+    for index, row in enumerate(rows[:12]):
+        score, label_hits, period_hits = _block_header_score(row)
+        numeric = sum(_is_block_numeric(cell) for cell in row)
+        nonempty = sum(bool(str(cell or "").strip()) for cell in row)
+        if numeric > 1:
+            continue
+        if (
+            index <= 2
+            and nonempty >= 2
+            and numeric == 0
+            and label_hits >= 1
+            and period_hits == 0
+        ):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif label_hits >= 1 and (period_hits >= 1 or label_hits >= 2):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif period_hits >= 2 and numeric == 0:
+            if best is None or score > best[0]:
+                best = (score, index)
+    return best[1] if best is not None and best[0] >= 6 else None
+
+
+def _block_has_metric_header(rows: Sequence[Sequence[str]]) -> bool:
+    return _locate_block_header_index(rows) is not None
+
+
+def _is_block_subheader(row: Sequence[str]) -> bool:
+    text = "".join(str(cell or "") for cell in row)
+    hits = sum(term in text for term in _BLOCK_SUBHEADER_TERMS)
+    numeric = sum(_is_block_numeric(cell) for cell in row)
+    return hits >= 1 and numeric <= 1
+
+
+def _raw_canonical_headers(table: ExtractedTable) -> list[str]:
+    raw = (
+        (getattr(table, "table_config", None) or {}).get("canonical_headers")
+        or _DEFAULT_TABLE_HEADERS.get(str(getattr(table, "table_id", "")))
+        or ()
+    )
+    if isinstance(raw, str):
+        raw = (
+            raw.replace("，", "、")
+            .replace(",", "、")
+            .replace("|", "、")
+            .split("、")
+        )
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _first_column_looks_numeric(rows: Sequence[Sequence[str]]) -> bool:
+    candidates = [row for row in rows if len(row) >= 2 and str(row[1]).strip()]
+    if len(candidates) < 2:
+        return False
+    hits = sum(_is_block_numeric(row[0]) for row in candidates)
+    return hits / len(candidates) >= 0.6
+
+
+def _fit_canonical_headers(
+    headers: Sequence[str],
+    width: int,
+    rows: Sequence[Sequence[str]],
+) -> list[str]:
+    values = [str(item).strip() for item in headers if str(item).strip()]
+    if not values or width <= 0:
+        return []
+    if len(values) == width:
+        return values
+    if len(values) == width + 1 and values[0] in {"行次", "序号", "编号"}:
+        return values[1:]
+    if len(values) == width - 1 and _first_column_looks_numeric(rows):
+        return ["行次", *values]
+    if len(values) > width:
+        return values[:width]
+    return [*values, *[""] * (width - len(values))]
+
+
+def _periods_from_headers(headers: Sequence[str]) -> tuple[str, ...]:
+    return tuple(infer_period_label(str(header or "")) for header in headers)
+
+
+def _merge_wrapped_value_rows(
+    rows: Sequence[Sequence[str]],
+    known_labels: frozenset[str] = frozenset(),
+) -> list[list[str]]:
+    """Merge a wrapped label row with the following value row.
+
+    PDFs often split a long label into two visual lines while the numbers sit
+    on the second line.  The old Step2 merge only accepted rows without any
+    numeric cell, so those labels were left broken.  This conservative pass
+    only merges when the first row is label-only, the next row has numbers,
+    and the next row's text tail is at most two Chinese characters.
+    """
+    normalized = [list(row) for row in rows]
+    if len(normalized) < 2:
+        return normalized
+    output: list[list[str]] = []
+    index = 0
+    while index < len(normalized):
+        row = normalized[index]
+        nonempty = [
+            (position, str(cell or '').strip())
+            for position, cell in enumerate(row)
+            if str(cell or '').strip()
+        ]
+        text_cells = [
+            (position, value)
+            for position, value in nonempty
+            if not _is_block_numeric(value)
+            and any('\u4e00' <= ch <= '\u9fff' for ch in value)
+        ]
+        row_number = (
+            str(row[0] or '').strip()
+            if row and _is_block_numeric(row[0]) and len(str(row[0]).strip()) <= 6
+            else ''
+        )
+        numeric_cells = [
+            (position, value)
+            for position, value in nonempty
+            if _is_block_numeric(value)
+            and not (position == 0 and row_number)
+        ]
+        if (
+            index + 1 < len(normalized)
+            and not numeric_cells
+            and len(text_cells) == 1
+        ):
+            label_index, label = text_cells[0]
+            blocked = any(
+                token in label
+                for token in ('指标', '情况', '表', '单位', '其中', '减：', '加：', '注：')
+            )
+            if len(label) >= 4 and not blocked:
+                next_row = normalized[index + 1]
+                next_nonempty = [
+                    (position, str(cell or '').strip())
+                    for position, cell in enumerate(next_row)
+                    if str(cell or '').strip()
+                ]
+                values = [
+                    (position, value)
+                    for position, value in next_nonempty
+                    if _is_block_numeric(value)
+                ]
+                tails = [
+                    (position, value)
+                    for position, value in next_nonempty
+                    if not _is_block_numeric(value)
+                    and any('\u4e00' <= ch <= '\u9fff' for ch in value)
+                ]
+                tail = tails[0][1] if tails else ''
+                combined_label = _normalize_label(label + tail) if tail else ''
+                tail_allowed = len(tail) <= 2 or (
+                    bool(known_labels) and combined_label in known_labels
+                )
+                no_tail_allowed = (
+                    not known_labels
+                    or _normalize_label(label) in known_labels
+                )
+                if values and (tail_allowed if tail else no_tail_allowed):
+                    if tail:
+                        row[label_index] = label + tail
+                    first_cell = str(next_row[0] or '').strip()
+                    if not str(row[0] or '').strip() and _is_block_numeric(first_cell):
+                        row[0] = first_cell
+                    for position, value in values:
+                        if position < len(row):
+                            row[position] = value
+                    output.append(row)
+                    index += 2
+                    continue
+        output.append(row)
+        index += 1
+    return output
+
+def _known_metric_labels(taxonomy: pd.DataFrame | None) -> frozenset[str]:
+    if taxonomy is None or taxonomy.empty:
+        return frozenset()
+    labels: set[str] = {
+        _normalize_label(item) for item in _EXACT_LABEL_LOCKS
+    }
+    for column in ("指标名称", "别名"):
+        if column not in taxonomy.columns:
+            continue
+        for value in taxonomy[column].astype(str):
+            for item in re.split(r"[|｜]", value):
+                normalized = _normalize_label(item)
+                if normalized:
+                    labels.add(normalized)
+    return frozenset(labels)
+
+
+_BLOCK_UNIT_RE = re.compile(
+    r"(?:金额|货币|计量)?单位[\s:：]*"
+    r"(?:人民币|RMB|rmb)?\s*"
+    r"(亿元|万元|千元|百元|元)"
+)
+_BLOCK_INLINE_UNIT_RE = re.compile(r"[（(]\s*(亿元|万元|千元|百元|元)\s*[）)]")
+
+
+def _unit_from_block_rows(rows: Sequence[Sequence[str]]) -> str:
+    """从单个表块自己的表头/行文本识别金额单位。
+
+    只扫描前 8 行，显式“单位：X”优先；其次才接受表头里的“（万元）”，
+    避免把“每股收益（元）”这类行级标签当成整块单位。
+    """
+    for row in rows[:12]:
+        for cell in row:
+            match = _BLOCK_UNIT_RE.search(str(cell or ""))
+            if match:
+                return match.group(1)
+    for row in rows[:5]:
+        for cell in row:
+            match = _BLOCK_INLINE_UNIT_RE.search(str(cell or ""))
+            if match:
+                return match.group(1)
+    return ""
+
+
+def _block_unit(block, rows: Sequence[Sequence[str]]) -> str:
+    if isinstance(block, dict):
+        declared = str(block.get("unit") or "").strip()
+        if declared:
+            return declared
+    return _unit_from_block_rows(rows)
+
+
+def _fit_header_rows(
+    header_rows: Sequence[Sequence[str]],
+    width: int,
+) -> list[list[str]]:
+    """把继承表头补齐/截断到当前块宽度，兼容续页省略尾列。"""
+    fitted: list[list[str]] = []
+    for row in header_rows:
+        values = [str(cell or "").strip() for cell in row]
+        if len(values) < width:
+            values = [*values, *[""] * (width - len(values))]
+        else:
+            values = values[:width]
+        fitted.append(values)
+    return fitted
+
+
+def _expand_table_blocks(
+    tables: list[ExtractedTable],
+    taxonomy: pd.DataFrame | None = None,
+) -> list[ExtractedTable]:
     """把整页合并表还原成页内表块，供 Step3 按各自表头识别期间。
 
     Step2 的中间表为了可读性会把同页多表和跨页内容合并成一张表；
     ``table_blocks`` 保留了每张页内表的独立网格。这里只在标准化计算时
     展开，不改变用户在 Step2 看到的合并表。
+
+    续页没有表头时，优先继承同一目标表上一块的表头；没有可继承表头时，
+    使用 Profile 或内置标准表头补齐。这样跨页第二页不会再被当成无表头
+    数据块，从第一行开始误读。
     """
     expanded: list[ExtractedTable] = []
+    known_labels = _known_metric_labels(taxonomy)
+    last_header_by_table: dict[str, list[list[str]]] = {}
+    last_unit_by_table: dict[str, str] = {}
     for table in tables:
+        table_id = str(getattr(table, "table_id", "") or "")
         blocks = getattr(table, "table_blocks", None)
+        had_blocks = bool(blocks)
         if not blocks:
-            expanded.append(table)
-            continue
+            blocks = [{"page": getattr(table, "page", 1), "rows": table.rows}]
         for block in blocks:
             rows = block.get("rows") if isinstance(block, dict) else block
             if not rows:
                 continue
             local = copy(table)
-            local.rows = [list(row) for row in rows]
+            block_rows = [list(row) for row in rows]
+            block_unit = _block_unit(block, block_rows)
+            width = max((len(row) for row in block_rows), default=0)
+            header_index = _locate_block_header_index(block_rows)
+            header_rows: list[list[str]] = []
+            default_periods: tuple[str, ...] = ()
+
+            if header_index is not None:
+                header_rows = [block_rows[header_index]]
+                next_index = header_index + 1
+                if (
+                    next_index < len(block_rows)
+                    and _is_block_subheader(block_rows[next_index])
+                ):
+                    header_rows.append(block_rows[next_index])
+                block_rows = block_rows[header_index:]
+                last_header_by_table[table_id] = [
+                    list(row) for row in header_rows
+                ]
+            else:
+                inherited = last_header_by_table.get(table_id)
+                if (
+                    inherited
+                    and width > 0
+                    and abs(len(inherited[0]) - width) <= 2
+                ):
+                    header_rows = _fit_header_rows(inherited, width)
+                    block_rows = [*header_rows, *block_rows]
+                else:
+                    canonical = _fit_canonical_headers(
+                        _raw_canonical_headers(table),
+                        width,
+                        block_rows,
+                    )
+                    if canonical:
+                        header_rows = [canonical]
+                        block_rows = [canonical, *block_rows]
+
+            if header_rows:
+                default_periods = _periods_from_headers(header_rows[0])
+            _data_start = len(header_rows)
+            if len(block_rows) > _data_start:
+                block_rows = [
+                    *block_rows[:_data_start],
+                    *_merge_wrapped_value_rows(
+                        block_rows[_data_start:],
+                        known_labels,
+                    ),
+                ]
+            local.rows = block_rows
+            local.default_periods = default_periods
             block_page = (
                 block.get("page")
                 if isinstance(block, dict)
@@ -376,7 +1026,20 @@ def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
                 local.page = int(getattr(table, "page", 1) or 1)
             local.source_pages = [local.page]
             local.table_blocks = []
-            local.whole_page_block = True
+            local.whole_page_block = (
+                True if had_blocks else bool(getattr(table, "whole_page_block", False))
+            )
+            # ★ P0-3：单位按块生效；本块没写单位时先继承同表上一块，
+            #   再回退整表 unit。这样第一页“万元”、第二页“元”不会互相污染。
+            if block_unit:
+                local.unit = block_unit
+                local.block_unit = block_unit
+                last_unit_by_table[table_id] = block_unit
+            elif table_id in last_unit_by_table:
+                local.unit = last_unit_by_table[table_id]
+                local.block_unit = last_unit_by_table[table_id]
+            else:
+                local.block_unit = ""
             expanded.append(local)
     return expanded
 
@@ -384,6 +1047,7 @@ def _expand_table_blocks(tables: list[ExtractedTable]) -> list[ExtractedTable]:
 def _target_summary(
     target_catalog: pd.DataFrame,
     data: pd.DataFrame,
+    diagnostics: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     summary = target_catalog[
         ["指标编码", "指标名称", "一级模块", "二级模块", "指标属性"]
@@ -424,7 +1088,7 @@ def _target_summary(
         summary["填报记录数"] = 0
         summary["已填期间"] = ""
         summary["填报状态"] = "未填报"
-        return summary
+        return _attach_diagnostic_status(summary, diagnostics)
 
     normalized = data.copy()
     normalized["_code"] = normalized["指标编码"].astype(str).str.strip()
@@ -458,7 +1122,7 @@ def _target_summary(
         summary["口径冲突提示"] = summary["期间口径明细"].map(
             lambda s: "⚠ 多口径并存，请核对" if s and ("、" in s) else ""
         )
-    return summary
+    return _attach_diagnostic_status(summary, diagnostics)
 
 
 def standardize_to_target(
@@ -476,6 +1140,7 @@ def standardize_to_target(
     company_type_map: Mapping[str, str] | None = None,
     include_derived: bool,
     template_warnings: Sequence[str] = (),
+    period_overrides: Mapping[str, str] | None = None,
 ) -> Step3StandardizationResult:
     """Fill a target list and return the canonical STEP5-compatible narrow table."""
     # ★ 修复：报告期兜底 —— 从 metadata / 文件名 / 首文文本依次抓
@@ -512,7 +1177,7 @@ def standardize_to_target(
     warnings: list[str] = list(template_warnings)   # ★ 提前初始化，供补漏匹配使用
     # Step2 的可读性合并表内部保留了页内表块；标准化计算和补漏匹配
     # 都按表块处理，避免把第二张表的列头套到第一张表的数据上。
-    tables = _expand_table_blocks(tables)
+    tables = _expand_table_blocks(tables, taxonomy)
     normalized = normalize_tables(
         tables,
         scoped_taxonomy,
@@ -525,6 +1190,7 @@ def standardize_to_target(
         peer_group_map=peer_group_map,
         default_peer_group=default_peer_group,
         company_type_map=company_type_map,
+        period_overrides=period_overrides,
     )
     enriched = append_derived_metrics(normalized) if include_derived else normalized
     data = enriched[
@@ -623,6 +1289,37 @@ def standardize_to_target(
 
         _supp_rows = []
         _template = data.iloc[0].to_dict() if not data.empty else {}
+        if not _template:
+            _raw_company = str(metadata.get("公司", "") or "").strip()
+            if not _raw_company:
+                _raw_company = Path(
+                    str(metadata.get("来源文件", "") or "")
+                ).stem
+            _identity = resolve_company_identity(
+                _raw_company,
+                company_type_map,
+                fallback_company_type=company_type,
+            )
+            _resolved_peer = resolve_peer_group(
+                _raw_company,
+                peer_group_map,
+                fallback_peer_group=default_peer_group,
+            )
+            _template = {
+                "公司": _identity.standard_name,
+                "原始公司名称": _identity.original_name,
+                "标准公司名称": _identity.standard_name,
+                "公司统一编码": _identity.company_code,
+                "公司类型": _identity.company_type,
+                "同业分类": _resolved_peer,
+                "报告类型": report_profile_id,
+                "报告年度": metadata.get("报告年度", ""),
+                "报告季度": metadata.get("报告季度", ""),
+                "报告期": metadata.get("报告期", ""),
+                "披露日期": metadata.get("披露日期", ""),
+                "来源文件": metadata.get("来源文件", ""),
+                "导入批次": metadata.get("导入批次", ""),
+            }
 
         for _table in tables:
             _rows = getattr(_table, "rows", None) or []
@@ -957,76 +1654,25 @@ def standardize_to_target(
             data = data[~bad_mask].reset_index(drop=True)
             warnings.append("已剔除资本工具表发行金额误挂到附属一级资本的记录。")
             
-    # ★ 去重：同一公司/报告期/指标/归一化期间只保留一条
+    # ★ P1：候选打分去重，替换原先按来源工作表 keep=first 的做法。
+    #   同一指标/报告期/期间只保留得分最高的一条；取值不同时写入口径冲突诊断。
+    _dedup_removed = 0
+    _conflict_count = 0
     if not data.empty:
-        # 临时加一列归一化期间，仅用于去重
-        data["_期间口径_去重"] = data["期间口径"].map(_dedup_period)
-
-        # 优先保留"规范期间名"的记录：本季度末数 > 上季度末数 > 下季度末预测数 > 其他
-        _PERIOD_SORT_PRIORITY = {
-            "本季度末数": 0,
-            "上季度末数": 1,
-            "下季度末预测数": 2,
-            "本年累计数": 3,
-            "近三年平均": 4,
-        }
-        data["_期间排序"] = data["_期间口径_去重"].map(
-            lambda p: _PERIOD_SORT_PRIORITY.get(p, 99)
+        data, _dedup_removed, _conflict_count = _deduplicate_candidates(
+            data,
+            diagnostics,
         )
-        data = data.sort_values("_期间排序", kind="stable").drop(columns=["_期间排序"])
-
-        dedup_keys = [
-            "公司统一编码",
-            "报告期",
-            "指标编码",
-            "_期间口径_去重",
-            "来源工作表",     # ★ 新增
-        ]
-        existing_keys = [k for k in dedup_keys if k in data.columns]
-        if existing_keys:
-            before = len(data)
-            data = (
-                data.drop_duplicates(subset=existing_keys, keep="first")
-                .reset_index(drop=True)
+        if _dedup_removed:
+            warnings.append(f"候选打分去重移除了 {_dedup_removed} 条重复记录。")
+        if _conflict_count:
+            warnings.append(
+                f"发现 {_conflict_count} 处同指标同期间口径冲突，"
+                "已保留候选得分最高记录，详见“匹配诊断”。"
             )
-            removed = before - len(data)
-            if removed:
-                warnings.append(f"去重移除了 {removed} 条同粒度重复记录。")
-
-        # 去重完成后删掉临时列
-        data = data.drop(columns=["_期间口径_去重"])
 
     diagnostic_frame = pd.DataFrame(diagnostics)
-    summary = _target_summary(target_catalog, data)
-    
-
-
-    # ---------- 去重：同一公司/报告期/指标/期间/来源只保留一条 ----------
-    if not data.empty:
-        # ★ 修复：第一次去重已删掉 _期间口径_去重，这里必须重算，
-        #   否则 effective dedup key 会丢掉"期间"维度，
-        #   把同一指标的本季度末数/上季度末数/下季度预测数误合并。
-        data["_期间口径_去重"] = data["期间口径"].map(_dedup_period)
-        dedup_keys = [
-            "公司统一编码",
-            "报告期",
-            "指标编码",
-            "_期间口径_去重",
-            "来源工作表",
-        ]
-        existing_keys = [k for k in dedup_keys if k in data.columns]
-        if existing_keys:
-            before = len(data)
-            data = (
-                data.drop_duplicates(subset=existing_keys, keep="first")
-                .reset_index(drop=True)
-            )
-            removed = before - len(data)
-            if removed:
-                warnings.append(f"去重移除了 {removed} 条同粒度重复记录。")
-        # ★ 修复：用完后删掉临时列，避免污染输出
-        if "_期间口径_去重" in data.columns:
-            data = data.drop(columns=["_期间口径_去重"])
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
 
     if not data.empty and "备注" in data.columns:
         _blank_zero_count = int(
@@ -1039,6 +1685,16 @@ def standardize_to_target(
             warnings.append(
                 f"已将 {_blank_zero_count} 条资本明细空白值按0处理，请核对源表是否为空白。"
             )
+    _missing_diag_count = 0
+    if not diagnostic_frame.empty and "状态" in diagnostic_frame.columns:
+        _missing_diag_count = int(
+            (diagnostic_frame["状态"].astype(str) == "值为空").sum()
+        )
+    if _missing_diag_count:
+        warnings.append(
+            f"有 {_missing_diag_count} 个已识别数值单元格为空、占位符或文本，"
+            "已按缺失处理（未写0），详见“匹配诊断”。"
+        )
 
     # ---------- 统一模块/单位/数据类型，以 target_catalog 为准 ----------
     if not data.empty and not target_catalog.empty:
@@ -1054,6 +1710,7 @@ def standardize_to_target(
         for target_col, source_col in (
             ("一级模块", "一级模块"),
             ("二级模块", "二级模块"),
+            ("指标名称", "指标名称"),
             ("单位", "标准单位"),
             ("数据类型", "数据类型"),
         ):
@@ -1066,7 +1723,7 @@ def standardize_to_target(
         data["指标编码"] = code_norm
 
     diagnostic_frame = pd.DataFrame(diagnostics)
-    summary = _target_summary(target_catalog, data)
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
     missing_count = int((summary["填报状态"] == "未填报").sum())
 
     if missing_count:
@@ -1184,7 +1841,7 @@ def standardize_to_target(
 
     # ★ 注册资本是上面才追加进 data 的，之前的 summary 没包含它，
     #   这里重新算一遍，保证"填报汇总"里 REGISTERED_CAPITAL 显示"已填报"。
-    summary = _target_summary(target_catalog, data)
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
 
     # ===== ★ 新增：S05 表期间口径整体错位修正 =====
     # 场景：某些 PDF 的 S05 表列序与表头识别不一致，导致该表所有行
@@ -1258,6 +1915,27 @@ def standardize_to_target(
     
     # ===== S05 表期间口径修正结束 =====
 
+    # ★ P0-1：把“值为空”的诊断计数带到填报汇总，避免缺失只在明细里可见。
+    # 即使没有缺失也保留该列，保证汇总表结构稳定。
+    if not summary.empty:
+        summary["缺失值单元格数"] = 0
+        if (
+            not diagnostic_frame.empty
+            and {"状态", "指标编码"}.issubset(diagnostic_frame.columns)
+        ):
+            _missing_rows = diagnostic_frame[
+                diagnostic_frame["状态"].astype(str) == "值为空"
+            ]
+            _missing_counts = (
+                _missing_rows.groupby("指标编码").size()
+                if not _missing_rows.empty
+                else {}
+            )
+            summary["缺失值单元格数"] = (
+                summary["指标编码"].astype(str).str.strip()
+                .map(_missing_counts).fillna(0).astype(int)
+            )
+
     return Step3StandardizationResult(
         data=data,
         target_catalog=target_catalog.copy(),
@@ -1306,6 +1984,33 @@ def target_template_workbook_bytes(
         )
         _format_workbook(writer)
     return output.getvalue()
+
+def batch_result_workbook_bytes(
+    data: pd.DataFrame,
+    target_summary: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+) -> bytes:
+    """Build the same multi-sheet workbook as the single-file STEP3 result.
+
+    Batch output used to be a single-sheet merge, which made the downloaded
+    file incompatible with the single-file flow.  This keeps the shared
+    standard-data sheet plus the 填报汇总 and 匹配诊断 sheets.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        write_standard_workbook_sheets(writer, data)
+        target_summary.to_excel(writer, sheet_name="填报汇总", index=False)
+        if diagnostics is None or diagnostics.empty:
+            pd.DataFrame(columns=["状态", "原因"]).to_excel(
+                writer,
+                sheet_name="匹配诊断",
+                index=False,
+            )
+        else:
+            diagnostics.to_excel(writer, sheet_name="匹配诊断", index=False)
+        _format_workbook(writer)
+    return output.getvalue()
+
 
 def result_workbook_bytes(result: Step3StandardizationResult) -> bytes:
     output = io.BytesIO()

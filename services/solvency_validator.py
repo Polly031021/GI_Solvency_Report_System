@@ -1,35 +1,15 @@
 from __future__ import annotations
 
+import ast
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
 
 from .solvency_normalizer import STANDARD_COLUMNS
-
-
-EXTRA_VALIDATION_RULES = [
-    {
-        "规则ID": "DUPLICATE_ACTUAL_CAPITAL",
-        "规则名称": "实际资本跨表一致性",
-        "适用期间": "本季度末数|上季度末数|下季度末预测数|下季度预测数|期末数|期初数",
-        "容差": 1,
-        "容差单位": "万元",
-        "启用": "是",
-        "规则说明": "主要指标表与实际资本表披露的实际资本应一致",
-    },
-    {
-        "规则ID": "DUPLICATE_MINIMUM_CAPITAL",
-        "规则名称": "最低资本跨表一致性",
-        "适用期间": "本季度末数|上季度末数|下季度末预测数|下季度预测数|期末数|期初数",
-        "容差": 1,
-        "容差单位": "万元",
-        "启用": "是",
-        "规则说明": "主要指标表与最低资本表披露的最低资本应一致",
-    },
-]
 
 
 PERIOD_GROUP_ALIASES: dict[str, tuple[str, ...]] = {
@@ -60,52 +40,6 @@ REQUIRED_CORE_METRICS: tuple[str, ...] = (
     "CORE_SOLVENCY_RATIO",
     "COMBINED_SOLVENCY_RATIO",
 )
-
-
-RULE_METRICS: dict[str, tuple[str, ...]] = {
-    "ACTUAL_CAPITAL_COMPONENTS": (
-        "ACTUAL_CAPITAL",
-        "CORE_T1_CAPITAL",
-        "CORE_T2_CAPITAL",
-        "ANC_T1_CAPITAL",
-        "ANC_T2_CAPITAL",
-    ),
-    "ACTUAL_CAPITAL_BALANCE": (
-        "ACTUAL_CAPITAL",
-        "RECOGNIZED_ASSETS",
-        "RECOGNIZED_LIABILITIES",
-    ),
-    "CORE_SURPLUS": (
-        "CORE_SOLVENCY_SURPLUS",
-        "CORE_T1_CAPITAL",
-        "CORE_T2_CAPITAL",
-        "MINIMUM_CAPITAL",
-    ),
-    "COMBINED_SURPLUS": (
-        "COMBINED_SOLVENCY_SURPLUS",
-        "ACTUAL_CAPITAL",
-        "MINIMUM_CAPITAL",
-    ),
-    "CORE_RATIO": (
-        "CORE_SOLVENCY_RATIO",
-        "CORE_T1_CAPITAL",
-        "CORE_T2_CAPITAL",
-        "MINIMUM_CAPITAL",
-    ),
-    "COMBINED_RATIO": (
-        "COMBINED_SOLVENCY_RATIO",
-        "ACTUAL_CAPITAL",
-        "MINIMUM_CAPITAL",
-    ),
-    "MINIMUM_CAPITAL": (
-        "MINIMUM_CAPITAL",
-        "QUANT_RISK_CAPITAL",
-        "CONTROL_RISK_CAPITAL",
-        "ADDITIONAL_CAPITAL",
-    ),
-    "DUPLICATE_ACTUAL_CAPITAL": ("ACTUAL_CAPITAL",),
-    "DUPLICATE_MINIMUM_CAPITAL": ("MINIMUM_CAPITAL",),
-}
 
 
 RESULT_COLUMNS = [
@@ -207,12 +141,25 @@ class RuleEvaluation:
 
 
 def load_validation_rules(path: str | Path) -> pd.DataFrame:
-    frame = pd.read_excel(path, sheet_name="勾稽规则", header=2).fillna("")
-    existing = set(frame.get("规则ID", pd.Series(dtype=str)).astype(str))
-    additions = [item for item in EXTRA_VALIDATION_RULES if item["规则ID"] not in existing]
-    if additions:
-        frame = pd.concat([frame, pd.DataFrame(additions)], ignore_index=True)
-    return frame.fillna("")
+    """Load the editable rule workbook, with no built-in rule additions."""
+    preview = pd.read_excel(path, sheet_name="勾稽规则", header=None, nrows=30)
+    header_row: int | None = None
+    for index, row in preview.iterrows():
+        values = {str(value).strip() for value in row if not pd.isna(value)}
+        if "规则ID" in values:
+            header_row = int(index)
+            break
+    if header_row is None:
+        raise ValueError(
+            f"{path} 的“勾稽规则”工作表前 30 行内未找到“规则ID”表头。"
+        )
+    frame = pd.read_excel(
+        path,
+        sheet_name="勾稽规则",
+        header=header_row,
+    ).fillna("")
+    frame.columns = [str(column).strip() for column in frame.columns]
+    return frame
 
 
 def validation_period_group(value: Any) -> str:
@@ -317,14 +264,28 @@ def _format_number(value: Any, unit: str = "") -> str:
     number = _numeric(value)
     if number is None:
         return _text(value)
+    use_small_precision = number != 0 and abs(number) < 0.01
     if unit == "%":
-        return f"{number:,.2f}%"
+        return (
+            f"{number:,.4f}%"
+            if use_small_precision
+            else f"{number:,.2f}%"
+        )
     if unit == "百分点":
-        return f"{number:,.2f} 百分点"
+        return (
+            f"{number:,.4f} 百分点"
+            if use_small_precision
+            else f"{number:,.2f} 百分点"
+        )
     if unit == "倍":
-        return f"{number:,.2f} 倍"
+        return (
+            f"{number:,.4f} 倍"
+            if use_small_precision
+            else f"{number:,.2f} 倍"
+        )
     suffix = f" {unit}" if unit else ""
-    return f"{number:,.2f}{suffix}"
+    formatted = f"{number:,.4f}" if use_small_precision else f"{number:,.2f}"
+    return f"{formatted}{suffix}"
 
 
 def _source_pages(
@@ -432,7 +393,19 @@ def _snapshot_evidence(
             attributes = _text(row.get("指标属性"))
             source_type = _text(row.get("来源类型"))
             derived = attributes in {"计算", "校验"} or source_type == "系统计算"
-            message = "STEP3 派生计算值" if derived else "STEP3 披露值"
+            note = _text(row.get("备注"))
+            zero_filled = "按0处理" in note
+            if derived:
+                message = "STEP3 派生计算值"
+                record_status = "派生计算"
+            elif zero_filled:
+                message = "STEP3 原始值为空白/占位符，已按0标准化"
+                record_status = "占位符按0"
+            else:
+                message = "STEP3 披露值"
+                record_status = "已披露"
+            if note:
+                message += f"；备注：{note}"
             if len(distinct_values) > 1:
                 message += (
                     f"；同一期间口径存在 {len(distinct_values)} 个不同数值，"
@@ -442,7 +415,7 @@ def _snapshot_evidence(
                 _row_evidence(
                     row,
                     role=role,
-                    status="派生计算" if derived else "已披露",
+                    status=record_status,
                     actual_value=_numeric(row.get("数值")),
                     message=message,
                 )
@@ -565,6 +538,7 @@ def _collect_evidence(
 def _evaluate_duplicate_rule(
     frame: pd.DataFrame,
     rule_id: str,
+    metric_code: str,
     period_group: str,
     formula: str,
     tolerance: float,
@@ -572,7 +546,8 @@ def _evaluate_duplicate_rule(
     taxonomy_names: dict[str, str],
 ) -> RuleEvaluation:
     """Compare the same metric across source worksheets, not just max/min."""
-    code = RULE_METRICS[rule_id][0]
+    del rule_id
+    code = metric_code
     snapshot = _metric_snapshot(frame, code, period_group, taxonomy_names)
     evidence = _snapshot_evidence(
         frame, snapshot, period_group, "跨表核对", taxonomy_names
@@ -666,7 +641,7 @@ def _evaluate_duplicate_rule(
         for value, row in values:
             is_reference = sheet == reference_sheet
             difference = value - reference_value
-            within_tolerance = abs(difference) <= tolerance
+            within_tolerance = _within_tolerance(difference, tolerance)
             if is_reference:
                 status = "基准值"
             elif within_tolerance:
@@ -688,7 +663,7 @@ def _evaluate_duplicate_rule(
             )
 
     difference = compared_value - reference_value
-    if abs(difference) <= tolerance:
+    if _within_tolerance(difference, tolerance):
         return RuleEvaluation(
             actual=compared_value,
             expected=reference_value,
@@ -719,6 +694,267 @@ def _evaluate_duplicate_rule(
     )
 
 
+RULE_REQUIRED_COLUMNS = (
+    "规则ID",
+    "规则名称",
+    "适用期间",
+    "容差",
+    "容差单位",
+    "启用",
+)
+
+
+def _rule_value(rule: pd.Series, *names: str) -> str:
+    for name in names:
+        value = _text(rule.get(name))
+        if value:
+            return value
+    return ""
+
+
+def _expression_names(expression: str) -> list[str]:
+    """Return metric identifiers used by a restricted arithmetic formula."""
+    tree = ast.parse(str(expression), mode="eval")
+    names: list[str] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.Expression):
+            visit(node.body)
+        elif isinstance(node, ast.BinOp):
+            if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+                raise ValueError(f"不支持的运算符：{type(node.op).__name__}")
+            visit(node.left)
+            visit(node.right)
+        elif isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, (ast.UAdd, ast.USub)):
+                raise ValueError(f"不支持的一元运算符：{type(node.op).__name__}")
+            visit(node.operand)
+        elif isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                raise ValueError("公式常量必须是数字。")
+        elif isinstance(node, ast.Name):
+            name = str(node.id).strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"无效的指标编码：{name}")
+            names.append(name)
+        else:
+            raise ValueError(f"公式包含不支持的语法：{type(node).__name__}")
+
+    visit(tree)
+    return list(dict.fromkeys(names))
+
+
+def _evaluate_expression(expression: str, values: dict[str, float]) -> float:
+    tree = ast.parse(str(expression), mode="eval")
+
+    def evaluate(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return evaluate(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            if node.id not in values:
+                raise KeyError(f"公式指标未提供数值：{node.id}")
+            return float(values[node.id])
+        if isinstance(node, ast.UnaryOp):
+            operand = evaluate(node.operand)
+            return operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.BinOp):
+            left = evaluate(node.left)
+            right = evaluate(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                if right == 0:
+                    raise ZeroDivisionError("公式分母为0")
+                return left / right
+        raise ValueError(f"公式包含不支持的语法：{type(node).__name__}")
+
+    result = float(evaluate(tree))
+    if not np.isfinite(result):
+        raise ValueError("公式计算结果不是有限数值。")
+    return result
+
+
+def _formula_codes(rule: pd.Series) -> tuple[str, list[str]]:
+    left_code = _rule_value(rule, "左值指标", "左侧指标", "校验指标")
+    expression = _rule_value(rule, "右值表达式", "右侧公式", "校验公式")
+    if not left_code:
+        raise ValueError("未配置“左值指标”。")
+    if _text(rule.get("校验方式")) == "跨表一致":
+        return left_code, []
+    if not expression:
+        raise ValueError("未配置“右值表达式”。")
+    return left_code, _expression_names(expression)
+
+
+def _evaluate_formula_rule(
+    frame: pd.DataFrame,
+    *,
+    left_code: str,
+    expression: str,
+    dependency_codes: Sequence[str],
+    period_group: str,
+    rule_name: str,
+    formula: str,
+    tolerance: float,
+    tolerance_unit: str,
+    taxonomy_names: dict[str, str],
+) -> RuleEvaluation:
+    codes = list(dict.fromkeys([left_code, *dependency_codes]))
+    snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
+    roles = {
+        code: ("披露值/左值" if code == left_code else "公式组成")
+        for code in codes
+    }
+    evidence = _collect_evidence(
+        frame,
+        snapshots,
+        roles,
+        period_group,
+        taxonomy_names,
+    )
+    missing = [snapshots[code] for code in codes if snapshots[code].value is None]
+    if missing:
+        reason = _missing_reason(period_group, missing, f"“{rule_name}”公式依赖指标")
+        return RuleEvaluation(None, None, reason, evidence, notes=reason)
+
+    actual = snapshots[left_code].value
+    values = {
+        code: float(snapshots[code].value)
+        for code in dependency_codes
+        if snapshots[code].value is not None
+    }
+    try:
+        expected = _evaluate_expression(expression, values)
+    except ZeroDivisionError as exc:
+        reason = f"{period_group}无法执行“{rule_name}”：{exc}。"
+        return RuleEvaluation(actual, None, reason, evidence, notes=reason)
+    except Exception as exc:
+        reason = f"{period_group}无法执行“{rule_name}”公式：{exc}"
+        return RuleEvaluation(actual, None, reason, evidence, notes=reason)
+
+    left_unit = snapshots[left_code].unit
+    expected_unit = left_unit
+    difference = float(actual - expected)
+    if _within_tolerance(difference, tolerance):
+        return RuleEvaluation(
+            actual,
+            expected,
+            "",
+            evidence,
+            notes="检查通过",
+        )
+    reason = _comparison_reason(
+        f"披露的{snapshots[left_code].name}",
+        actual,
+        left_unit,
+        f"按配置公式计算的{snapshots[left_code].name}",
+        expected,
+        expected_unit,
+        tolerance,
+        tolerance_unit or left_unit,
+    )
+    reason += (
+        f" 配置公式：{expression}。"
+        f" 代入值：{_formula_substitution(values)}。"
+    )
+    if formula and formula != expression:
+        reason += f" 规则说明：{formula}"
+    return RuleEvaluation(actual, expected, reason, evidence, notes=reason)
+
+
+def _formula_substitution(values: Mapping[str, float]) -> str:
+    return "；".join(
+        f"{code}={_format_number(value, '')}"
+        for code, value in values.items()
+    )
+
+
+def _within_tolerance(difference: float, tolerance: float) -> bool:
+    if tolerance > 0:
+        return abs(float(difference)) < float(tolerance)
+    return abs(float(difference)) == 0
+
+
+def validate_rule_configuration(
+    rules: pd.DataFrame,
+    taxonomy: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Validate formula syntax, metric references and duplicate rule IDs."""
+    rows: list[dict[str, str]] = []
+    if not isinstance(rules, pd.DataFrame):
+        return pd.DataFrame(
+            [{"规则ID": "", "状态": "错误", "说明": "规则配置不是表格。"}]
+        )
+    missing_columns = [
+        column for column in RULE_REQUIRED_COLUMNS if column not in rules.columns
+    ]
+    for column in missing_columns:
+        rows.append(
+            {
+                "规则ID": "",
+                "状态": "缺列",
+                "说明": f"规则表缺少必需列：{column}",
+            }
+        )
+    known_codes: set[str] = set()
+    if isinstance(taxonomy, pd.DataFrame) and "指标编码" in taxonomy.columns:
+        known_codes = set(taxonomy["指标编码"].astype(str).str.strip())
+    duplicate_ids = set(
+        rules.get("规则ID", pd.Series(dtype=str))
+        .astype(str)
+        .str.strip()
+        .loc[lambda values: values.ne("") & values.duplicated(keep=False)]
+    )
+    for _, rule in rules.iterrows():
+        rule_id = _text(rule.get("规则ID"))
+        if not rule_id:
+            rows.append({"规则ID": "", "状态": "错误", "说明": "规则ID为空。"})
+            continue
+        if rule_id in duplicate_ids:
+            rows.append(
+                {"规则ID": rule_id, "状态": "错误", "说明": "规则ID重复。"}
+            )
+        mode = _text(rule.get("校验方式"))
+        try:
+            left_code, dependency_codes = _formula_codes(rule)
+            if mode == "跨表一致":
+                codes = [left_code]
+            else:
+                codes = [left_code, *dependency_codes]
+            unknown = [
+                code
+                for code in codes
+                if known_codes and code not in known_codes
+            ]
+            if unknown:
+                rows.append(
+                    {
+                        "规则ID": rule_id,
+                        "状态": "错误",
+                        "说明": "指标编码未登记：" + "、".join(unknown),
+                    }
+                )
+        except Exception as exc:
+            rows.append(
+                {"规则ID": rule_id, "状态": "错误", "说明": str(exc)}
+            )
+    if not rows:
+        rows.append(
+            {
+                "规则ID": "全部规则",
+                "状态": "通过",
+                "说明": f"共 {len(rules)} 条规则，语法和指标引用有效。",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _evaluate_business_rule(
     frame: pd.DataFrame,
     rule_id: str,
@@ -727,329 +963,35 @@ def _evaluate_business_rule(
     tolerance: float = 0.0,
     tolerance_unit: str = "",
     taxonomy_names: dict[str, str] | None = None,
+    rule: pd.Series | None = None,
 ) -> RuleEvaluation:
     taxonomy_names = taxonomy_names or {}
-    if rule_id in {"DUPLICATE_ACTUAL_CAPITAL", "DUPLICATE_MINIMUM_CAPITAL"}:
+    if rule is None:
+        raise ValueError(f"规则 {rule_id} 缺少配置行。")
+    left_code, dependency_codes = _formula_codes(rule)
+    if _text(rule.get("校验方式")) == "跨表一致":
         return _evaluate_duplicate_rule(
             frame,
             rule_id,
+            left_code,
             period_group,
             formula,
             tolerance,
             tolerance_unit,
             taxonomy_names,
         )
-
-    if rule_id == "ACTUAL_CAPITAL_COMPONENTS":
-        codes = (
-            "ACTUAL_CAPITAL",
-            "CORE_T1_CAPITAL",
-            "CORE_T2_CAPITAL",
-            "ANC_T1_CAPITAL",
-            "ANC_T2_CAPITAL",
-        )
-        roles = {
-            "ACTUAL_CAPITAL": "披露值",
-            "CORE_T1_CAPITAL": "公式组成",
-            "CORE_T2_CAPITAL": "公式组成",
-            "ANC_T1_CAPITAL": "公式组成",
-            "ANC_T2_CAPITAL": "公式组成",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        actual = snapshots["ACTUAL_CAPITAL"].value
-        expected = sum(
-            snapshots[code].value or 0.0
-            for code in ("CORE_T1_CAPITAL", "CORE_T2_CAPITAL", "ANC_T1_CAPITAL", "ANC_T2_CAPITAL")
-        )
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的实际资本",
-                actual,
-                snapshots["ACTUAL_CAPITAL"].unit,
-                "按四类资本加总计算的实际资本",
-                expected,
-                snapshots["ACTUAL_CAPITAL"].unit,
-                tolerance,
-                tolerance_unit,
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "ACTUAL_CAPITAL_BALANCE":
-        codes = ("ACTUAL_CAPITAL", "RECOGNIZED_ASSETS", "RECOGNIZED_LIABILITIES")
-        roles = {
-            "ACTUAL_CAPITAL": "披露值",
-            "RECOGNIZED_ASSETS": "公式组成（资产）",
-            "RECOGNIZED_LIABILITIES": "公式组成（负债）",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        actual = snapshots["ACTUAL_CAPITAL"].value
-        expected = (
-            snapshots["RECOGNIZED_ASSETS"].value
-            - snapshots["RECOGNIZED_LIABILITIES"].value
-        )
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的实际资本",
-                actual,
-                snapshots["ACTUAL_CAPITAL"].unit,
-                "按认可资产减认可负债计算的实际资本",
-                expected,
-                snapshots["ACTUAL_CAPITAL"].unit,
-                tolerance,
-                tolerance_unit,
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "CORE_SURPLUS":
-        codes = (
-            "CORE_SOLVENCY_SURPLUS",
-            "CORE_T1_CAPITAL",
-            "CORE_T2_CAPITAL",
-            "MINIMUM_CAPITAL",
-        )
-        roles = {
-            "CORE_SOLVENCY_SURPLUS": "披露值",
-            "CORE_T1_CAPITAL": "公式组成",
-            "CORE_T2_CAPITAL": "公式组成",
-            "MINIMUM_CAPITAL": "公式组成",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        actual = snapshots["CORE_SOLVENCY_SURPLUS"].value
-        expected = (
-            snapshots["CORE_T1_CAPITAL"].value
-            + snapshots["CORE_T2_CAPITAL"].value
-            - snapshots["MINIMUM_CAPITAL"].value
-        )
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的核心偿付能力溢额",
-                actual,
-                snapshots["CORE_SOLVENCY_SURPLUS"].unit,
-                "按核心资本减最低资本计算的溢额",
-                expected,
-                snapshots["CORE_SOLVENCY_SURPLUS"].unit,
-                tolerance,
-                tolerance_unit,
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "COMBINED_SURPLUS":
-        codes = ("COMBINED_SOLVENCY_SURPLUS", "ACTUAL_CAPITAL", "MINIMUM_CAPITAL")
-        roles = {
-            "COMBINED_SOLVENCY_SURPLUS": "披露值",
-            "ACTUAL_CAPITAL": "公式组成",
-            "MINIMUM_CAPITAL": "公式组成",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        actual = snapshots["COMBINED_SOLVENCY_SURPLUS"].value
-        expected = (
-            snapshots["ACTUAL_CAPITAL"].value - snapshots["MINIMUM_CAPITAL"].value
-        )
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的综合偿付能力溢额",
-                actual,
-                snapshots["COMBINED_SOLVENCY_SURPLUS"].unit,
-                "按实际资本减最低资本计算的溢额",
-                expected,
-                snapshots["COMBINED_SOLVENCY_SURPLUS"].unit,
-                tolerance,
-                tolerance_unit,
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "CORE_RATIO":
-        codes = (
-            "CORE_SOLVENCY_RATIO",
-            "CORE_T1_CAPITAL",
-            "CORE_T2_CAPITAL",
-            "MINIMUM_CAPITAL",
-        )
-        roles = {
-            "CORE_SOLVENCY_RATIO": "披露值",
-            "CORE_T1_CAPITAL": "分子组成",
-            "CORE_T2_CAPITAL": "分子组成",
-            "MINIMUM_CAPITAL": "分母",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        minimum = snapshots["MINIMUM_CAPITAL"].value
-        if minimum == 0:
-            reason = f"{period_group}的最低资本为 0，无法计算核心偿付能力充足率。"
-            return RuleEvaluation(
-                snapshots["CORE_SOLVENCY_RATIO"].value,
-                None,
-                reason,
-                evidence,
-                notes=reason,
-            )
-        actual = snapshots["CORE_SOLVENCY_RATIO"].value
-        expected = (
-            snapshots["CORE_T1_CAPITAL"].value + snapshots["CORE_T2_CAPITAL"].value
-        ) / minimum * 100
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的核心偿付能力充足率",
-                actual,
-                "%",
-                "按核心资本/最低资本计算的核心偿付能力充足率",
-                expected,
-                "%",
-                tolerance,
-                tolerance_unit or "百分点",
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-            reason += (
-                f" 代入值：核心一级资本 {_format_number(snapshots['CORE_T1_CAPITAL'].value, snapshots['CORE_T1_CAPITAL'].unit)}"
-                f" + 核心二级资本 {_format_number(snapshots['CORE_T2_CAPITAL'].value, snapshots['CORE_T2_CAPITAL'].unit)}"
-                f" = 核心资本 {_format_number(snapshots['CORE_T1_CAPITAL'].value + snapshots['CORE_T2_CAPITAL'].value, snapshots['CORE_T1_CAPITAL'].unit)}；"
-                f"最低资本 {_format_number(minimum, snapshots['MINIMUM_CAPITAL'].unit)}。"
-            )
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "COMBINED_RATIO":
-        codes = ("COMBINED_SOLVENCY_RATIO", "ACTUAL_CAPITAL", "MINIMUM_CAPITAL")
-        roles = {
-            "COMBINED_SOLVENCY_RATIO": "披露值",
-            "ACTUAL_CAPITAL": "分子",
-            "MINIMUM_CAPITAL": "分母",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        minimum = snapshots["MINIMUM_CAPITAL"].value
-        if minimum == 0:
-            reason = f"{period_group}的最低资本为 0，无法计算综合偿付能力充足率。"
-            return RuleEvaluation(
-                snapshots["COMBINED_SOLVENCY_RATIO"].value,
-                None,
-                reason,
-                evidence,
-                notes=reason,
-            )
-        actual = snapshots["COMBINED_SOLVENCY_RATIO"].value
-        expected = snapshots["ACTUAL_CAPITAL"].value / minimum * 100
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的综合偿付能力充足率",
-                actual,
-                "%",
-                "按实际资本/最低资本计算的综合偿付能力充足率",
-                expected,
-                "%",
-                tolerance,
-                tolerance_unit or "百分点",
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-            reason += (
-                f" 代入值：实际资本 {_format_number(snapshots['ACTUAL_CAPITAL'].value, snapshots['ACTUAL_CAPITAL'].unit)}；"
-                f"最低资本 {_format_number(minimum, snapshots['MINIMUM_CAPITAL'].unit)}。"
-            )
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    if rule_id == "MINIMUM_CAPITAL":
-        codes = (
-            "MINIMUM_CAPITAL",
-            "QUANT_RISK_CAPITAL",
-            "CONTROL_RISK_CAPITAL",
-            "ADDITIONAL_CAPITAL",
-        )
-        roles = {
-            "MINIMUM_CAPITAL": "披露值",
-            "QUANT_RISK_CAPITAL": "公式组成",
-            "CONTROL_RISK_CAPITAL": "公式组成",
-            "ADDITIONAL_CAPITAL": "公式组成",
-        }
-        snapshots = _snapshots(frame, codes, period_group, taxonomy_names)
-        evidence = _collect_evidence(
-            frame, snapshots, roles, period_group, taxonomy_names
-        )
-        missing = [item for item in snapshots.values() if item.value is None]
-        if missing:
-            reason = _missing_reason(period_group, missing)
-            return RuleEvaluation(None, None, reason, evidence, notes=reason)
-        actual = snapshots["MINIMUM_CAPITAL"].value
-        expected = sum(
-            snapshots[code].value or 0.0
-            for code in (
-                "QUANT_RISK_CAPITAL",
-                "CONTROL_RISK_CAPITAL",
-                "ADDITIONAL_CAPITAL",
-            )
-        )
-        reason = ""
-        if abs(actual - expected) > tolerance:
-            reason = _comparison_reason(
-                "披露的最低资本",
-                actual,
-                snapshots["MINIMUM_CAPITAL"].unit,
-                "按三项最低资本加总计算的最低资本",
-                expected,
-                snapshots["MINIMUM_CAPITAL"].unit,
-                tolerance,
-                tolerance_unit,
-            )
-            if formula:
-                reason += f"公式：{formula}。"
-        return RuleEvaluation(actual, expected, reason, evidence, notes=reason or "检查通过")
-
-    raise KeyError(f"未注册的勾稽规则：{rule_id}")
-
+    return _evaluate_formula_rule(
+        frame,
+        left_code=left_code,
+        expression=_rule_value(rule, "右值表达式", "右侧公式", "校验公式"),
+        dependency_codes=dependency_codes,
+        period_group=period_group,
+        rule_name=_text(rule.get("规则名称")) or rule_id,
+        formula=formula,
+        tolerance=tolerance,
+        tolerance_unit=tolerance_unit,
+        taxonomy_names=taxonomy_names,
+    )
 
 def _entity_groups(frame: pd.DataFrame):
     working = frame.copy()
@@ -1130,6 +1072,72 @@ def _result(
         tolerance_unit=tolerance_unit,
         evidence_count=len(evidence_rows),
         evidence=evidence_rows,
+    )
+
+
+def _canonical_data_type(value: Any) -> str:
+    text = _text(value).lower()
+    aliases = {
+        "比率": "百分比",
+        "比例": "百分比",
+        "百分数": "百分比",
+        "percent": "百分比",
+        "%": "百分比",
+    }
+    return aliases.get(text, text)
+
+
+def _canonical_metric_name(value: Any) -> str:
+    return re.sub(
+        r"[\s：:（）()、，,。·—\-_/的]",
+        "",
+        _text(value),
+    )
+
+
+def _schema_period_key(value: Any) -> str:
+    """Equivalent period key used by the metric dictionary check.
+
+    ``本季度数``, ``本季度末数``, ``本季度（末）数`` and ``期末数`` describe the
+    same current-period bucket for this validation. Other rules retain their
+    existing period-group semantics.
+    """
+    text = re.sub(r"\s+", "", _text(value))
+    if not text:
+        return ""
+    if "预测" in text or "下季度" in text or "下季末" in text:
+        return "下季度预测"
+    if (
+        text.startswith("上季度")
+        or text.startswith("上季末")
+        or text.startswith("期初")
+    ):
+        return "上期末"
+    if (
+        text.startswith("本季度")
+        or text.startswith("本季末")
+        or text.startswith("期末")
+    ):
+        return "本期末"
+    if "本年累计" in text or "本年度累计" in text:
+        return "本年累计"
+    return validation_period_group(text)
+
+
+def _metric_name_equivalent(
+    actual: Any,
+    expected: Any,
+    definition: pd.Series,
+) -> bool:
+    actual_key = _canonical_metric_name(actual)
+    candidates = [
+        expected,
+        *re.split(r"[|｜]", _text(definition.get("别名"))),
+    ]
+    return bool(actual_key) and any(
+        actual_key == _canonical_metric_name(candidate)
+        for candidate in candidates
+        if _canonical_metric_name(candidate)
     )
 
 
@@ -1238,7 +1246,20 @@ def _schema_checks(group: pd.DataFrame, taxonomy: pd.DataFrame) -> list[Validati
             definition = taxonomy_by_code.loc[str(row["指标编码"]).strip()]
             actual_value = _text(row.get(source_column))
             expected_value = _text(definition.get(taxonomy_column))
-            if actual_value != expected_value:
+            if rule_id == "SCHEMA_DATA_TYPE":
+                matches = (
+                    _canonical_data_type(actual_value)
+                    == _canonical_data_type(expected_value)
+                )
+            elif rule_id == "SCHEMA_METRIC_NAME":
+                matches = _metric_name_equivalent(
+                    actual_value,
+                    expected_value,
+                    definition,
+                )
+            else:
+                matches = actual_value == expected_value
+            if not matches:
                 mismatch_records.append((row, actual_value, expected_value))
         mismatches = (
             pd.DataFrame([row for row, _, _ in mismatch_records])
@@ -1287,13 +1308,29 @@ def _schema_checks(group: pd.DataFrame, taxonomy: pd.DataFrame) -> list[Validati
     for _, row in known_rows.iterrows():
         definition = taxonomy_by_code.loc[str(row["指标编码"]).strip()]
         allowed = {
-            item.strip() for item in str(definition.get("允许期间口径", "")).split("|")
+            _schema_period_key(item.strip())
+            for item in str(definition.get("允许期间口径", "")).split("|")
             if item.strip()
         }
         actual_period = _text(row.get("期间口径"))
-        if allowed and actual_period not in allowed:
+        actual_period_group = _schema_period_key(actual_period)
+        if allowed and actual_period_group not in allowed:
             invalid_period_records.append(
-                (row, actual_period, "|".join(sorted(allowed)))
+                (
+                    row,
+                    actual_period,
+                    "|".join(
+                        sorted(
+                            {
+                                item.strip()
+                                for item in str(
+                                    definition.get("允许期间口径", "")
+                                ).split("|")
+                                if item.strip()
+                            }
+                        )
+                    ),
+                )
             )
     invalid_periods = (
         pd.DataFrame([row for row, _, _ in invalid_period_records])
@@ -1339,7 +1376,7 @@ def _schema_checks(group: pd.DataFrame, taxonomy: pd.DataFrame) -> list[Validati
         suggestion="返回 Step2 核对表头列位，或在 Step3 修正期间口径。" if not invalid_periods.empty else "",
     ))
 
-    numeric_types = {"金额", "百分比", "数量", "倍数"}
+    numeric_types = {"金额", "百分比", "比率", "数量", "倍数"}
     invalid_numeric_records: list[tuple[pd.Series, str, str]] = []
     for _, row in known_rows.iterrows():
         definition = taxonomy_by_code.loc[str(row["指标编码"]).strip()]
@@ -1601,8 +1638,23 @@ def _business_checks(
     periods.sort(key=lambda value: (PERIOD_GROUP_ORDER.get(value, 999), value))
     for _, rule in rules.iterrows():
         rule_id = str(rule.get("规则ID", "")).strip()
-        if rule_id not in RULE_METRICS or str(rule.get("启用", "是")).strip() == "否":
+        if not rule_id or str(rule.get("启用", "是")).strip() == "否":
             continue
+        try:
+            left_code, formula_codes = _formula_codes(rule)
+        except Exception:
+            left_code, formula_codes = "", []
+        configured_metrics = [
+            code.strip()
+            for code in re.split(r"[、,，|;；\s]+", _text(rule.get("涉及指标")))
+            if code.strip()
+        ]
+        metrics = tuple(
+            dict.fromkeys(
+                configured_metrics
+                or ([left_code, *formula_codes] if left_code else [])
+            )
+        )
         allowed_periods = {
             validation_period_group(item.strip())
             for item in str(rule.get("适用期间", "")).split("|")
@@ -1613,7 +1665,10 @@ def _business_checks(
         tolerance_unit = _text(rule.get("容差单位"))
         rule_name = _text(rule.get("规则名称")) or rule_id
         formula = _text(rule.get("规则说明"))
-        duplicate_rule = rule_id.startswith("DUPLICATE_")
+        duplicate_rule = (
+            _text(rule.get("校验方式")) == "跨表一致"
+            or rule_id.startswith("DUPLICATE_")
+        )
         for period_group in target_periods:
             try:
                 evaluation = _evaluate_business_rule(
@@ -1624,6 +1679,7 @@ def _business_checks(
                     tolerance=tolerance,
                     tolerance_unit=tolerance_unit,
                     taxonomy_names=taxonomy_names,
+                    rule=rule,
                 )
                 actual, expected = evaluation.actual, evaluation.expected
                 if not evaluation.applicable:
@@ -1642,7 +1698,11 @@ def _business_checks(
                     suggestion = "返回 Step2/Step3 补齐公式依赖指标并核对数值。"
                 else:
                     difference = float(actual - expected)
-                    status = "通过" if abs(difference) <= tolerance else "未通过"
+                    status = (
+                        "通过"
+                        if _within_tolerance(difference, tolerance)
+                        else "未通过"
+                    )
                     if status == "通过":
                         failure_reason = ""
                         notes = "检查通过"
@@ -1667,7 +1727,6 @@ def _business_checks(
                     notes=notes,
                     applicable=False,
                 )
-            metrics = RULE_METRICS[rule_id]
             source_pages = "、".join(
                 dict.fromkeys(
                     _text(item.get("source_page"))
@@ -1706,6 +1765,7 @@ def validate_standard_data_detailed(
     frame: pd.DataFrame,
     rules: pd.DataFrame,
     taxonomy: pd.DataFrame | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run STEP4 checks and return both summary results and row-level evidence.
 
@@ -1723,12 +1783,20 @@ def validate_standard_data_detailed(
     results: list[ValidationResult] = []
     working = frame.reset_index(drop=True).copy()
     working["_记录号"] = np.arange(1, len(working) + 1)
-    for group in _entity_groups(working):
+    groups = list(_entity_groups(working))
+    for index, group in enumerate(groups, 1):
         if not taxonomy_frame.empty:
             results.extend(_schema_checks(group, taxonomy_frame))
             results.extend(_completeness_checks(group, taxonomy_frame))
         if not rule_frame.empty:
             results.extend(_business_checks(group, rule_frame, taxonomy_frame))
+        if progress_callback is not None:
+            company = (
+                _text(group["_验证公司"].iloc[0])
+                if not group.empty and "_验证公司" in group.columns
+                else ""
+            )
+            progress_callback(index, len(groups), company)
     for index, item in enumerate(results, 1):
         item.result_id = f"VAL{index:05d}"
     result_frame = pd.DataFrame(

@@ -94,6 +94,14 @@ CAPITAL_COMPONENT_ZERO_TABLE_IDS = frozenset({
     "SOLVENCY_MAIN",
 })
 
+# 空白/占位符不再统一写成 0：只有明确写出的 0、资本明细空白和资本明细
+# 短横线保留 0 规则；其余空白、“不适用”“未披露”和无法解析文本按缺失处理，
+# 不生成数值记录，但写入“匹配诊断”并在填报汇总中计数，避免假 0 顶掉真值。
+MISSING_NUMERIC_DIAGNOSTIC_STATUS = "值为空"
+_MISSING_NUMERIC_PLACEHOLDERS = frozenset({
+    "", "-", "--", "—", "–", "－", "/", "不适用", "未披露", "无", "N/A", "n/a",
+})
+
 
 PERIOD_TERMS = [
     # 偿付能力主表/实际资本表/最低资本表常用
@@ -127,8 +135,20 @@ PERIOD_ALIASES = {
     "下季度末": "下季度末预测数",
     "本季度": "本季度数",
     "上季度": "上季度数",
+    "本期": "本季度数",
+    "上期": "上季度数",
+    "上年同期": "上季度数",
+    "上年度": "上季度末数",
+    "上年末": "上季度末数",
+    "上年度末": "上季度末数",
     "本年累计": "本年累计数",
     "本年度累计": "本年累计数",
+    "本年度": "本年累计数",
+    "年度累计": "本年累计数",
+    "全年累计": "本年累计数",
+    "全年": "本年累计数",
+    "本期累计": "本年累计数",
+    "累计": "本年累计数",
     "期末": "期末数",
     "期初": "期初数",
     "本季末": "本季度末数",
@@ -353,26 +373,47 @@ def load_taxonomy(path: str | Path) -> pd.DataFrame:
     return frame
 
 
+_NUMERIC_FOOTNOTE_SUFFIX_RE = re.compile(
+    r"(?:注|附注)\s*[0-9一二三四五六七八九十百]*\s*$"
+)
+_NUMERIC_CIRCLED_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*$")
+
+
 def parse_numeric(value):
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return np.nan
-    text = str(value).strip().replace(",", "").replace("，", "")
+    text = str(value).strip().translate(
+        str.maketrans("０１２３４５６７８９．，－", "0123456789.,-")
+    )
+    text = re.sub(r"\s+", "", text)
+    text = text.replace(",", "").replace("，", "")
     if text in {"", "-", "—", "--", "不适用", "未披露"}:
         return np.nan
+    # ★ P2：先剥离常见脚注/标记，再处理百分号。
+    # 这样“12.3%注1”也能解析为 12.3，而不是因尾注被判为缺失。
+    text = text.lstrip("¥￥$").strip()
+    text = _NUMERIC_CIRCLED_RE.sub("", text).strip()
+    text = _NUMERIC_FOOTNOTE_SUFFIX_RE.sub("", text).strip()
+    text = re.sub(r"[\(（]\s*(?:注|附注)\s*\d*\s*[\)）]\s*$", "", text).strip()
+    text = re.sub(r"[\[【]\s*\d{1,3}\s*[\]】]\s*$", "", text).strip()
+    text = text.rstrip("*#△▲※†‡").strip()
     text = text.replace("％", "%")
     if text.endswith("%"):
         text = text[:-1].strip()
+    # “1234.56(1)”是脚注；而“(1234.56)”是负数，必须保留。
+    if not (text.startswith("(") or text.startswith("（")):
+        text = re.sub(r"[\(（]\s*\d{1,3}\s*[\)）]\s*$", "", text).strip()
+
     if (text.startswith("(") and text.endswith(")")) or (text.startswith("（") and text.endswith("）")):
         text = "-" + text[1:-1]
+        # 负号括号内也可能带脚注，例如“(1,234.56)注1”。
+        text = _NUMERIC_FOOTNOTE_SUFFIX_RE.sub("", text).strip()
+        text = text.rstrip("*#△▲※†‡").strip()
     try:
         return float(text)
     except ValueError:
         return np.nan
 
-
-_TAIL_MODIFIER_RE = re.compile(
-    r"[（(](未考虑特征系数前|未考虑特征系数|考虑特征系数前)[）)]$"
-)
 
 # ★ 新增：剥掉形如 "(=1+2+3)" 或 "（=1.1+1.2-1.3）" 的公式后缀
 _FORMULA_SUFFIX_RE = re.compile(r"[（(]\s*=\s*[^）)]*[）)]")
@@ -392,7 +433,8 @@ _LEADING_ROW_NUMBER_RE = re.compile(
 
 def _normalize_label(value: str) -> str:
     text = _FORMULA_SUFFIX_RE.sub("", str(value or ""))   # ★ 先剥公式后缀
-    text = _TAIL_MODIFIER_RE.sub("", text)
+    # “未考虑特征系数前”是量化风险最低资本的独立口径；保留该后缀，
+    # 避免与基础“量化风险最低资本”合并成同一个指标。
     text = _INLINE_UNIT_PATTERN.sub("", text)
     text = _LEADING_ROW_NUMBER_RE.sub("", text)           # ★ 再剥前导行号
     text = re.sub(r"^\s*其中\s*[:：]?", "", text)          # ★ 剥“其中：”前缀
@@ -456,6 +498,18 @@ def _source_unit(
     header: str,
     target_unit: str,
 ) -> str:
+    # ★ P0-3：表块级单位优先于整表单位。跨页表可能第一页“万元”、第二页
+    #   “元”，_expand_table_blocks 会把 block_unit 写到每个独立表块上，
+    #   避免整页/整表单位套到另一页。
+    _block_unit = _canonical_unit(getattr(table, "block_unit", "") or "")
+    if _block_unit:
+        if target_unit in _CURRENCY_UNIT_IN_YUAN and _block_unit in _CURRENCY_UNIT_IN_YUAN:
+            return _block_unit
+        if target_unit == "%" and _block_unit == "%":
+            return _block_unit
+        if target_unit not in _CURRENCY_UNIT_IN_YUAN and target_unit != "%":
+            return _block_unit
+
     # ★ 第一步：优先信任 app.py / batch_processor 已经嗅探并写入的 table.unit。
     #   app.py 已经按该单位换算过 grid；如果这里再扫描表头里的"（元）"，
     #   会把已换算的数值再除一次。所以这里必须最先判断。
@@ -697,10 +751,51 @@ def resolve_metric_match(
 
 _AUTO_COLUMN_RE = re.compile(r"^列\d+$")
 
+
+def _extract_audit_qualifier(text: str) -> str:
+    """提取“审计后/审计前/未经审计”等列限定词，避免双行表头被去重吃掉。"""
+    value = str(text or "")
+    for token in ("审计后", "审计前", "未经审计"):
+        if token in value:
+            return token
+    return ""
+
+
+def _split_period_qualifier(period: str) -> tuple[str, str]:
+    """把期间拆成“基础期间 + 限定词”，例如“期末数-审计后”。"""
+    text = str(period or "").strip()
+    for token in ("审计后", "审计前", "未经审计"):
+        if text.endswith(token):
+            base = text[: -len(token)].rstrip(" -/—_：:")
+            if base:
+                return base, token
+        match = re.search(rf"[（(]\s*{token}\s*[）)]\s*$", text)
+        if match:
+            base = text[: match.start()].rstrip(" -/—_：:")
+            if base:
+                return base, token
+    return text, ""
+
+_PERIOD_SUBHEADER_TOKENS = ("非认可价值", "认可价值", "账面价值")
+
+
+def _extract_period_subheader(text: str) -> str:
+    """提取认可资产/负债表的账面价值、非认可价值、认可价值子口径。"""
+    value = str(text or "")
+    for token in _PERIOD_SUBHEADER_TOKENS:
+        if token in value:
+            return token
+    return ""
+
+
 def _period_header(row: list[str], index: int) -> str:
     current = str(row[index]).strip() if index < len(row) else ""
     if _AUTO_COLUMN_RE.match(current):   # ★ 新增
         return ""
+
+    # ★ P0-2：审计后/审计前是列口径的一部分，必须在剥离括号说明前保留。
+    audit_qualifier = _extract_audit_qualifier(current)
+    period_subheader = _extract_period_subheader(current)
 
     # ★ 新增：剥掉表头里的括号补充说明，让
     #   "本季度(期末)数" → "本季度数"
@@ -713,11 +808,36 @@ def _period_header(row: list[str], index: int) -> str:
         current,
     ).strip()
 
+    def _with_qualifier(period: str) -> str:
+        result = period
+        if period_subheader and result and period_subheader not in result:
+            result = f"{result}/{period_subheader}"
+        if audit_qualifier and result and audit_qualifier not in result:
+            result = f"{result}-{audit_qualifier}"
+        return result
+
+    if (
+        any(
+            token in current
+            for token in ("本年度", "年度累计", "全年", "本期累计")
+        )
+        and "预测" not in current
+    ):
+        return _with_qualifier("本年累计数")
+    if any(token in current for token in ("上年度", "上年末")):
+        return _with_qualifier("上季度末数")
+    if current == "累计" or current.endswith("累计"):
+        return _with_qualifier("本年累计数")
+
     _PERIOD_TERMS_SORTED = sorted(PERIOD_TERMS, key=len, reverse=True)
     
     for term in _PERIOD_TERMS_SORTED:    # ★ 改
         if term in current:
-            return PERIOD_ALIASES.get(term, term)
+            return _with_qualifier(PERIOD_ALIASES.get(term, term))
+    if re.search(r"20[0-9]{2}", current):
+        if re.search(r"[0-9]{1,2}\s*月", current):
+            return _with_qualifier("期末数")
+        return _with_qualifier("本年累计数")
     return current
 
 # 存量类指标（资本/资产/负债类）的“本季度数”与“本季度末数”语义相同，
@@ -729,6 +849,7 @@ _STOCK_PERIOD_INDICATORS = {
     "RECOGNIZED_ASSETS", "RECOGNIZED_LIABILITIES", "ACTUAL_CAPITAL",
     "CORE_T1_CAPITAL", "CORE_T2_CAPITAL", "ANC_T1_CAPITAL", "ANC_T2_CAPITAL",
     "MINIMUM_CAPITAL", "QUANT_RISK_CAPITAL", "CONTROL_RISK_CAPITAL",
+    "QUANT_RISK_CAPITAL_BEFORE_FEATURE_FACTOR",
     "ADDITIONAL_CAPITAL",
     "CORE_SOLVENCY_SURPLUS", "COMBINED_SOLVENCY_SURPLUS",
     "CORE_SOLVENCY_RATIO", "COMBINED_SOLVENCY_RATIO",
@@ -774,18 +895,42 @@ _QUALITY_PERIOD_CODES = {
 
 
 def _normalize_period_alias(period: str, metric_code: str = "") -> str:
-    """把不同叫法归一；存量类指标额外把本季度数/上季度数归一到末数。"""
+    """把不同叫法归一；存量类指标额外把本季度数/上季度数归一到末数。
+
+    P0-2：先拆出“审计后/审计前”等限定词，只归一基础期间，再原样拼回，
+    避免“本季度末数-审计后”和“本季度末数-审计前”在去重时互相覆盖。
+    """
+    period_base, period_qualifier = _split_period_qualifier(period)
+    period_subheader = ""
+    for subheader in _PERIOD_SUBHEADER_TOKENS:
+        suffix = f"/{subheader}"
+        if period_base.endswith(suffix):
+            period_base = period_base[: -len(suffix)].rstrip()
+            period_subheader = subheader
+            break
     mapping = {
         "期末数": "本季度末数",
         "期初数": "上季度末数",
         "本年累计数": "本年累计数",
         "本年度累计数": "本年累计数",
+        "本年度": "本年累计数",
+        "本年度末": "本年累计数",
+        "年度累计": "本年累计数",
+        "全年累计": "本年累计数",
+        "全年": "本年累计数",
+        "本期累计": "本年累计数",
+        "累计": "本年累计数",
         "本季度末数": "本季度末数",
         "上季度末数": "上季度末数",
+        "上年度": "上季度末数",
+        "上年末": "上季度末数",
+        "上年度末": "上季度末数",
         "下季度末预测数": "下季度末预测数",
         "本季末": "本季度末数",
         "上季末": "上季度末数",
         "下季末": "下季度末预测数",
+        "本期": "本季度数",
+        "上期": "上季度数",
     }
     if metric_code in _STOCK_PERIOD_INDICATORS:
         mapping["本季度数"] = "本季度末数"
@@ -793,6 +938,8 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         # ★ 新增：兜底覆盖 _period_header 可能返回的"本季度"/"上季度"
         mapping["本季度"] = "本季度末数"
         mapping["上季度"] = "上季度末数"
+        mapping["本期"] = "本季度末数"
+        mapping["上期"] = "上季度末数"
         # ★ 新增
         mapping["本季末"] = "本季度末数"
         mapping["上季末"] = "上季度末数"
@@ -802,15 +949,175 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         # ★ 新增
         mapping["本季度"] = "本季度数"
         mapping["上季度"] = "上季度数"
+        mapping["本期"] = "本季度数"
+        mapping["上期"] = "上季度数"
         # ★ 新增
         mapping["本季末"] = "本季度末数"
         mapping["上季末"] = "上季度末数"
     # ★ 品质类兜底：PDF 里 C 列通常是"本年度累计数"，
     #   若因表头错位被识别为"上季度数"，这里再纠正一次。
-    if metric_code in _QUALITY_PERIOD_CODES and period == "上季度数":
-        return "本年累计数"
+    if metric_code in _QUALITY_PERIOD_CODES and period_base == "上季度数":
+        normalized = "本年累计数"
+    else:
+        normalized = mapping.get(period_base, period_base)
+    result = normalized
+    if period_qualifier:
+        result = f"{result}-{period_qualifier}"
+    if period_subheader:
+        result = f"{result}/{period_subheader}"
+    return result
 
-    return mapping.get(period, period)
+
+def _infer_period_label_base(value: object) -> str:
+    """Infer a canonical period from a human-readable header label.
+
+    Returns an empty string when local semantic rules cannot decide. The
+    optional LLM fallback only receives these unresolved labels.
+    """
+    text = re.sub(r"\s+", "", str(value or ""))
+    if not text:
+        return ""
+    if any(
+        token in text
+        for token in ("近三年", "近3年", "三年平均", "3年平均")
+    ) or re.search(r"20\d{2}年(?:至|到|-|—)20\d{2}年", text):
+        return "近三年平均"
+    if any(token in text for token in ("下季度", "下季末", "预测")):
+        return "下季度末预测数"
+    if any(
+        token in text
+        for token in ("本年度", "年度累计", "全年", "本期累计")
+    ):
+        return "本年累计数"
+    if text == "累计" or text.endswith("累计"):
+        return "本年累计数"
+    if any(token in text for token in ("上年度", "上年末")):
+        return "上季度末数"
+    if "本年累计" in text:
+        return "本年累计数"
+    if any(token in text for token in ("本季度末", "本季末")):
+        return "本季度末数"
+    if any(token in text for token in ("上季度末", "上季末", "期初")):
+        return "上季度末数"
+    if any(token in text for token in ("本季度", "本期")):
+        return "本季度数"
+    if any(token in text for token in ("上季度", "上期")):
+        return "上季度数"
+    if "期末" in text:
+        return "期末数"
+    return ""
+
+
+def infer_period_label(value: object) -> str:
+    """推断期间；保留“审计后/审计前”等列限定词。"""
+    text = re.sub(r"\s+", "", str(value or ""))
+    qualifier = _extract_audit_qualifier(text)
+    base = _infer_period_label_base(value)
+    if base and qualifier and qualifier not in base:
+        return f"{base}-{qualifier}"
+    return base
+
+
+_HEADER_LABEL_TERMS = (
+    "指标名称",
+    "项目",
+    "行次",
+    "序号",
+    "指标",
+    "监测指标",
+)
+_HEADER_PERIOD_TERMS = tuple(PERIOD_TERMS) + (
+    "审计后",
+    "审计前",
+    "账面价值",
+    "非认可",
+    "认可价值",
+)
+_TABLE_DEFAULT_PERIODS = {
+    "SOLVENCY_MAIN": ("本季度末数", "上季度末数", "下季度末预测数"),
+    "ACTUAL_CAPITAL": ("本季度末数", "上季度末数"),
+    "MINIMUM_CAPITAL": ("本季度末数", "上季度末数"),
+    "OPERATING_METRICS": ("本季度数", "本年累计数"),
+    "NON_LIFE_OPERATING_METRICS": ("本季度数", "本年累计数"),
+    "LIQUIDITY_MONITORING": ("本季度数", "本年累计数"),
+}
+
+
+def _is_header_numeric(value: object) -> bool:
+    text = str(value or "").strip().replace(",", "").replace("，", "")
+    if not text:
+        return False
+    text = text.strip("()（）").replace("%", "").replace("％", "")
+    try:
+        float(text)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _header_row_signal(row: Sequence[str]) -> tuple[int, int, int, int]:
+    text = "".join(str(cell or "") for cell in row)
+    label_hits = sum(term in text for term in _HEADER_LABEL_TERMS)
+    period_hits = sum(term in text for term in _HEADER_PERIOD_TERMS)
+    numeric = sum(_is_header_numeric(cell) for cell in row)
+    score = label_hits * 10 + min(period_hits, 5) * 4 - numeric * 3
+    return score, label_hits, period_hits, numeric
+
+
+def _is_table_subheader(row: Sequence[str]) -> bool:
+    text = "".join(str(cell or "") for cell in row)
+    hits = sum(
+        term in text
+        for term in (
+            "审计后",
+            "审计前",
+            "账面价值",
+            "非认可",
+            "认可价值",
+            "预测",
+            "本季度",
+            "上季度",
+            "期末",
+            "期初",
+        )
+    )
+    numeric = sum(_is_header_numeric(cell) for cell in row)
+    return hits >= 1 and numeric <= 1
+
+
+def _locate_table_header(
+    rows: Sequence[Sequence[str]],
+) -> tuple[int, bool] | None:
+    best: tuple[int, int] | None = None
+    for index, row in enumerate(rows[:12]):
+        score, label_hits, period_hits, numeric = _header_row_signal(row)
+        nonempty = sum(bool(str(cell or "").strip()) for cell in row)
+        if numeric > 1:
+            continue
+        if (
+            index <= 2
+            and nonempty >= 2
+            and numeric == 0
+            and label_hits >= 1
+            and period_hits == 0
+        ):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif label_hits >= 1 and (period_hits >= 1 or label_hits >= 2):
+            if best is None or score > best[0]:
+                best = (score, index)
+        elif period_hits >= 2 and numeric == 0:
+            if best is None or score > best[0]:
+                best = (score, index)
+    if best is None or best[0] < 6:
+        return None
+    index = best[1]
+    multi = (
+        index + 1 < len(rows)
+        and _is_table_subheader(rows[index + 1])
+    )
+    return index, multi
+
 
 def normalize_tables(
     tables: list[ExtractedTable],
@@ -824,6 +1131,7 @@ def normalize_tables(
     peer_group_map: Mapping[str, str] | None = None,
     default_peer_group: str = "",
     company_type_map: Mapping[str, str] | None = None,
+    period_overrides: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
     company_type = normalize_company_type(company_type, allowed_company_types)
     company_identity = resolve_company_identity(
@@ -845,20 +1153,27 @@ def normalize_tables(
         rows = table.rows
         if len(rows) < 2:
             continue
-        second_header = rows[1] if len(rows) > 1 else []
-        is_multiheader = any(
-            term in "".join(second_header)
-            for term in ("账面价值", "非认可", "认可价值")
-        )
-        header_rows = rows[:2] if is_multiheader else rows[:1]
-        data_start = 2 if is_multiheader else 1
-        if is_multiheader:
-            filled_first_header = []
-            last_header = ""
-            for value in rows[0]:
-                last_header = value or last_header
-                filled_first_header.append(last_header)
-            header_rows = [filled_first_header, rows[1]]
+        located = _locate_table_header(rows)
+        if located is None:
+            header_index = None
+            is_multiheader = False
+            header_rows = []
+            data_start = 0
+        else:
+            header_index, is_multiheader = located
+            header_rows = (
+                rows[header_index:header_index + 2]
+                if is_multiheader
+                else [rows[header_index]]
+            )
+            data_start = header_index + len(header_rows)
+            if is_multiheader:
+                filled_first_header = []
+                last_header = ""
+                for value in rows[header_index]:
+                    last_header = value or last_header
+                    filled_first_header.append(last_header)
+                header_rows = [filled_first_header, rows[header_index + 1]]
         max_width = max(len(row) for row in rows)
         headers = []
         for column_index in range(max_width):
@@ -925,6 +1240,35 @@ def normalize_tables(
                     table_id=table.table_id,
                     allow_all_codes=whole_page_block,
                 )
+            label_index_used = label_index
+            if decision.metric is None and label_index + 1 < max_width:
+                secondary = str(row[label_index + 1]).strip()
+                if (
+                    secondary
+                    and not _is_header_numeric(secondary)
+                    and any('\u4e00' <= ch <= '\u9fff' for ch in secondary)
+                ):
+                    combined = label + secondary
+                    combined_decision = resolve_metric_match(
+                        combined,
+                        taxonomy,
+                        candidates,
+                        table_id=table.table_id,
+                        allow_all_codes=whole_page_block,
+                    )
+                    if combined_decision.metric is not None:
+                        decision = combined_decision
+                        label_index_used = label_index + 1
+            if decision.metric is None and not whole_page_block:
+                exact_any = resolve_metric_match(
+                    label,
+                    taxonomy,
+                    candidates,
+                    table_id=table.table_id,
+                    allow_all_codes=True,
+                )
+                if exact_any.metric is not None and exact_any.score >= 2.0:
+                    decision = exact_any
             metric = decision.metric
             if metric is None:
                 if diagnostics is not None and label:
@@ -932,7 +1276,7 @@ def normalize_tables(
                         "目标表": table.table_name,
                         "来源页码": "、".join(map(str, table.source_pages or [table.page])),
                         "原始项目": label,
-                        "状态": "歧义" if decision.ambiguous else "未匹配",
+                        "状态": "歧义待确认" if decision.ambiguous else "未匹配",
                         "原因": decision.reason,
                         "最佳候选": decision.candidate_name,
                         "最佳得分": round(decision.score, 3),
@@ -940,7 +1284,7 @@ def normalize_tables(
                         "第二得分": round(decision.runner_up_score, 3),
                     })
                 continue
-            value_start = label_index + 1
+            value_start = label_index_used + 1
             for column_index in range(value_start, max_width):
                 raw_value = row[column_index]
                 numeric_value = parse_numeric(raw_value)
@@ -948,6 +1292,8 @@ def normalize_tables(
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
                 blank_capital_zero = False
+                blank_numeric_zero = False
+                capital_dash_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
                     if not value:
@@ -956,14 +1302,47 @@ def normalize_tables(
                     if pd.isna(numeric_value):
                         _metric_code = str(metric.get("指标编码", "")).strip()
                         _table_id = str(getattr(table, "table_id", "")).strip()
-                        if (
-                            not str(raw_value).strip()
-                            and _metric_code in CAPITAL_COMPONENT_ZERO_CODES
+                        _raw_text = (
+                            "" if pd.isna(raw_value) else str(raw_value).strip()
+                        )
+                        _capital_scope = (
+                            _metric_code in CAPITAL_COMPONENT_ZERO_CODES
                             and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
+                        )
+                        if not _raw_text:
+                            # ★ 用户口径：空白单元格表示 0，不是未填报，
+                            #   也不是未披露。文本型指标仍跳过空白。
+                            numeric_value = 0.0
+                            if _capital_scope:
+                                blank_capital_zero = True
+                            else:
+                                blank_numeric_zero = True
+                        elif (
+                            _raw_text in {"-", "--", "—", "–", "－"}
+                            and _capital_scope
                         ):
                             numeric_value = 0.0
-                            blank_capital_zero = True
+                            capital_dash_zero = True
                         else:
+                            # ★ P0-1：空白、“不适用”“未披露”、无法解析文本
+                            #   一律按缺失处理，不写 0，也不静默丢行。
+                            if diagnostics is not None and label:
+                                diagnostics.append({
+                                    "目标表": table.table_name,
+                                    "来源页码": "、".join(map(str, table.source_pages or [table.page])),
+                                    "原始项目": label,
+                                    "指标编码": _metric_code,
+                                    "状态": MISSING_NUMERIC_DIAGNOSTIC_STATUS,
+                                    "原因": (
+                                        "原始值"
+                                        f"'{_raw_text or '空白'}'无法解析为数值，"
+                                        "按缺失处理（未写0）"
+                                    ),
+                                    "最佳候选": str(metric.get("指标名称", "")),
+                                    "最佳得分": 1.0,
+                                    "第二候选": "",
+                                    "第二得分": 0,
+                                })
                             continue
                     value = numeric_value
                     _metric_code_for_unit = str(metric.get("指标编码", "")).strip()
@@ -979,7 +1358,12 @@ def normalize_tables(
                         if target_unit in _CURRENCY_UNIT_IN_YUAN and not source_unit:
                             note = "未识别原始单位，数值未换算"
                         else:
-                            value, note = _convert_unit(value, source_unit, target_unit)
+                            value, conversion_note = _convert_unit(
+                                value,
+                                source_unit,
+                                target_unit,
+                            )
+                            note = conversion_note
 
                     # ★ 新增：百分比类指标的合理性兜底校验
                     # 某些 PDF 表格（如"流动性风险监测指标"）里，"占比/增速"
@@ -1010,9 +1394,33 @@ def normalize_tables(
                         note = "资本明细空白，按0处理" + (
                             f"；{note}" if note else ""
                         )
+                    elif blank_numeric_zero:
+                        note = "空白单元格，按0处理" + (
+                            f"；{note}" if note else ""
+                        )
+                    elif capital_dash_zero:
+                        note = "资本明细占位符'-'，按0处理" + (
+                            f"；{note}" if note else ""
+                        )
 
                 header_index = max(0, column_index - header_offset)
                 period = _period_header(headers, header_index)
+                if period in {"金额", "金额（万元）", "金额(万元)", "数值"}:
+                    period = ""
+                if period_overrides:
+                    raw_period_header = str(headers[header_index]).strip()
+                    override = period_overrides.get(raw_period_header)
+                    if not override:
+                        override = next(
+                            (
+                                mapped
+                                for label, mapped in period_overrides.items()
+                                if label and label in raw_period_header
+                            ),
+                            "",
+                        )
+                    if override:
+                        period = override
                 
                 # ★ 近三年投资收益率表强制期间 = "近三年平均"
                 if "近三年" in str(getattr(table, "table_name", "")):
@@ -1025,23 +1433,81 @@ def normalize_tables(
                 if ("近三年" in _label_text) and ("平均" in _label_text):
                     period = "近三年平均"
 
-                if not period:              # ★ 新增：无有效期间，跳过该列
-                    continue
+                period_default_note = ""
+                if not period:
+                    _defaults = tuple(getattr(table, "default_periods", ()) or ())
+                    _header_label = str(headers[header_index]).strip()
+                    _generic_header = _header_label in {
+                        "", "金额", "金额（万元）", "金额(万元)", "数值",
+                    }
+                    _can_fallback = (not header_rows) or _generic_header
+                    if header_index < len(_defaults) and _defaults[header_index]:
+                        period = str(_defaults[header_index])
+                    elif _can_fallback:
+                        _ordinal = max(0, column_index - value_start)
+                        _table_defaults = _TABLE_DEFAULT_PERIODS.get(
+                            str(getattr(table, "table_id", "")).strip(),
+                            ("本季度末数", "上季度末数", "下季度末预测数"),
+                        )
+                        if _ordinal < len(_table_defaults):
+                            period = str(_table_defaults[_ordinal])
+                        else:
+                            period = "本季度末数"
+                    else:
+                        # 表头存在但期间确实无法识别（例如“列2”“项目”），
+                        # 不臆造期间；留给补漏匹配按行标签兜底，同时写诊断。
+                        if diagnostics is not None and label:
+                            diagnostics.append({
+                                "目标表": table.table_name,
+                                "来源页码": "、".join(map(str, table.source_pages or [table.page])),
+                                "原始项目": label,
+                                "指标编码": str(metric.get("指标编码", "")).strip(),
+                                "状态": "期间未识别",
+                                "原因": (
+                                    f"表头'{str(headers[header_index]).strip()}'"
+                                    "无法识别期间，且该表无可用默认口径"
+                                ),
+                                "最佳候选": str(metric.get("指标名称", "")),
+                                "最佳得分": 1.0,
+                                "第二候选": "",
+                                "第二得分": 0,
+                            })
+                        continue
+                    period_default_note = (
+                        f"期间未识别，按默认口径'{period}'处理"
+                    )
 
+                if (
+                    period == "期末数"
+                    and re.search(r"20[0-9]{2}", str(headers[header_index]))
+                ):
+                    _date_ordinal = max(0, column_index - value_start)
+                    period = (
+                        "本季度末数",
+                        "上季度末数",
+                        "下季度末预测数",
+                    )[min(_date_ordinal, 2)]
                 period = _normalize_period_alias(
                     period,
                     metric_code=str(metric.get("指标编码", "")).strip(),
                 )
+                if period_default_note:
+                    note = (
+                        f"{note}；{period_default_note}"
+                        if note
+                        else period_default_note
+                    )
                 if blank_capital_zero and "预测" in period:
                     # 空白不自动解释为“下季度预测为0”，只对本期/上期资本明细生效。
                     continue
                 
-                if period.endswith("/认可价值"):
+                if period.endswith("/非认可价值") or period.endswith("/非认可"):
+                    period = period.replace("/非认可价值", "").replace("/非认可", "")
+                    period = period + "-非认可"
+                elif period.endswith("/认可价值"):
                     period = period.removesuffix("/认可价值")
                 elif period.endswith("/账面价值"):
                     period = period.removesuffix("/账面价值") + "-账面价值"
-                elif period.endswith("/非认可"):
-                    period = period.removesuffix("/非认可") + "-非认可"
                 records.append({
                     "公司": company_identity.standard_name,
                     "原始公司名称": company_identity.original_name,

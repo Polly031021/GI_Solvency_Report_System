@@ -76,7 +76,7 @@ _UNIT_PATTERNS = [
 
 
 def detect_table_unit(rows) -> str | None:
-    """扫描表格所有单元格文本，返回最后一次出现的'单位：X'。
+    """Detect a table-level amount unit without mistaking row-level labels.
 
     支持多种写法：
       - "单位：元" / "单位:元" / "单位 元"
@@ -98,32 +98,49 @@ def detect_table_unit(rows) -> str | None:
         r"(十亿元|亿元|万元|千元|百元|元)"
     )
 
-    # ★ 修复：不再只扫前 5 行，改为全量扫描（表格一般不会超过几百行，性能可接受）
-    found = None
-    for row in (rows or []):
+    all_rows = list(rows or [])
+    header_rows = all_rows[:5]
+
+    # 1) 表头中的“单位：X”是最高优先级。
+    for row in header_rows:
         for cell in row:
             if not isinstance(cell, str):
                 continue
-            # 1) 优先匹配 "单位：X" 类写法
             m = _UNIT_REGEX.search(cell)
             if m:
-                found = m.group(1)
-            # 2) 兼容 _UNIT_PATTERNS 里已有的正则（保留原有能力）
+                return m.group(1)
             for pat, unit in _UNIT_PATTERNS:
                 if pat.search(cell):
-                    found = unit
-            # 3) 兼容嵌入式写法（如"车险车均保费（元）"）
+                    return unit
+
+    # 2) 表头中的嵌入式单位，如“（万元）”。只检查表头区域，
+    #    不能把“基本每股收益（元）”“车险车均保费（元）”等行级标签
+    #    当成整表单位。
+    for row in header_rows:
+        for cell in row:
+            if not isinstance(cell, str):
+                continue
             if "（万元）" in cell or "(万元)" in cell:
-                found = "万元"
+                return "万元"
             elif "（亿元）" in cell or "(亿元)" in cell:
-                found = "亿元"
+                return "亿元"
             elif "（千元）" in cell or "(千元)" in cell:
-                found = "千元"
+                return "千元"
             elif "（百元）" in cell or "(百元)" in cell:
-                found = "百元"
+                return "百元"
             elif "（元）" in cell or "(元)" in cell:
-                found = "元"
-    return found
+                return "元"
+
+    # 3) 少数报告把“单位：X”放在表格正文中，仍只接受显式单位声明，
+    #    不接受行级“（元）”标签。
+    for row in all_rows[5:]:
+        for cell in row:
+            if not isinstance(cell, str):
+                continue
+            m = _UNIT_REGEX.search(cell)
+            if m:
+                return m.group(1)
+    return None
 
 # 匹配 "单位：元" / "单位：万元" / "（单位：元或%）" 等
 _UNIT_TEXT_RE = re.compile(

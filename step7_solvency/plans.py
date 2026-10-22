@@ -16,6 +16,7 @@ from services.solvency_step7_chart_plans import (
     CAPABILITY_RADAR,
     INDUSTRY_PREMIUM_STRUCTURE,
     INDUSTRY_MARKET_SHARE,
+    SOLVENCY_DISCLOSURE_OVERVIEW,
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
     PREMIUM_GROWTH_STRUCTURE,
@@ -58,6 +59,7 @@ from .plan_renderers import (
     render_plan_solvency_matrix,
     render_plan_solvency_ratio_combo,
     render_plan_structure_change_chart,
+    render_plan_solvency_disclosure_overview,
     render_plan_premium_growth_structure,
     render_plan_loss_expense_combo,
     render_plan_underwriting_efficiency_scatter,
@@ -135,6 +137,15 @@ def render_combination_analysis(
 
     if plan.kind == INDUSTRY_MARKET_SHARE:
         render_plan_industry_market_share(
+            industry_frame if industry_frame is not None else frame,
+            unit_mode=unit_mode,
+            key_prefix=key_prefix,
+            module_override=module_override,
+        )
+        return
+
+    if plan.kind == SOLVENCY_DISCLOSURE_OVERVIEW:
+        render_plan_solvency_disclosure_overview(
             industry_frame if industry_frame is not None else frame,
             unit_mode=unit_mode,
             key_prefix=key_prefix,

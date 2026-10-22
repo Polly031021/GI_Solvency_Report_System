@@ -25,7 +25,10 @@ from services.solvency_step7_charts import (
     CAPITAL_STRUCTURE_COLORS,
     COMPONENT_LABELS,
     EXPENSE_COLOR,
+    HISTORICAL_SOURCE,
+    INDUSTRY_PREMIUM_WINDOWS,
     LOSS_COLOR,
+    UPLOAD_SOURCE,
     annual_period_order,
     build_loss_expense_panel_chart,
     build_capability_radar_chart,
@@ -62,7 +65,11 @@ from services.solvency_step7_charts import (
     classify_performance_pattern,
     build_performance_pattern_trajectory,
     prepare_industry_premium_annual,
+    prepare_industry_solvency_overview,
     prepare_market_share_data,
+    TOP10_CATEGORY,
+    TOP3_CATEGORY,
+    TOP4_10_CATEGORY,
 )
 from .fragments import (
     render_capital_efficiency_bubble_fragment,
@@ -85,6 +92,7 @@ from .specs import (
     DEFAULT_CAPABILITY_AXES,
 )
 from .underwriting import render_underwriting_efficiency_scatter
+from .insight_cards import render_insight_card
 
 from .plan_inputs import capability_scores
 
@@ -1386,14 +1394,38 @@ def render_plan_industry_premium_structure(
     key_prefix,
     module_override,
 ):
-    """Render the five-year industry premium overview with an all-company scope."""
+    """Render the fixed-history industry premium overview."""
     cfg = module_override.chart_config if module_override else {}
-    year_window = int(cfg.get("years", 5) or 5)
     annual_scope = str(cfg.get("annual_scope", "") or "").strip()
+    default_range = "全部"
+
+    range_options = list(INDUSTRY_PREMIUM_WINDOWS)
+    # A new key intentionally resets older sessions that previously defaulted
+    # to the five-year window.
+    range_key = f"{key_prefix}_industry_premium_range_all_default"
+    if st.session_state.get(range_key) not in range_options:
+        st.session_state[range_key] = default_range
+    toolbar_left, toolbar_right = st.columns(
+        [3.2, 1.5],
+        vertical_alignment="center",
+    )
+    with toolbar_left:
+        st.caption("指标：签单保费 · 行业全量口径")
+    with toolbar_right:
+        selected_range = st.segmented_control(
+            "显示范围",
+            range_options,
+            key=range_key,
+            label_visibility="collapsed",
+            width="stretch",
+        )
+    selected_range = selected_range or default_range
+    year_window = INDUSTRY_PREMIUM_WINDOWS[selected_range]
     annual, detail, companies = prepare_industry_premium_annual(
         industry_frame,
         years=year_window,
         annual_scope=annual_scope,
+        include_historical=True,
     )
     if annual.empty:
         st.warning("当前数据没有可用的行业年度累计保费记录。")
@@ -1446,7 +1478,6 @@ def render_plan_industry_premium_structure(
         else (latest_non_car_value / float(latest_total) * 100)
     )
 
-    st.caption("指标：签单保费")
     metric_columns = st.columns(4)
     latest_year = str(latest.get("年度", "") or "")
     metric_columns[0].metric(
@@ -1472,6 +1503,9 @@ def render_plan_industry_premium_structure(
         else "较上一有数年度"
     )
     latest_total_raw = latest.get("合计")
+    growth_value: float | None = None
+    car_growth_value: float | None = None
+    non_car_growth_value: float | None = None
     if (
         previous_total is not None
         and pd.notna(previous_total)
@@ -1479,23 +1513,48 @@ def render_plan_industry_premium_structure(
         and latest_total_raw is not None
         and pd.notna(latest_total_raw)
     ):
-        growth = (float(latest_total_raw) / float(previous_total) - 1) * 100
+        growth_value = (float(latest_total_raw) / float(previous_total) - 1) * 100
         metric_columns[1].metric(
             growth_label,
-            f"{growth:+.1f}%",
+            f"{growth_value:+.1f}%",
             border=True,
         )
+        previous_car = previous.get("车险")
+        previous_non_car = previous.get("非车险")
+        latest_car_raw = latest.get("车险")
+        latest_non_car_raw = latest.get("非车险")
+        if (
+            previous_car is not None
+            and pd.notna(previous_car)
+            and float(previous_car) != 0
+            and latest_car_raw is not None
+            and pd.notna(latest_car_raw)
+        ):
+            car_growth_value = (
+                float(latest_car_raw) / float(previous_car) - 1
+            ) * 100
+        if (
+            previous_non_car is not None
+            and pd.notna(previous_non_car)
+            and float(previous_non_car) != 0
+            and latest_non_car_raw is not None
+            and pd.notna(latest_non_car_raw)
+        ):
+            non_car_growth_value = (
+                float(latest_non_car_raw) / float(previous_non_car) - 1
+            ) * 100
     else:
         metric_columns[1].metric(growth_label, "—", border=True)
+    cagr_value: float | None = None
     if len(complete) >= 2 and float(complete.iloc[0]["合计"] or 0) > 0:
-        cagr = (
+        cagr_value = (
             (float(latest["合计"]) / float(complete.iloc[0]["合计"]))
             ** (1 / (len(complete) - 1))
             - 1
         ) * 100
         metric_columns[2].metric(
             f"{len(complete)}年复合增速",
-            f"{cagr:+.1f}%",
+            f"{cagr_value:+.1f}%",
             border=True,
         )
     else:
@@ -1508,34 +1567,140 @@ def render_plan_industry_premium_structure(
         border=True,
     )
 
-    st.markdown(
-        "<div class='s7-uw-year-title'>近五年保费规模与结构</div>"
-        "<div class='s7-uw-year-sub'>车险 / 非车险 / 合计趋势</div>",
-        unsafe_allow_html=True,
+    growth_tone = (
+        "up"
+        if growth_value is not None and growth_value >= 0
+        else "down"
+        if growth_value is not None
+        else "neutral"
+    )
+    insight_bullets = [
+        (
+            f"车险占比 {car_share:.0f}%，非车险占比 {non_car_share:.0f}%"
+            if car_share is not None and non_car_share is not None
+            else "车险 / 非车险结构暂不可用"
+        ),
+        (
+            f"车险同比 {car_growth_value:+.1f}%，"
+            f"非车险同比 {non_car_growth_value:+.1f}%"
+            if car_growth_value is not None and non_car_growth_value is not None
+            else "分险种同比暂不可比"
+        ),
+        (
+            f"{len(complete)} 个完整年度复合增速 {cagr_value:+.1f}%"
+            if cagr_value is not None
+            else "完整年度不足，暂不计算复合增速"
+        ),
+    ]
+    render_insight_card(
+        title="规模与结构",
+        headline=f"{latest_year} 行业签单保费",
+        value=(
+            "—"
+            if latest_total is None
+            else f"{latest_total:,.0f} {unit}"
+        ),
+        delta=(
+            "同比不可比"
+            if growth_value is None
+            else f"{growth_label} {growth_value:+.1f}%"
+        ),
+        delta_tone=growth_tone,
+        bullets=insight_bullets,
+        footnote=(
+            "柱状为车险/非车险保费金额（左轴），折线为同比增速（右轴，%）；"
+            "历史年度采用内置行业数据，重叠年度以上传数据为准。"
+        ),
+    )
+
+    range_titles = {"近5年": "近五年", "近10年": "近十年", "全部": "历年"}
+    years = annual["年度"].astype(str).tolist()
+    year_span = years[0] if len(years) == 1 else f"{years[0]}–{years[-1]}"
+    has_growth = int(pd.to_numeric(annual["合计"], errors="coerce").notna().sum()) >= 2
+    chart_title = (
+        "保费规模与同比增速" if has_growth else "保费规模与结构"
+    )
+    chart_subtitle = (
+        "柱：车险 / 非车险金额　折线：同比增速（右轴，%）"
+        if has_growth
+        else "柱：车险 / 非车险金额"
     )
     legend_items = [
         (COBALT_BLUE, "车险（柱）", "square"),
         (PACIFIC_BLUE, "非车险（柱）", "square"),
-        (PURPLE, "车险（趋势线）", "line"),
-        (PINK, "非车险（趋势线）", "line"),
-        (PRIMARY_BLUE, "合计（趋势线）", "line"),
     ]
-    render_chart_legend(legend_items)
-    try:
-        chart = build_industry_premium_structure_chart(annual, unit_mode=unit)
-        st.altair_chart(
-            chart,
-            width="stretch",
-            key=f"{key_prefix}_industry_premium_structure",
+    if has_growth:
+        legend_items.extend(
+            [
+                (PURPLE, "车险同比", "line"),
+                (PINK, "非车险同比", "line"),
+                (PRIMARY_BLUE, "合计同比", "line"),
+                ("#94A3B8", "0% 基准线", "dash"),
+                ("#94A3B8", "基期（无同比）", "outline"),
+            ]
         )
-    except ValueError as exc:
-        st.warning(str(exc))
-        return
+    with st.container(key=f"{key_prefix}_industry_premium_chart"):
+        st.markdown(
+            f"<div class='s7-uw-year-title'>{range_titles[selected_range]}{chart_title}</div>"
+            f"<div class='s7-uw-year-sub'>{chart_subtitle} · {year_span}</div>",
+            unsafe_allow_html=True,
+        )
+        render_chart_legend(legend_items, align="left")
+        try:
+            chart = build_industry_premium_structure_chart(annual, unit_mode=unit)
+            st.altair_chart(
+                chart,
+                width="content",
+                key=f"{key_prefix}_industry_premium_structure",
+            )
+        except ValueError as exc:
+            st.warning(str(exc))
+            return
+        if has_growth and len(years) >= 2:
+            st.caption(
+                f"{years[0]} 为基期年，不计算同比；同比折线从 {years[1]} 年开始。"
+            )
+
+        historical_years = annual.loc[
+            annual["来源"].eq(HISTORICAL_SOURCE), "年度"
+        ].astype(str).tolist()
+        uploaded_years = annual.loc[
+            annual["来源"].eq(UPLOAD_SOURCE), "年度"
+        ].astype(str).tolist()
+
+        def year_span_text(values: list[str]) -> str:
+            return values[0] if len(values) == 1 else f"{values[0]}–{values[-1]}"
+
+        source_parts = []
+        if historical_years:
+            source_parts.append(f"{year_span_text(historical_years)} 采用固定行业数据")
+        if uploaded_years:
+            source_parts.append(f"{year_span_text(uploaded_years)} 采用上传数据")
+        source_note = "；".join(source_parts)
+        if historical_years and uploaded_years:
+            source_note += "，重叠年份以上传数据为准"
+        st.caption(f"{source_note}。")
 
     incomplete = annual[~annual["完整"].astype(bool)]
     anomaly_count = int(pd.to_numeric(annual["异常数"], errors="coerce").fillna(0).sum())
 
     with st.expander("查看行业年度明细"):
+        summary = annual[["年度", "车险", "非车险", "合计", "来源"]].copy()
+        for column in ("车险", "非车险", "合计"):
+            summary[column] = pd.to_numeric(summary[column], errors="coerce") / divisor
+        summary["车险占比"] = (
+            pd.to_numeric(summary["车险"], errors="coerce")
+            / pd.to_numeric(summary["合计"], errors="coerce")
+        ).map(lambda value: "" if pd.isna(value) else f"{value:.0%}")
+        summary = summary.rename(
+            columns={
+                "车险": f"车险（{unit}）",
+                "非车险": f"非车险（{unit}）",
+                "合计": f"合计（{unit}）",
+            }
+        )
+        st.markdown("**年度汇总**")
+        st.dataframe(summary, width="stretch", hide_index=True)
         if not incomplete.empty:
             company_count = max(len(companies), 1)
             missing_labels = []
@@ -1566,7 +1731,9 @@ def render_plan_industry_premium_structure(
                 "合计": f"合计（{unit}）",
             }
         )
-        st.dataframe(display, width="stretch", hide_index=True)
+        if not display.empty:
+            st.markdown("**公司级明细（上传数据）**")
+            st.dataframe(display, width="stretch", hide_index=True)
 
 
 def render_plan_industry_market_share(
@@ -1579,7 +1746,34 @@ def render_plan_industry_market_share(
     """Render latest-year category market share pies and amount bars."""
     cfg = module_override.chart_config if module_override else {}
     min_coverage = float(cfg.get("min_coverage", 0.8) or 0.8)
-    data = prepare_market_share_data(industry_frame, min_coverage=min_coverage)
+    grouping_options = ["拆分：前三大 / 前4-10", "合并：前十大"]
+    grouping_key = f"{key_prefix}_market_share_top_grouping"
+    if st.session_state.get(grouping_key) not in grouping_options:
+        st.session_state[grouping_key] = grouping_options[0]
+    st.radio(
+        "前十大展示口径",
+        grouping_options,
+        horizontal=True,
+        key=grouping_key,
+        help=(
+            "前三大 = 人保、平安、太保；前4-10 = 其余原前十大公司。"
+            "切换为“合并”后恢复单一前十大分类。"
+        ),
+    )
+    top_grouping = (
+        "merged"
+        if str(st.session_state.get(grouping_key, "")).startswith("合并")
+        else "split"
+    )
+    st.caption(
+        "公司分类来自根目录《财险公司列表.xlsx》；"
+        "前三大按公司名前缀匹配人保、平安、太保，其余原前十大公司归入前4-10。"
+    )
+    data = prepare_market_share_data(
+        industry_frame,
+        min_coverage=min_coverage,
+        top_grouping=top_grouping,
+    )
     if data is None:
         st.warning("当前数据没有可用于市场份额分析的年度记录。")
         return
@@ -1591,9 +1785,59 @@ def render_plan_industry_market_share(
         "百万元": 100.0,
         "十万元": 10.0,
     }[unit]
+
+    def category_share(metric: str, category: str) -> float | None:
+        row = data.categories[data.categories["公司类别"].astype(str).eq(category)]
+        if row.empty:
+            return None
+        value = pd.to_numeric(row["保费占比" if metric == "保费" else "净利润占比"], errors="coerce")
+        return None if value.empty or pd.isna(value.iloc[0]) else float(value.iloc[0]) * 100.0
+
+    top3_share = category_share("保费", TOP3_CATEGORY)
+    top4_share = category_share("保费", TOP4_10_CATEGORY)
+    top10_share = category_share("保费", TOP10_CATEGORY)
+    if top3_share is not None and top4_share is not None:
+        top10_share = top3_share + top4_share
+    profit_top3 = category_share("净利润", TOP3_CATEGORY)
+    profit_top10 = category_share("净利润", TOP10_CATEGORY)
+    premium_total = pd.to_numeric(data.categories["保费"], errors="coerce").sum() / divisor
+    grouping_note = (
+        "前三大 / 前4-10 拆分"
+        if top_grouping == "split"
+        else "前十大合并"
+    )
+    concentration_text = (
+        f"前三大 {top3_share:.0f}% ｜ 前4-10 {top4_share:.0f}%"
+        if top3_share is not None and top4_share is not None
+        else f"前十大 {top10_share:.0f}%"
+        if top10_share is not None
+        else "集中度数据不足"
+    )
+    profit_text = (
+        f"净利润：前三大 {profit_top3:.0f}%，前十大 {profit_top10:.0f}%"
+        if profit_top3 is not None and profit_top10 is not None
+        else "净利润集中度数据不足"
+    )
+    render_insight_card(
+        title="市场份额与集中度",
+        headline=f"{data.year} 年行业签单保费",
+        value=f"{premium_total:,.0f} {unit}" if premium_total > 0 else "—",
+        delta=concentration_text,
+        delta_tone="neutral",
+        bullets=[
+            f"保费集中度：{concentration_text}",
+            profit_text,
+            f"样本覆盖 {data.company_count} 家公司（覆盖率 {data.coverage:.0%}）",
+        ],
+        footnote=(
+            "口径：签单保费、净利润与承保利润；"
+            "承保利润缺失时按“签单保费 ×（1 - 综合成本率）”测算。"
+        ),
+    )
+
     st.markdown(
         f"<div class='s7-uw-year-title'>公司类别市场份额（{data.year} 年）</div>"
-        "<div class='s7-uw-year-sub'>保费 / 净利润 / 承保利润占比</div>",
+        f"<div class='s7-uw-year-sub'>保费 / 净利润 / 承保利润占比 · {grouping_note}</div>",
         unsafe_allow_html=True,
     )
     category_colors = market_share_category_colors(
@@ -1603,7 +1847,8 @@ def render_plan_industry_market_share(
         [
             (category_colors.get(category, "#9AA6B2"), category, "square")
             for category in data.categories["公司类别"].astype(str).tolist()
-        ]
+        ],
+        align="left",
     )
     pie_chart = build_market_share_pies(
         data,
@@ -1619,7 +1864,7 @@ def render_plan_industry_market_share(
 
     st.markdown(
         f"<div class='s7-uw-year-title'>公司类别金额对比（{data.year} 年）</div>"
-        f"<div class='s7-uw-year-sub'>按公司类别汇总（{unit}）</div>",
+        f"<div class='s7-uw-year-sub'>按公司类别汇总（{unit}） · {grouping_note}</div>",
         unsafe_allow_html=True,
     )
     bar_chart = build_market_share_amount_bars(data, unit_mode=unit_mode)
@@ -1654,3 +1899,138 @@ def render_plan_industry_market_share(
                 pd.to_numeric(company_display[column], errors="coerce") / divisor
             )
         st.dataframe(company_display, width="stretch", hide_index=True)
+
+
+
+def render_plan_solvency_disclosure_overview(
+    industry_frame,
+    *,
+    unit_mode,
+    key_prefix,
+    module_override,
+):
+    """行业概览：按合计口径展示偿付能力披露整体情况。"""
+    overview = prepare_industry_solvency_overview(industry_frame)
+    if overview is None:
+        st.warning(
+            "当前数据缺少可合计的实际资本（ACTUAL_CAPITAL）与最低资本"
+            "（MINIMUM_CAPITAL），无法计算行业整体偿付能力充足率。"
+        )
+        return
+
+    unit = unit_mode if unit_mode in {"十亿元", "亿元", "百万元", "十万元"} else "亿元"
+    divisor = {
+        "十亿元": 100_000.0,
+        "亿元": 10_000.0,
+        "百万元": 100.0,
+        "十万元": 10.0,
+    }[unit]
+
+    def amount_text(value) -> str:
+        if value is None or pd.isna(value):
+            return "—"
+        return f"{float(value) / divisor:,.0f} {unit}"
+
+    def ratio_text(value) -> str:
+        if value is None or pd.isna(value):
+            return "—"
+        return f"{float(value):.1f}%"
+
+    def period_delta(current, previous) -> tuple[str, str]:
+        if current is None or previous is None:
+            return "", "neutral"
+        diff = float(current) - float(previous)
+        tone = "up" if diff >= 0 else "down"
+        return f"较 {overview.previous_period} {diff:+.1f} pct", tone
+
+    combined_delta, combined_tone = period_delta(
+        overview.combined_ratio,
+        overview.previous_combined_ratio,
+    )
+    core_delta, core_tone = period_delta(
+        overview.core_ratio,
+        overview.previous_core_ratio,
+    )
+
+    metric_columns = st.columns(4)
+    metric_columns[0].metric(
+        "综合偿付能力充足率",
+        ratio_text(overview.combined_ratio),
+        combined_delta or None,
+        delta_color="normal" if combined_tone == "up" else "inverse",
+        border=True,
+        help="Σ 所有纳入口径公司的实际资本 ÷ Σ 最低资本。",
+    )
+    metric_columns[1].metric(
+        "核心偿付能力充足率",
+        ratio_text(overview.core_ratio),
+        core_delta or None,
+        delta_color="normal" if core_tone == "up" else "inverse",
+        border=True,
+        help="Σ（核心一级资本 + 核心二级资本）÷ Σ 最低资本。",
+    )
+    metric_columns[2].metric(
+        "实际资本合计",
+        amount_text(overview.actual_capital),
+        border=True,
+    )
+    metric_columns[3].metric(
+        "最低资本合计",
+        amount_text(overview.minimum_capital),
+        border=True,
+    )
+
+    render_insight_card(
+        title="偿付能力披露整体情况",
+        headline=f"{overview.period} 行业合计口径",
+        value=(
+            f"综合 {ratio_text(overview.combined_ratio)}"
+            f" / 核心 {ratio_text(overview.core_ratio)}"
+            if overview.combined_ratio is not None
+            or overview.core_ratio is not None
+            else "—"
+        ),
+        delta=f"覆盖 {overview.company_count} 家（{overview.coverage:.0%}）",
+        delta_tone="neutral",
+        bullets=[
+            f"综合 = Σ实际资本 {amount_text(overview.actual_capital)} ÷ Σ最低资本 {amount_text(overview.minimum_capital)}",
+            f"核心 = Σ核心资本 {amount_text(overview.core_capital)} ÷ Σ最低资本 {amount_text(overview.minimum_capital)}",
+            (
+                f"核心资本占实际资本 {overview.core_share:.1f}%"
+                if overview.core_share is not None
+                else "核心资本占实际资本比例暂不可用"
+            ),
+        ],
+        footnote=(
+            "合计口径仅纳入同时具备相应资本与正的最低资本的公司；"
+            "卡片中的比率不是各公司充足率的简单平均。"
+        ),
+    )
+
+    detail = overview.detail
+    with st.expander("查看合计口径公司与公式明细"):
+        if isinstance(detail, pd.DataFrame) and not detail.empty:
+            display = detail.copy()
+            for column in ("实际资本", "最低资本", "核心资本"):
+                if column in display.columns:
+                    display[column] = (
+                        pd.to_numeric(display[column], errors="coerce") / divisor
+                    )
+            display = display.rename(
+                columns={
+                    "实际资本": f"实际资本（{unit}）",
+                    "最低资本": f"最低资本（{unit}）",
+                    "核心资本": f"核心资本（{unit}）",
+                }
+            )
+            for column in ("综合偿付能力充足率", "核心偿付能力充足率"):
+                if column in display.columns:
+                    display[column] = pd.to_numeric(
+                        display[column], errors="coerce"
+                    ).map(lambda value: "" if pd.isna(value) else f"{value:.1f}%")
+            st.dataframe(display, width="stretch", hide_index=True)
+        st.caption(
+            "公式：综合偿付能力充足率 = Σ所有公司实际资本 / Σ所有公司最低资本；"
+            "核心偿付能力充足率 = Σ（核心一级资本 + 核心二级资本）/ Σ所有公司最低资本。"
+            "监管口径下，核心资本对应核心一级与核心二级资本之和。"
+        )

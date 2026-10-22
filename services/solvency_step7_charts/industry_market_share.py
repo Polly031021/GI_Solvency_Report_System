@@ -16,7 +16,6 @@ from ..solvency_company_identity import (
     resolve_peer_group,
 )
 from ..report_style import (
-    BREAKEVEN_COLOR,
     COBALT_BLUE,
     LIGHT_GREEN,
     LIGHT_PINK,
@@ -42,8 +41,14 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPANY_LIST_PATH = ROOT / "财险公司列表.xlsx"
 COMPANY_ALIAS_WORKBOOK = ROOT / "config" / "non_life_solvency_company_urls.xlsx"
 
+TOP10_CATEGORY = "前十大"
+TOP3_CATEGORY = "前三大"
+TOP4_10_CATEGORY = "前4-10"
+TOP3_NONLIFE_PREFIXES = ("人保", "平安", "太保")
 CATEGORY_ORDER = (
-    "前十大",
+    TOP3_CATEGORY,
+    TOP4_10_CATEGORY,
+    TOP10_CATEGORY,
     "大型公司",
     "中型公司",
     "小型公司",
@@ -53,13 +58,15 @@ CATEGORY_ORDER = (
     "其他",
 )
 CATEGORY_COLORS = {
-    "前十大": PRIMARY_BLUE,
-    "大型公司": COBALT_BLUE,
-    "中型公司": PACIFIC_BLUE,
-    "小型公司": "#00C0AE",
+    TOP3_CATEGORY: PRIMARY_BLUE,
+    TOP4_10_CATEGORY: COBALT_BLUE,
+    TOP10_CATEGORY: PRIMARY_BLUE,
+    "大型公司": PACIFIC_BLUE,
+    "中型公司": "#00C0AE",
+    "小型公司": "#63EBB2",
     "外资系": PURPLE,
     "自保公司": PINK,
-    "农业保险": BREAKEVEN_COLOR,
+    "农业保险": "#F1C44D",
     "其他": "#9AA6B2",
 }
 FALLBACK_COLORS = (
@@ -93,6 +100,7 @@ class MarketShareData:
     company_detail: pd.DataFrame
     company_count: int
     coverage: float
+    top_grouping: str = "split"
 
 
 @lru_cache(maxsize=1)
@@ -221,6 +229,7 @@ def _build_year_view(
     combined_map: dict[tuple[str, int], float],
     underwriting_map: dict[tuple[str, int], float],
     data_categories: dict[str, str],
+    top_grouping: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, object]] = []
     for company in companies:
@@ -237,6 +246,12 @@ def _build_year_view(
             if master_category != "其他"
             else data_categories.get(company, "其他")
         )
+        if top_grouping == "split" and category == TOP10_CATEGORY:
+            category = (
+                TOP3_CATEGORY
+                if str(company).strip().startswith(TOP3_NONLIFE_PREFIXES)
+                else TOP4_10_CATEGORY
+            )
         rows.append(
             {
                 "公司": company,
@@ -286,6 +301,7 @@ def prepare_market_share_data(
     frame: pd.DataFrame | None,
     *,
     min_coverage: float = 0.8,
+    top_grouping: str = "split",
 ) -> MarketShareData | None:
     """Prepare the latest sufficiently complete annual market-share view."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -334,6 +350,7 @@ def prepare_market_share_data(
             combined_map=combined_map,
             underwriting_map=underwriting_map,
             data_categories=data_categories,
+            top_grouping=top_grouping,
         )
         if category.empty:
             continue
@@ -365,6 +382,7 @@ def prepare_market_share_data(
         company_detail=detail,
         company_count=company_count,
         coverage=coverage,
+        top_grouping=top_grouping,
     )
 
 
@@ -560,8 +578,8 @@ def build_market_share_amount_bars(
         legend=dict(
             orientation="h",
             y=1.12,
-            x=1,
-            xanchor="right",
+            x=0,
+            xanchor="left",
             title=None,
             font=dict(family=REPORT_FONT, size=10, color=REPORT_TEXT_COLOR),
         ),

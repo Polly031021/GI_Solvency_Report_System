@@ -31,6 +31,7 @@ from services.solvency_step7_chart_plans import (
     CAPABILITY_RADAR,
     UNDERWRITING_EFFICIENCY_SCATTER,
     STRUCTURE_CHANGE_CHART,
+    SOLVENCY_DISCLOSURE_OVERVIEW,
     SINGLE_METRIC_TREND,
     TREND_WITH_COMPANY_BARS,
     chart_plan_for,
@@ -368,6 +369,8 @@ def show_step_7_solvency(
                     "结构变化组合图": STRUCTURE_CHANGE_CHART,  # ★ 新增
                     "业绩模式分列图": PERFORMANCE_PATTERN_GRID,  # ★ 新增
                     "公司业绩轨迹图": PERFORMANCE_PATTERN_GRID,  # ★ 新增（兼容旧写法）
+                    "偿付能力整体情况卡片": SOLVENCY_DISCLOSURE_OVERVIEW,
+                    "偿付能力披露整体情况": SOLVENCY_DISCLOSURE_OVERVIEW,
                 }
                 if module_chart_kind:
                     plan_kind = CHART_KIND_ALIASES.get(module_chart_kind, module_chart_kind)

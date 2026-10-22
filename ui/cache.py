@@ -133,7 +133,8 @@ def read_taxonomy(path: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def read_rules(path: str) -> pd.DataFrame:
+def read_rules(path: str, version_token: int = 0) -> pd.DataFrame:
+    del version_token
     return load_validation_rules(path)
 
 
