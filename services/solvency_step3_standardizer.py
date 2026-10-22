@@ -638,7 +638,7 @@ def _block_header_score(row: Sequence[str]) -> tuple[int, int, int]:
 
 def _locate_block_header_index(rows: Sequence[Sequence[str]]) -> int | None:
     best: tuple[int, int] | None = None
-    for index, row in enumerate(rows[:8]):
+    for index, row in enumerate(rows[:12]):
         score, label_hits, period_hits = _block_header_score(row)
         numeric = sum(_is_block_numeric(cell) for cell in row)
         nonempty = sum(bool(str(cell or "").strip()) for cell in row)
@@ -845,7 +845,7 @@ def _unit_from_block_rows(rows: Sequence[Sequence[str]]) -> str:
     只扫描前 8 行，显式“单位：X”优先；其次才接受表头里的“（万元）”，
     避免把“每股收益（元）”这类行级标签当成整块单位。
     """
-    for row in rows[:8]:
+    for row in rows[:12]:
         for cell in row:
             match = _BLOCK_UNIT_RE.search(str(cell or ""))
             if match:
@@ -864,6 +864,22 @@ def _block_unit(block, rows: Sequence[Sequence[str]]) -> str:
         if declared:
             return declared
     return _unit_from_block_rows(rows)
+
+
+def _fit_header_rows(
+    header_rows: Sequence[Sequence[str]],
+    width: int,
+) -> list[list[str]]:
+    """把继承表头补齐/截断到当前块宽度，兼容续页省略尾列。"""
+    fitted: list[list[str]] = []
+    for row in header_rows:
+        values = [str(cell or "").strip() for cell in row]
+        if len(values) < width:
+            values = [*values, *[""] * (width - len(values))]
+        else:
+            values = values[:width]
+        fitted.append(values)
+    return fitted
 
 
 def _expand_table_blocks(
@@ -916,8 +932,12 @@ def _expand_table_blocks(
                 ]
             else:
                 inherited = last_header_by_table.get(table_id)
-                if inherited and len(inherited[0]) == width:
-                    header_rows = [list(row) for row in inherited]
+                if (
+                    inherited
+                    and width > 0
+                    and abs(len(inherited[0]) - width) <= 2
+                ):
+                    header_rows = _fit_header_rows(inherited, width)
                     block_rows = [*header_rows, *block_rows]
                 else:
                     canonical = _fit_canonical_headers(

@@ -7,7 +7,12 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from services.solvency_normalizer import STANDARD_COLUMNS, load_taxonomy, normalize_tables
+from services.solvency_normalizer import (
+    STANDARD_COLUMNS,
+    load_taxonomy,
+    normalize_tables,
+    parse_numeric,
+)
 from services.solvency_step3_standardizer import (
     _deduplicate_candidates,
     _expand_table_blocks,
@@ -301,3 +306,42 @@ def test_summary_diagnostic_status_is_refined():
     assert summary.loc["C", "诊断状态"] == "期间未识别"
     assert summary.loc["D", "诊断状态"] == "歧义待确认"
     assert set(summary["填报状态"]) == {"未填报"}
+
+
+def test_parse_numeric_strips_footnotes_and_currency():
+    """P2：脚注、圈号、货币符号不影响正常数字解析，负数括号保留。"""
+    assert parse_numeric("1,234.56注1") == 1234.56
+    assert parse_numeric("1,234.56*") == 1234.56
+    assert parse_numeric("1,234.56①") == 1234.56
+    assert parse_numeric("12.3%注1") == 12.3
+    assert parse_numeric("￥1,234.56") == 1234.56
+    assert parse_numeric("１２３４．５６") == 1234.56
+    assert parse_numeric("1 234.56") == 1234.56
+    assert parse_numeric("1,234.56[1]") == 1234.56
+    assert parse_numeric("1,234.56(注1)") == 1234.56
+    assert parse_numeric("(1,234.56)") == -1234.56
+    assert parse_numeric("(1,234.56)注1") == -1234.56
+    assert pd.isna(parse_numeric("不适用"))
+    assert pd.isna(parse_numeric("—"))
+
+
+def test_cross_page_header_inherits_with_missing_trailing_column():
+    """P2：续页省略尾列时，继承表头按当前宽度补齐，值仍能进入标准数据。"""
+    frame = _run(
+        [["placeholder"]],
+        blocks=[
+            {
+                "page": 1,
+                "rows": [
+                    ["行次", "项目", "期末数", "期初数"],
+                    ["1", "核心一级资本", "100", "90"],
+                ],
+            },
+            {
+                "page": 2,
+                "rows": [["2", "核心一级资本", "200"]],
+            },
+        ],
+    )
+    assert len(frame) == 3, frame
+    assert 200.0 in set(frame["数值"].astype(float))
