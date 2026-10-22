@@ -871,8 +871,11 @@ def test_step2_page_renders_editor_and_method_selector():
     assert "reextract_table_SOLVENCY_MAIN" in button_keys, "缺少“重新提取该表”按钮"
     assert "add_col_SOLVENCY_MAIN" in button_keys, "缺少“添加一列”按钮"
     assert "del_col_btn_SOLVENCY_MAIN" in button_keys, "缺少“删除选中列”按钮"
+    assert any(
+        key.startswith("step2_step3_preview_") for key in button_keys
+    ), "缺少 STEP3 视图预览按钮"
     assert at.get("download_button"), "STEP2 应保留下载入口"
-    print("PASS STEP2 页面渲染：提取方式开关 + 中间表编辑器")
+    print("PASS STEP2 页面渲染：提取方式开关 + 中间表编辑器 + STEP3 预览")
 
 
 if __name__ == "__main__":
