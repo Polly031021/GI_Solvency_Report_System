@@ -99,7 +99,7 @@ def prepare_loss_expense_panel(
     years: int = 5,
     group_column: str = "同业分类",
 ) -> LossExpensePanel:
-    bar_columns = ["年度", "类别", "数值", "起点", "终点", "中点", "顺序"]
+    bar_columns = ["年度", "类别", "数值", "标签", "起点", "终点", "中点", "顺序"]
     empty_bars = pd.DataFrame(columns=bar_columns)
     empty_totals = pd.DataFrame(columns=["年度", "综合成本率", "口径"])
     if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -153,6 +153,7 @@ def prepare_loss_expense_panel(
                     "年度": year,
                     "类别": label,
                     "数值": value,
+                    "标签": f"{value:.0f}%",
                     "起点": start,
                     "终点": end,
                     "中点": (start + end) / 2.0,
@@ -253,7 +254,7 @@ def build_loss_expense_panel_chart(
         .encode(
             x=alt.X("年度:N", sort=years),
             y=alt.Y("中点:Q", scale=y_scale),
-            text=alt.Text("数值:Q", format=".0f"),
+            text=alt.Text("标签:N"),
         )
     )
     total_source = alt.Chart(panel.total_frame)
