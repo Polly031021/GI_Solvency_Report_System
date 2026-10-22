@@ -113,3 +113,37 @@ def test_dual_header_audit_qualifiers_are_distinct():
         "上季度末数-审计后",
         "上季度末数-审计前",
     }
+
+
+def test_cross_page_units_are_applied_per_block():
+    """第一页万元、第二页元、第三页无单位，按块换算并继承上一块单位。"""
+    frame = _run(
+        [["placeholder"]],
+        blocks=[
+            {
+                "page": 1,
+                "rows": [
+                    ["项目", "本季度末数"],
+                    ["单位：万元", ""],
+                    ["核心一级资本", "100"],
+                ],
+            },
+            {
+                "page": 2,
+                "rows": [
+                    ["项目", "本季度末数"],
+                    ["单位：元", ""],
+                    ["核心一级资本", "2000000"],
+                ],
+            },
+            {
+                "page": 3,
+                "rows": [["核心一级资本", "3000000"]],
+            },
+        ],
+    )
+    by_page = {
+        str(row["来源页码"]): float(row["数值"])
+        for _, row in frame.iterrows()
+    }
+    assert by_page == {"1": 100.0, "2": 200.0, "3": 300.0}, by_page

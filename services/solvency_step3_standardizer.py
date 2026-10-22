@@ -656,6 +656,41 @@ def _known_metric_labels(taxonomy: pd.DataFrame | None) -> frozenset[str]:
     return frozenset(labels)
 
 
+_BLOCK_UNIT_RE = re.compile(
+    r"(?:金额|货币|计量)?单位[\s:：]*"
+    r"(?:人民币|RMB|rmb)?\s*"
+    r"(亿元|万元|千元|百元|元)"
+)
+_BLOCK_INLINE_UNIT_RE = re.compile(r"[（(]\s*(亿元|万元|千元|百元|元)\s*[）)]")
+
+
+def _unit_from_block_rows(rows: Sequence[Sequence[str]]) -> str:
+    """从单个表块自己的表头/行文本识别金额单位。
+
+    只扫描前 8 行，显式“单位：X”优先；其次才接受表头里的“（万元）”，
+    避免把“每股收益（元）”这类行级标签当成整块单位。
+    """
+    for row in rows[:8]:
+        for cell in row:
+            match = _BLOCK_UNIT_RE.search(str(cell or ""))
+            if match:
+                return match.group(1)
+    for row in rows[:5]:
+        for cell in row:
+            match = _BLOCK_INLINE_UNIT_RE.search(str(cell or ""))
+            if match:
+                return match.group(1)
+    return ""
+
+
+def _block_unit(block, rows: Sequence[Sequence[str]]) -> str:
+    if isinstance(block, dict):
+        declared = str(block.get("unit") or "").strip()
+        if declared:
+            return declared
+    return _unit_from_block_rows(rows)
+
+
 def _expand_table_blocks(
     tables: list[ExtractedTable],
     taxonomy: pd.DataFrame | None = None,
@@ -673,6 +708,7 @@ def _expand_table_blocks(
     expanded: list[ExtractedTable] = []
     known_labels = _known_metric_labels(taxonomy)
     last_header_by_table: dict[str, list[list[str]]] = {}
+    last_unit_by_table: dict[str, str] = {}
     for table in tables:
         table_id = str(getattr(table, "table_id", "") or "")
         blocks = getattr(table, "table_blocks", None)
@@ -685,6 +721,7 @@ def _expand_table_blocks(
                 continue
             local = copy(table)
             block_rows = [list(row) for row in rows]
+            block_unit = _block_unit(block, block_rows)
             width = max((len(row) for row in block_rows), default=0)
             header_index = _locate_block_header_index(block_rows)
             header_rows: list[list[str]] = []
@@ -744,6 +781,17 @@ def _expand_table_blocks(
             local.whole_page_block = (
                 True if had_blocks else bool(getattr(table, "whole_page_block", False))
             )
+            # ★ P0-3：单位按块生效；本块没写单位时先继承同表上一块，
+            #   再回退整表 unit。这样第一页“万元”、第二页“元”不会互相污染。
+            if block_unit:
+                local.unit = block_unit
+                local.block_unit = block_unit
+                last_unit_by_table[table_id] = block_unit
+            elif table_id in last_unit_by_table:
+                local.unit = last_unit_by_table[table_id]
+                local.block_unit = last_unit_by_table[table_id]
+            else:
+                local.block_unit = ""
             expanded.append(local)
     return expanded
 

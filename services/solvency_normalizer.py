@@ -473,6 +473,18 @@ def _source_unit(
     header: str,
     target_unit: str,
 ) -> str:
+    # ★ P0-3：表块级单位优先于整表单位。跨页表可能第一页“万元”、第二页
+    #   “元”，_expand_table_blocks 会把 block_unit 写到每个独立表块上，
+    #   避免整页/整表单位套到另一页。
+    _block_unit = _canonical_unit(getattr(table, "block_unit", "") or "")
+    if _block_unit:
+        if target_unit in _CURRENCY_UNIT_IN_YUAN and _block_unit in _CURRENCY_UNIT_IN_YUAN:
+            return _block_unit
+        if target_unit == "%" and _block_unit == "%":
+            return _block_unit
+        if target_unit not in _CURRENCY_UNIT_IN_YUAN and target_unit != "%":
+            return _block_unit
+
     # ★ 第一步：优先信任 app.py / batch_processor 已经嗅探并写入的 table.unit。
     #   app.py 已经按该单位换算过 grid；如果这里再扫描表头里的"（元）"，
     #   会把已换算的数值再除一次。所以这里必须最先判断。
