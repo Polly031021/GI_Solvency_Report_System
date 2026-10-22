@@ -147,3 +147,43 @@ def test_cross_page_units_are_applied_per_block():
         for _, row in frame.iterrows()
     }
     assert by_page == {"1": 100.0, "2": 200.0, "3": 300.0}, by_page
+
+
+def test_manual_edit_rebuilds_blocks_for_step3():
+    """P0-4：手工编辑后仍保留可定位表头，Step3 按新表头提取。"""
+    from services.batch_extraction import FlexibleTable
+    from ui.step2_extraction import persist_table_rows
+
+    table = FlexibleTable(
+        table_id="ACTUAL_CAPITAL",
+        table_name="S02 实际资本",
+        page=1,
+        rows=[
+            ["项目", "本季度末数", "上季度末数"],
+            ["核心一级资本", "100", "90"],
+        ],
+        unit="万元",
+    )
+    persist_table_rows(
+        table,
+        [
+            ["项目", "本季度数", "本年累计数"],
+            ["核心一级资本", "111", "222"],
+        ],
+    )
+    assert table.table_blocks, "编辑后必须重建 table_blocks"
+    assert table.table_blocks[0]["rows"][0] == [
+        "项目", "本季度数", "本年累计数"
+    ]
+
+    tables = _expand_table_blocks([table], TAXONOMY)
+    frame = normalize_tables(
+        tables,
+        TAXONOMY,
+        {"公司": "测试公司", "报告期": "2025Q4", "报告年度": 2025, "报告季度": "Q4"},
+        "财险",
+        allowed_company_types=("寿险", "健康险", "养老险", "财险"),
+        report_profile_id="NON_LIFE_SOLVENCY",
+    )
+    assert set(frame["期间口径"]) == {"本季度末数", "本年累计数"}
+    assert set(frame["数值"].astype(float)) == {111.0, 222.0}

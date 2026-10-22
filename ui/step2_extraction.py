@@ -873,6 +873,58 @@ def _frame_factory(rows: list[list[str]], unit: str = ""):
     return to_frame
 
 
+_BLOCK_SEPARATOR_RE = re.compile(
+    r"^【.*(?:整页第\d+张表|第\d+页表格分块|表格分块).*】$"
+)
+
+
+def _rebuild_table_blocks(
+    rows: list[list[str]],
+    page: int,
+    unit: str = "",
+) -> list[dict]:
+    """人工编辑后重建可定位表头的数据块，保留单位与分块分隔行信息。
+
+    旧的 table_blocks 对应的是编辑前网格，不能继续使用；但也不能直接
+    清空，否则 STEP3 会退回旧合并表、忽略人工修正后的表头。这里按
+    “【整页第N张表】/【第N页表格分块】”分隔行重建；没有分隔行时整张表
+    作为一个块。分隔行本身不写入数据，避免污染表头识别。
+    """
+    blocks: list[dict] = []
+    current: list[list[str]] = []
+    current_page = int(page or 1)
+
+    def flush() -> None:
+        if not current:
+            return
+        block = {
+            "page": current_page,
+            "rows": [list(row) for row in current],
+        }
+        if unit and unit != "未识别":
+            block["unit"] = unit
+        blocks.append(block)
+
+    for row in rows:
+        cells = [str(cell) for cell in row]
+        first = next((cell.strip() for cell in cells if cell.strip()), "")
+        if _BLOCK_SEPARATOR_RE.match(first):
+            flush()
+            current = []
+            page_match = re.search(r"第(\d+)页", first)
+            if page_match:
+                current_page = int(page_match.group(1))
+            continue
+        current.append(cells)
+    flush()
+    if not blocks:
+        blocks = [{
+            "page": int(page or 1),
+            "rows": [list(row) for row in rows],
+        }]
+    return blocks
+
+
 def persist_table_rows(table, rows: list[list[str]]) -> None:
     """把编辑后的网格写回中间表对象，并刷新表格快照。"""
     # 注意：FlexibleTable 对未知字段一律返回默认值，因此这里只能用 vars() 判断，
@@ -881,9 +933,13 @@ def persist_table_rows(table, rows: list[list[str]]) -> None:
         table.original_rows = [list(row) for row in table.rows]
     table.rows = [list(row) for row in rows]
     table.to_frame = _frame_factory(table.rows, str(getattr(table, "unit", "") or ""))
-    # 人工修改后，原页内表块已不再对应编辑后的网格；Step3 直接使用
-    # 编辑后的合并表，避免旧表头覆盖人工修改。
-    table.table_blocks = []
+    # ★ P0-4：保留可定位表头的数据块；按编辑后的内容重建，既尊重人工修改，
+    #   又不让 STEP3 完全回退到旧的合并表。
+    table.table_blocks = _rebuild_table_blocks(
+        table.rows,
+        int(getattr(table, "page", 1) or 1),
+        str(getattr(table, "unit", "") or ""),
+    )
     table.edited = True
 
 
