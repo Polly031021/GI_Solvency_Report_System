@@ -94,10 +94,13 @@ CAPITAL_COMPONENT_ZERO_TABLE_IDS = frozenset({
     "SOLVENCY_MAIN",
 })
 
-# 已识别指标但数值单元为空、短横线或“未披露”等占位符时，统一按 0 标准化。
-# 该规则覆盖全部数值型指标，而不只限于资本明细；备注会保留原始值，
-# 便于分析师回到来源页核对“披露为零”与“确实未填报”的差异。
-MISSING_NUMERIC_ZERO_MARKER = "原始值空白或占位符，按0处理"
+# 空白/占位符不再统一写成 0：只有明确写出的 0、资本明细空白和资本明细
+# 短横线保留 0 规则；其余空白、“不适用”“未披露”和无法解析文本按缺失处理，
+# 不生成数值记录，但写入“匹配诊断”并在填报汇总中计数，避免假 0 顶掉真值。
+MISSING_NUMERIC_DIAGNOSTIC_STATUS = "值为空"
+_MISSING_NUMERIC_PLACEHOLDERS = frozenset({
+    "", "-", "--", "—", "–", "－", "/", "不适用", "未披露", "无", "N/A", "n/a",
+})
 
 
 PERIOD_TERMS = [
@@ -1174,7 +1177,7 @@ def normalize_tables(
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
                 blank_capital_zero = False
-                placeholder_zero = False
+                capital_dash_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
                     if not value:
@@ -1183,16 +1186,43 @@ def normalize_tables(
                     if pd.isna(numeric_value):
                         _metric_code = str(metric.get("指标编码", "")).strip()
                         _table_id = str(getattr(table, "table_id", "")).strip()
-                        if (
-                            not str(raw_value).strip()
-                            and _metric_code in CAPITAL_COMPONENT_ZERO_CODES
+                        _raw_text = (
+                            "" if pd.isna(raw_value) else str(raw_value).strip()
+                        )
+                        _capital_scope = (
+                            _metric_code in CAPITAL_COMPONENT_ZERO_CODES
                             and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
-                        ):
+                        )
+                        if not _raw_text and _capital_scope:
                             numeric_value = 0.0
                             blank_capital_zero = True
-                        else:
+                        elif (
+                            _raw_text in {"-", "--", "—", "–", "－"}
+                            and _capital_scope
+                        ):
                             numeric_value = 0.0
-                            placeholder_zero = True
+                            capital_dash_zero = True
+                        else:
+                            # ★ P0-1：空白、“不适用”“未披露”、无法解析文本
+                            #   一律按缺失处理，不写 0，也不静默丢行。
+                            if diagnostics is not None and label:
+                                diagnostics.append({
+                                    "目标表": table.table_name,
+                                    "来源页码": "、".join(map(str, table.source_pages or [table.page])),
+                                    "原始项目": label,
+                                    "指标编码": _metric_code,
+                                    "状态": MISSING_NUMERIC_DIAGNOSTIC_STATUS,
+                                    "原因": (
+                                        "原始值"
+                                        f"'{_raw_text or '空白'}'无法解析为数值，"
+                                        "按缺失处理（未写0）"
+                                    ),
+                                    "最佳候选": str(metric.get("指标名称", "")),
+                                    "最佳得分": 1.0,
+                                    "第二候选": "",
+                                    "第二得分": 0,
+                                })
+                            continue
                     value = numeric_value
                     _metric_code_for_unit = str(metric.get("指标编码", "")).strip()
                     if _metric_code_for_unit in _UNIT_CONVERT_EXEMPT_CODES:
@@ -1243,12 +1273,9 @@ def normalize_tables(
                         note = "资本明细空白，按0处理" + (
                             f"；{note}" if note else ""
                         )
-                    elif placeholder_zero:
-                        original = str(raw_value).strip() or "空值"
-                        note = (
-                            f"{MISSING_NUMERIC_ZERO_MARKER}"
-                            f"（原始值：{original}）"
-                            + (f"；{note}" if note else "")
+                    elif capital_dash_zero:
+                        note = "资本明细占位符'-'，按0处理" + (
+                            f"；{note}" if note else ""
                         )
 
                 header_index = max(0, column_index - header_offset)
