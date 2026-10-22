@@ -414,7 +414,7 @@ _PERIOD_HEADER_TOKENS = (
 
 
 def _period_header_cells(row: list[str]) -> list[str]:
-    cells: list[str] = []
+    raw_cells: list[str] = []
     for cell in row:
         text = str(cell or "").strip()
         if not text or not any(token in text for token in _PERIOD_HEADER_TOKENS):
@@ -427,8 +427,157 @@ def _period_header_cells(row: list[str]) -> list[str]:
             # Group heading such as "基本情景下"; the actual period is the
             # sub-header on the next visual line.
             continue
-        cells.append(text)
+        raw_cells.append(text)
+
+    # 有的 pdfplumber 网格把“上季度数”和“下季度预测数”的前半截压进
+    # 同一单元格，例如“上季度数 下季” + “度预测数”。拆成两个期间，
+    # 避免第三个数值因表头不可识别而丢失。
+    cells: list[str] = []
+    index = 0
+    while index < len(raw_cells):
+        text = raw_cells[index]
+        next_text = raw_cells[index + 1] if index + 1 < len(raw_cells) else ""
+        if "上季度" in text and "下季" in text:
+            cells.append("上季度数")
+            cells.append("下季度末预测数")
+            if "预测" in next_text:
+                index += 1
+        elif (
+            ("下季" in text or "下季度" in text)
+            and "预测" not in text
+            and "预测" in next_text
+        ):
+            cells.append("下季度末预测数")
+            index += 1
+        else:
+            cells.append(text)
+        index += 1
     return cells
+
+
+_PERIOD_SUBHEADER_RE = re.compile(r"非认可价值|认可价值|账面价值")
+_PERIOD_CELL_TOKENS = (
+    "下季度末预测数",
+    "下季度预测数",
+    "本季度末数",
+    "上季度末数",
+    "本季度数",
+    "上季度数",
+    "本年累计数",
+    "期末数",
+    "期初数",
+)
+
+
+def _period_cells_in_header(header_row: list[str]) -> list[tuple[int, str]]:
+    cells: list[tuple[int, str]] = []
+    for index, cell in enumerate(header_row):
+        text = str(cell or "").strip()
+        if not text:
+            continue
+        for token in _PERIOD_CELL_TOKENS:
+            if token in text:
+                cells.append((index, token))
+                break
+    return cells
+
+
+def _reconstruct_period_subheader_columns(
+    rows: list[list[str]],
+) -> list[list[str]]:
+    """还原“本季度数/上季度数 × 账面价值/非认可价值/认可价值”双层表头。
+
+    这类表的 pdfplumber 原始表头常把六个子表头压进一个单元格，数据行却是
+    独立的 6 列或 4 列。按期间列位置、数据行数值数量和子表头顺序重建
+    规范表头，可避免 Step3 把认可价值误当成上季度数。
+    """
+    if len(rows) < 3:
+        return rows
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:12])
+            if any(
+                token in "".join(str(cell) for cell in row)
+                for token in ("指标名称", "项目", "指标")
+            )
+        ),
+        None,
+    )
+    if header_index is None:
+        return rows
+    header_row = rows[header_index]
+    header_text = "".join(str(cell or "") for cell in header_row)
+    subheaders = _PERIOD_SUBHEADER_RE.findall(header_text)
+    period_cells = _period_cells_in_header(header_row)
+    if len(subheaders) < 2 or len(period_cells) < 2:
+        return rows
+
+    data_rows = rows[header_index + 1:]
+    capacities: list[int] = []
+    for row in data_rows:
+        label_index = _row_label_index(row)
+        if label_index is None:
+            continue
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if str(cell or "").strip()
+        ]
+        capacities.append(len(values))
+    if not capacities:
+        return rows
+    max_values = max(capacities)
+    period_count = len(period_cells)
+    if max_values < period_count or max_values % period_count:
+        return rows
+    group_width = max_values // period_count
+    if group_width <= 0:
+        return rows
+
+    per_period_subheaders = len(subheaders) // period_count
+    if group_width == per_period_subheaders:
+        chosen_subheaders = subheaders[:group_width]
+    elif group_width == 2 and {"账面价值", "认可价值"}.issubset(set(subheaders)):
+        chosen_subheaders = ["账面价值", "认可价值"]
+    elif group_width == 1:
+        chosen_subheaders = []
+    else:
+        return rows
+
+    canonical_header = ["行次", "项目"]
+    for _, period in period_cells:
+        for subheader in chosen_subheaders:
+            canonical_header.append(
+                f"{period}/{subheader}" if subheader else period
+            )
+
+    reconstructed = [canonical_header]
+    changed = False
+    total_values = group_width * period_count
+    for row in data_rows:
+        label_index = _row_label_index(row)
+        if label_index is None:
+            continue
+        label = str(row[label_index] or "").strip()
+        if not label:
+            continue
+        row_number = ""
+        if label_index > 0:
+            previous = str(row[label_index - 1] or "").strip()
+            if _ROW_NUMBER_RE.fullmatch(previous):
+                row_number = previous
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if str(cell or "").strip()
+        ]
+        if not values and not row_number:
+            continue
+        values = [*values, *[""] * max(0, total_values - len(values))][:total_values]
+        reconstructed.append([row_number, label, *values])
+        changed = True
+    return reconstructed if changed else rows
 
 
 def _reconstruct_logical_columns(
@@ -441,6 +590,9 @@ def _reconstruct_logical_columns(
     the grid from the period headers and the numeric values in each data row.
     It is deliberately skipped unless the header/data counts agree exactly.
     """
+    rebuilt = _reconstruct_period_subheader_columns(rows)
+    if rebuilt is not rows:
+        return rebuilt
     if len(rows) < 3:
         return rows
     header_index = next(
@@ -471,30 +623,28 @@ def _reconstruct_logical_columns(
     matched = 0
     for source in rows[header_index + 1:]:
         row = list(source)
-        nonempty = [
-            str(cell or "").strip()
-            for cell in row
-            if str(cell or "").strip()
-        ]
-        if not nonempty:
+        label_index = _row_label_index(row)
+        if label_index is None:
+            data_rows.append(([], []))
             continue
-        values = [cell for cell in nonempty if _is_numeric_cell(cell)]
-        labels = [
-            cell
-            for cell in nonempty
-            if not _is_numeric_cell(cell)
-            and not _ROW_NUMBER_RE.fullmatch(cell)
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if _is_numeric_cell(cell)
         ]
-        if len(values) == len(period_headers) and labels:
-            data_rows.append(([labels[0]], values))
+        labels = [str(row[label_index] or "").strip()]
+        if len(values) == len(period_headers) and labels[0]:
+            data_rows.append((labels, values))
             matched += 1
         else:
-            data_rows.append((labels[:1], values))
+            data_rows.append((labels, values))
     if matched < 2:
         return rows
     # Only reconstruct if the majority of populated data rows agree with
-    # the period header count; otherwise retain the original grid.
-    if matched < sum(1 for labels, values in data_rows if values):
+    # the period header count; single rows with blank trailing values should
+    # not block the whole table.
+    populated = sum(1 for labels, values in data_rows if values)
+    if matched < max(2, populated * 0.6):
         return rows
 
     header_label = next(
@@ -513,7 +663,7 @@ def _reconstruct_logical_columns(
             continue
         label = labels[0] if labels else ""
         reconstructed.append(
-            [label, *values]
+            [label, *values[: len(period_headers)]]
             + [""] * max(0, len(period_headers) - len(values))
         )
     return reconstructed

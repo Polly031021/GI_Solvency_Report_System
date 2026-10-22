@@ -776,6 +776,18 @@ def _split_period_qualifier(period: str) -> tuple[str, str]:
                 return base, token
     return text, ""
 
+_PERIOD_SUBHEADER_TOKENS = ("非认可价值", "认可价值", "账面价值")
+
+
+def _extract_period_subheader(text: str) -> str:
+    """提取认可资产/负债表的账面价值、非认可价值、认可价值子口径。"""
+    value = str(text or "")
+    for token in _PERIOD_SUBHEADER_TOKENS:
+        if token in value:
+            return token
+    return ""
+
+
 def _period_header(row: list[str], index: int) -> str:
     current = str(row[index]).strip() if index < len(row) else ""
     if _AUTO_COLUMN_RE.match(current):   # ★ 新增
@@ -783,6 +795,7 @@ def _period_header(row: list[str], index: int) -> str:
 
     # ★ P0-2：审计后/审计前是列口径的一部分，必须在剥离括号说明前保留。
     audit_qualifier = _extract_audit_qualifier(current)
+    period_subheader = _extract_period_subheader(current)
 
     # ★ 新增：剥掉表头里的括号补充说明，让
     #   "本季度(期末)数" → "本季度数"
@@ -796,9 +809,12 @@ def _period_header(row: list[str], index: int) -> str:
     ).strip()
 
     def _with_qualifier(period: str) -> str:
-        if audit_qualifier and period and audit_qualifier not in period:
-            return f"{period}-{audit_qualifier}"
-        return period
+        result = period
+        if period_subheader and result and period_subheader not in result:
+            result = f"{result}/{period_subheader}"
+        if audit_qualifier and result and audit_qualifier not in result:
+            result = f"{result}-{audit_qualifier}"
+        return result
 
     if (
         any(
@@ -885,6 +901,13 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
     避免“本季度末数-审计后”和“本季度末数-审计前”在去重时互相覆盖。
     """
     period_base, period_qualifier = _split_period_qualifier(period)
+    period_subheader = ""
+    for subheader in _PERIOD_SUBHEADER_TOKENS:
+        suffix = f"/{subheader}"
+        if period_base.endswith(suffix):
+            period_base = period_base[: -len(suffix)].rstrip()
+            period_subheader = subheader
+            break
     mapping = {
         "期末数": "本季度末数",
         "期初数": "上季度末数",
@@ -937,9 +960,12 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         normalized = "本年累计数"
     else:
         normalized = mapping.get(period_base, period_base)
+    result = normalized
     if period_qualifier:
-        return f"{normalized}-{period_qualifier}"
-    return normalized
+        result = f"{result}-{period_qualifier}"
+    if period_subheader:
+        result = f"{result}/{period_subheader}"
+    return result
 
 
 def _infer_period_label_base(value: object) -> str:
@@ -1465,12 +1491,13 @@ def normalize_tables(
                     # 空白不自动解释为“下季度预测为0”，只对本期/上期资本明细生效。
                     continue
                 
-                if period.endswith("/认可价值"):
+                if period.endswith("/非认可价值") or period.endswith("/非认可"):
+                    period = period.replace("/非认可价值", "").replace("/非认可", "")
+                    period = period + "-非认可"
+                elif period.endswith("/认可价值"):
                     period = period.removesuffix("/认可价值")
                 elif period.endswith("/账面价值"):
                     period = period.removesuffix("/账面价值") + "-账面价值"
-                elif period.endswith("/非认可"):
-                    period = period.removesuffix("/非认可") + "-非认可"
                 records.append({
                     "公司": company_identity.standard_name,
                     "原始公司名称": company_identity.original_name,
