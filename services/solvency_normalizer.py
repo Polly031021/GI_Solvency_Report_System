@@ -1292,6 +1292,7 @@ def normalize_tables(
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
                 blank_capital_zero = False
+                blank_numeric_zero = False
                 capital_dash_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
@@ -1308,9 +1309,14 @@ def normalize_tables(
                             _metric_code in CAPITAL_COMPONENT_ZERO_CODES
                             and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
                         )
-                        if not _raw_text and _capital_scope:
+                        if not _raw_text:
+                            # ★ 用户口径：空白单元格表示 0，不是未填报，
+                            #   也不是未披露。文本型指标仍跳过空白。
                             numeric_value = 0.0
-                            blank_capital_zero = True
+                            if _capital_scope:
+                                blank_capital_zero = True
+                            else:
+                                blank_numeric_zero = True
                         elif (
                             _raw_text in {"-", "--", "—", "–", "－"}
                             and _capital_scope
@@ -1386,6 +1392,10 @@ def normalize_tables(
 
                     if blank_capital_zero:
                         note = "资本明细空白，按0处理" + (
+                            f"；{note}" if note else ""
+                        )
+                    elif blank_numeric_zero:
+                        note = "空白单元格，按0处理" + (
                             f"；{note}" if note else ""
                         )
                     elif capital_dash_zero:

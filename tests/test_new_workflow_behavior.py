@@ -283,17 +283,17 @@ def test_blank_capital_components_are_zero_filled() -> None:
 
 
 def test_numeric_placeholders_are_missing_not_zero() -> None:
-    """P0-1：空白/不适用/未披露/文本按缺失处理，不写假0；明确0仍保留。"""
+    """不适用/未披露/文本/非资本短横线按缺失处理；空白另行按0。"""
     table = FlexibleTable(
         table_id="SOLVENCY_MAIN",
         table_name="偿付能力充足率指标",
         page=1,
         rows=[
             ["项目", "本季度末数", "上季度末数"],
-            ["认可资产", "-", ""],
-            ["认可负债", "不适用", "0.00"],
-            ["实际资本", "未披露", "1,000"],
-            ["综合偿付能力充足率", "文本", "150%"],
+            ["认可资产", "-", "不适用"],
+            ["认可负债", "未披露", "0.00"],
+            ["实际资本", "文本", "1,000"],
+            ["综合偿付能力充足率", "-", "150%"],
         ],
         unit="万元",
     )
@@ -341,7 +341,43 @@ def test_numeric_placeholders_are_missing_not_zero() -> None:
     assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "未填报"
     assert summary.loc["RECOGNIZED_ASSETS", "诊断状态"] == "值为空"
     assert any("按缺失处理（未写0）" in warning for warning in result.warnings)
-    print("PASS 空白/占位符按缺失处理，不写假0")
+    print("PASS 非空占位符按缺失处理，不写假0")
+
+
+def test_blank_numeric_cells_are_zero() -> None:
+    """空白数值单元格按0处理，并计入已填报。"""
+    table = FlexibleTable(
+        table_id="SOLVENCY_MAIN",
+        table_name="偿付能力充足率指标",
+        page=1,
+        rows=[
+            ["项目", "本季度末数", "上季度末数"],
+            ["认可资产", "", ""],
+            ["认可负债", "", "0.00"],
+        ],
+        unit="万元",
+    )
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    result = standardize_to_target(
+        [table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    assets = result.data[result.data["指标编码"] == "RECOGNIZED_ASSETS"]
+    assert len(assets) == 2
+    assert set(assets["期间口径"]) == {"本季度末数", "上季度末数"}
+    assert assets["数值"].eq(0).all()
+    assert assets["备注"].astype(str).str.contains("空白单元格，按0处理").all()
+    summary = result.target_summary.set_index("指标编码")
+    assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "已填报"
+    assert int(summary.loc["RECOGNIZED_ASSETS", "缺失值单元格数"]) == 0
+    print("PASS 空白数值单元格按0处理")
 
 
 def test_supplement_rows_keep_company_and_report_period() -> None:
@@ -557,6 +593,7 @@ if __name__ == "__main__":
     test_profile_token_and_whole_page_keys()
     test_blank_capital_components_are_zero_filled()
     test_numeric_placeholders_are_missing_not_zero()
+    test_blank_numeric_cells_are_zero()
     test_supplement_rows_keep_company_and_report_period()
     test_source_unit_is_converted_to_standard_unit()
     test_semantic_period_aliases_and_three_year_average()
