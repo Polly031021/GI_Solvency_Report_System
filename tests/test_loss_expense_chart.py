@@ -79,6 +79,8 @@ def test_loss_expense_grouping_and_chart() -> None:
     )
     spec_text = json.dumps(chart.to_dict(), ensure_ascii=False)
     assert "91.0%*" in spec_text
+    assert "67%" in spec_text
+    assert "24%" in spec_text
     assert "100" in spec_text
 
 
