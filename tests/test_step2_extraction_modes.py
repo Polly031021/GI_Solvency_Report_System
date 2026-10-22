@@ -825,6 +825,15 @@ def test_step2_page_renders_editor_and_method_selector():
             ["认可资产", "1,234,567.89", "1,100,000.00"],
         ]
     )
+    table.table_blocks = [
+        {
+            "page": 1,
+            "rows": [
+                ["指标名称", "本季度末数", "上季度末数"],
+                ["认可资产", "1,234,567.89", "1,100,000.00"],
+            ],
+        }
+    ]
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=300)
     at.session_state["logged_in"] = True
     at.session_state["user_role"] = "项目组成员"
@@ -874,6 +883,10 @@ def test_step2_page_renders_editor_and_method_selector():
     assert any(
         key.startswith("step2_step3_preview_") for key in button_keys
     ), "缺少 STEP3 视图预览按钮"
+    assert any(
+        "按页内表块查看" in str(getattr(item, "label", ""))
+        for item in at.expander
+    ), "缺少页内表块视图"
     assert at.get("download_button"), "STEP2 应保留下载入口"
     print("PASS STEP2 页面渲染：提取方式开关 + 中间表编辑器 + STEP3 预览")
 

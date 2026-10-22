@@ -267,6 +267,7 @@ def build_tables_from_page_results(
         # ============================================================
         _all_rows: list[list] = []
         table_blocks: list[dict] = []
+        _last_page = None
         for _page, _payload, *_ in page_dfs:
             if _payload is None:
                 continue
@@ -305,7 +306,11 @@ def build_tables_from_page_results(
             # 无论是否开启“整页全表”，都为每个页内帧保留独立表块；
             # STEP3 只消费 table_blocks，不再依赖合并表的全局表头。
             table_blocks.extend(
-                {"page": int(_page), "rows": rows}
+                {
+                    "page": int(_page),
+                    "rows": rows,
+                    "unit": detect_table_unit(rows) or "",
+                }
                 for rows in _page_frames
             )
             if not _page_frames:
@@ -316,6 +321,14 @@ def build_tables_from_page_results(
                 (len(row) for rows in _page_frames for row in rows),
                 default=0,
             )
+            # ★ P2：跨页时插入页分隔行，Step2 合并表能看清每页边界；
+            #   STEP3 仍优先使用 table_blocks，不受该展示行影响。
+            if _all_rows and _last_page is not None and _page != _last_page:
+                _all_rows.append(
+                    [f"【第{_page}页表格分块】"]
+                    + [""] * max(0, _page_width - 1)
+                )
+            _last_page = _page
             for _frame_index, _rows in enumerate(_page_frames):
                 if _frame_index:
                     _all_rows.append(
@@ -1002,6 +1015,62 @@ def _record_edit_event(table, action: str, result: str) -> None:
     )
 
 
+def _render_table_blocks_view(table) -> None:
+    """按页内表块查看，避免跨页合并表把不同页表头混在一起。"""
+    blocks = list(getattr(table, "table_blocks", []) or [])
+    if not blocks:
+        return
+    headers = []
+    for block in blocks:
+        rows = _normalized_rows(block.get("rows", []) if isinstance(block, dict) else block)
+        headers.append(tuple(rows[0]) if rows else ())
+    if len(set(headers)) > 1:
+        st.info(
+            "检测到各页表头不完全一致：下方按页内表块分别展示，"
+            "STEP3 也会按表块独立识别期间和单位。",
+            icon=":material/info:",
+        )
+    with st.expander("按页内表块查看（表头独立）", expanded=False):
+        st.caption(
+            "每个表块保留自己的表头和数据区，跨页续块没有表头时会继承上一块。"
+        )
+        for block_index, block in enumerate(blocks, start=1):
+            rows = _normalized_rows(
+                block.get("rows", []) if isinstance(block, dict) else block
+            )
+            if not rows:
+                continue
+            page = block.get("page", "") if isinstance(block, dict) else ""
+            width = max((len(row) for row in rows), default=0)
+            header_text = "".join(rows[0])
+            has_header = any(
+                token in header_text
+                for token in (
+                    "项目", "指标名称", "行次", "序号",
+                    "本季度", "上季度", "期末", "期初", "本年累计",
+                )
+            )
+            if has_header:
+                frame = pd.DataFrame(
+                    [row for row in rows[1:]],
+                    columns=dedupe_column_names(rows[0]),
+                )
+            else:
+                frame = pd.DataFrame(
+                    rows,
+                    columns=[f"列{index + 1}" for index in range(width)],
+                )
+            unit = ""
+            if isinstance(block, dict):
+                unit = str(block.get("unit") or "").strip()
+            unit = unit or str(getattr(table, "unit", "") or "")
+            caption = f"第 {page} 页 · 表块 {block_index} · {max(len(rows) - 1, 0)} 条数据行"
+            if unit and unit != "未识别":
+                caption += f" · 单位：{unit}"
+            st.caption(caption)
+            st.dataframe(frame, width="stretch", hide_index=True)
+
+
 def _render_table_editor(tables: list, selected_index: int) -> None:
     """中间表实时编辑：单元格、表头、行列都可改，改动立即写回会话状态。"""
     table = tables[selected_index]
@@ -1322,6 +1391,7 @@ def _render_extraction_results(active_profile: ReportProfile | None = None) -> N
             st.caption(f"自动校验依据：{selected_table.evidence}")
 
         _render_table_editor(tables, selected_table_index)
+        _render_table_blocks_view(selected_table)
         if active_profile is not None:
             _render_step3_preview(active_profile)
 
