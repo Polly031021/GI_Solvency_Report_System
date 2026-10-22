@@ -282,8 +282,8 @@ def test_blank_capital_components_are_zero_filled() -> None:
     print("PASS 资本明细空白按0生成记录")
 
 
-def test_all_recognized_numeric_placeholders_are_zero_filled() -> None:
-    """已识别指标的空值、短横线和双短横线都应标准化为 0。"""
+def test_numeric_placeholders_are_missing_not_zero() -> None:
+    """P0-1：空白/不适用/未披露/文本按缺失处理，不写假0；明确0仍保留。"""
     table = FlexibleTable(
         table_id="SOLVENCY_MAIN",
         table_name="偿付能力充足率指标",
@@ -291,8 +291,9 @@ def test_all_recognized_numeric_placeholders_are_zero_filled() -> None:
         rows=[
             ["项目", "本季度末数", "上季度末数"],
             ["认可资产", "-", ""],
-            ["认可负债", "--", "1,000"],
-            ["实际资本", "", "2,000"],
+            ["认可负债", "不适用", "0.00"],
+            ["实际资本", "未披露", "1,000"],
+            ["综合偿付能力充足率", "文本", "150%"],
         ],
         unit="万元",
     )
@@ -308,18 +309,38 @@ def test_all_recognized_numeric_placeholders_are_zero_filled() -> None:
         allowed_company_types=("财险",),
         include_derived=False,
     )
-    current = result.data[result.data["期间口径"] == "本季度末数"]
-    assert set(current["指标编码"]) >= {
+    codes = set(result.data["指标编码"])
+    assert "RECOGNIZED_ASSETS" not in codes
+    assert codes == {
+        "RECOGNIZED_LIABILITIES",
+        "ACTUAL_CAPITAL",
+        "COMBINED_SOLVENCY_RATIO",
+    }
+    assert set(result.data["期间口径"]) == {"上季度末数"}
+    assert not result.data["数值"].isna().any()
+    assert float(
+        result.data[result.data["指标编码"] == "RECOGNIZED_LIABILITIES"]["数值"].iloc[0]
+    ) == 0.0
+    assert float(
+        result.data[result.data["指标编码"] == "ACTUAL_CAPITAL"]["数值"].iloc[0]
+    ) == 1000.0
+
+    missing = result.diagnostics[result.diagnostics["状态"] == "值为空"]
+    assert len(missing) == 5, missing[["指标编码", "原始项目", "原因"]]
+    assert set(missing["指标编码"]) == {
         "RECOGNIZED_ASSETS",
         "RECOGNIZED_LIABILITIES",
         "ACTUAL_CAPITAL",
+        "COMBINED_SOLVENCY_RATIO",
     }
-    assert current["数值"].eq(0).all()
-    assert current["备注"].astype(str).str.contains(
-        "原始值空白或占位符，按0处理",
-        regex=False,
-    ).all()
-    print("PASS 所有已识别数值指标的空白/占位符按0标准化")
+
+    summary = result.target_summary.set_index("指标编码")
+    assert "缺失值单元格数" in summary.columns
+    assert int(summary.loc["RECOGNIZED_ASSETS", "缺失值单元格数"]) == 2
+    assert int(summary.loc["RECOGNIZED_LIABILITIES", "缺失值单元格数"]) == 1
+    assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "未填报"
+    assert any("按缺失处理（未写0）" in warning for warning in result.warnings)
+    print("PASS 空白/占位符按缺失处理，不写假0")
 
 
 def test_supplement_rows_keep_company_and_report_period() -> None:
@@ -534,7 +555,7 @@ if __name__ == "__main__":
     test_combined_table_keeps_page_blocks_for_step3()
     test_profile_token_and_whole_page_keys()
     test_blank_capital_components_are_zero_filled()
-    test_all_recognized_numeric_placeholders_are_zero_filled()
+    test_numeric_placeholders_are_missing_not_zero()
     test_supplement_rows_keep_company_and_report_period()
     test_source_unit_is_converted_to_standard_unit()
     test_semantic_period_aliases_and_three_year_average()

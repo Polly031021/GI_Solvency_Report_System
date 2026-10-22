@@ -1420,17 +1420,16 @@ def standardize_to_target(
             warnings.append(
                 f"已将 {_blank_zero_count} 条资本明细空白值按0处理，请核对源表是否为空白。"
             )
-        _placeholder_zero_count = int(
-            data["备注"]
-            .astype(str)
-            .str.contains("原始值空白或占位符，按0处理", regex=False)
-            .sum()
+    _missing_diag_count = 0
+    if not diagnostic_frame.empty and "状态" in diagnostic_frame.columns:
+        _missing_diag_count = int(
+            (diagnostic_frame["状态"].astype(str) == "值为空").sum()
         )
-        if _placeholder_zero_count:
-            warnings.append(
-                f"已将 {_placeholder_zero_count} 条已识别指标的空白/占位符数值按0标准化，"
-                "原始值已保留在备注中。"
-            )
+    if _missing_diag_count:
+        warnings.append(
+            f"有 {_missing_diag_count} 个已识别数值单元格为空、占位符或文本，"
+            "已按缺失处理（未写0），详见“匹配诊断”。"
+        )
 
     # ---------- 统一模块/单位/数据类型，以 target_catalog 为准 ----------
     if not data.empty and not target_catalog.empty:
@@ -1650,6 +1649,25 @@ def standardize_to_target(
     # ===== 剔除结束 =====
     
     # ===== S05 表期间口径修正结束 =====
+
+    # ★ P0-1：把“值为空”的诊断计数带到填报汇总，避免缺失只在明细里可见。
+    if (
+        not summary.empty
+        and not diagnostic_frame.empty
+        and {"状态", "指标编码"}.issubset(diagnostic_frame.columns)
+    ):
+        _missing_rows = diagnostic_frame[
+            diagnostic_frame["状态"].astype(str) == "值为空"
+        ]
+        _missing_counts = (
+            _missing_rows.groupby("指标编码").size()
+            if not _missing_rows.empty
+            else {}
+        )
+        summary["缺失值单元格数"] = (
+            summary["指标编码"].astype(str).str.strip()
+            .map(_missing_counts).fillna(0).astype(int)
+        )
 
     return Step3StandardizationResult(
         data=data,
