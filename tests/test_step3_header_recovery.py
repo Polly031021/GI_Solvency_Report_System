@@ -19,6 +19,7 @@ from services.solvency_step3_standardizer import (
     _target_summary,
     step3_metric_catalog,
 )
+from services.solvency_table_extractor import _reconstruct_logical_columns
 
 TAXONOMY = load_taxonomy("config/solvency_taxonomy.xlsx")
 
@@ -345,3 +346,63 @@ def test_cross_page_header_inherits_with_missing_trailing_column():
     )
     assert len(frame) == 3, frame
     assert 200.0 in set(frame["数值"].astype(float))
+
+
+def test_precision_only_difference_is_not_a_conflict():
+    """同一指标仅小数位精度不同时按同值处理，保留更高精度的一条。"""
+    data = pd.DataFrame([
+        {
+            "公司统一编码": "C001", "报告期": "2025Q4",
+            "指标编码": "CORE_T1_CAPITAL", "期间口径": "本季度末数",
+            "数值": 91778.79, "备注": "", "来源工作表": "S02",
+            "来源页码": "10", "指标名称": "核心一级资本",
+            "行次": "1", "单位": "万元",
+        },
+        {
+            "公司统一编码": "C001", "报告期": "2025Q4",
+            "指标编码": "CORE_T1_CAPITAL", "期间口径": "本季度末数",
+            "数值": 91778.792102, "备注": "", "来源工作表": "S02",
+            "来源页码": "18", "指标名称": "核心一级资本",
+            "行次": "1", "单位": "万元",
+        },
+    ])
+    diagnostics: list[dict] = []
+    kept, removed, conflicts = _deduplicate_candidates(data, diagnostics)
+    assert len(kept) == 1
+    assert removed == 1
+    assert conflicts == 0
+    assert float(kept.iloc[0]["数值"]) == 91778.792102
+    assert diagnostics == []
+
+
+def test_recognition_subheaders_become_distinct_periods():
+    """认可价值/账面价值子表头不能被当成同一个本季度数。"""
+    frame = _run(
+        [
+            ["项目", "本季度数/账面价值", "本季度数/非认可价值", "本季度数/认可价值"],
+            ["核心一级资本", "100", "10", "90"],
+        ]
+    )
+    periods = set(frame["期间口径"])
+    assert "本季度末数" in periods
+    assert "本季度末数-账面价值" in periods
+    assert "本季度末数-非认可" in periods
+
+
+def test_period_subheader_table_is_reconstructed():
+    """双层表头（期间 × 账面/非认可/认可）重建为规范 8 列。"""
+    rows = [
+        [
+            "行次账面价值非认可价值认可价值账面价值非认可价值认可价值",
+            "项目", "本季度数", "", "", "上季度数", "", "",
+        ],
+        ["1", "现金及流动性管理工具", "100", "-", "100", "90", "-", "90"],
+        ["1.1", "库存现金", "-", "-", "-", "-", "-", "-"],
+    ]
+    rebuilt = _reconstruct_logical_columns(rows)
+    assert rebuilt[0] == [
+        "行次", "项目",
+        "本季度数/账面价值", "本季度数/非认可价值", "本季度数/认可价值",
+        "上季度数/账面价值", "上季度数/非认可价值", "上季度数/认可价值",
+    ]
+    assert rebuilt[1][:3] == ["1", "现金及流动性管理工具", "100"]

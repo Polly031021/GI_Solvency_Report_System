@@ -98,6 +98,48 @@ def _dedup_period(period: object) -> str:
     return f"{mapped}-{qualifier}" if qualifier else mapped
 
 
+def _value_decimal_places(value: object) -> int:
+    text = str(value if value is not None else "").strip()
+    text = text.replace(",", "").replace("，", "").replace("%", "").replace("％", "")
+    if "." not in text:
+        return 0
+    return len(text.rsplit(".", 1)[1].strip())
+
+
+def _numeric_values_equivalent(left: object, right: object) -> bool:
+    """判断两个数值是否只是显示精度不同。
+
+    先按两者中较少的有效小数位四舍五入，再要求相对差不超过 0.5%。
+    这样 91778.79 与 91778.7921、1.23 与 1.234 视为同一值；
+    1.2 与 1.23（相对差 2.4%）仍判为不同。
+    """
+    left_num = pd.to_numeric(left, errors="coerce")
+    right_num = pd.to_numeric(right, errors="coerce")
+    if pd.isna(left_num) or pd.isna(right_num):
+        return str(left or "").strip() == str(right or "").strip()
+    left_value = float(left_num)
+    right_value = float(right_num)
+    if left_value == right_value:
+        return True
+    decimals = min(
+        _value_decimal_places(left),
+        _value_decimal_places(right),
+        6,
+    )
+    if round(left_value, decimals) != round(right_value, decimals):
+        return False
+    scale = max(abs(left_value), abs(right_value), 1e-12)
+    return abs(left_value - right_value) / scale <= 0.005
+
+
+def _has_material_value_conflict(values: Sequence[object]) -> bool:
+    representatives: list[object] = []
+    for value in values:
+        if not any(_numeric_values_equivalent(value, item) for item in representatives):
+            representatives.append(value)
+    return len(representatives) > 1
+
+
 def _dedup_candidate_score(row: pd.Series) -> float:
     """给同一指标/期间下的候选记录打分，分数高者保留。
 
@@ -123,6 +165,8 @@ def _dedup_candidate_score(row: pd.Series) -> float:
         score += 1.0
     if str(row.get("来源工作表", "") or "").strip():
         score += 1.0
+    # 同值不同精度时优先保留小数位更多的一条。
+    score += min(_value_decimal_places(row.get("数值")), 6) * 0.1
     return score
 
 
@@ -175,15 +219,24 @@ def _deduplicate_candidates(
         kept_indexes.append(best_index)
         removed += len(group) - 1
 
-        value_keys = {
-            _candidate_value_key(group.loc[index].get("数值"))
-            for index in group.index
-        }
-        if len(value_keys) <= 1:
+        group_values = [
+            group.loc[index].get("数值") for index in group.index
+        ]
+        if not _has_material_value_conflict(group_values):
             continue
         conflicts += 1
         best_row = group.loc[best_index]
-        runner_index = scored[1][1]
+        runner_index = next(
+            (
+                index
+                for _, index in scored[1:]
+                if not _numeric_values_equivalent(
+                    best_row.get("数值"),
+                    group.loc[index].get("数值"),
+                )
+            ),
+            scored[1][1],
+        )
         runner_row = group.loc[runner_index]
         best_value = str(best_row.get("数值", ""))
         runner_value = str(runner_row.get("数值", ""))
@@ -1863,23 +1916,25 @@ def standardize_to_target(
     # ===== S05 表期间口径修正结束 =====
 
     # ★ P0-1：把“值为空”的诊断计数带到填报汇总，避免缺失只在明细里可见。
-    if (
-        not summary.empty
-        and not diagnostic_frame.empty
-        and {"状态", "指标编码"}.issubset(diagnostic_frame.columns)
-    ):
-        _missing_rows = diagnostic_frame[
-            diagnostic_frame["状态"].astype(str) == "值为空"
-        ]
-        _missing_counts = (
-            _missing_rows.groupby("指标编码").size()
-            if not _missing_rows.empty
-            else {}
-        )
-        summary["缺失值单元格数"] = (
-            summary["指标编码"].astype(str).str.strip()
-            .map(_missing_counts).fillna(0).astype(int)
-        )
+    # 即使没有缺失也保留该列，保证汇总表结构稳定。
+    if not summary.empty:
+        summary["缺失值单元格数"] = 0
+        if (
+            not diagnostic_frame.empty
+            and {"状态", "指标编码"}.issubset(diagnostic_frame.columns)
+        ):
+            _missing_rows = diagnostic_frame[
+                diagnostic_frame["状态"].astype(str) == "值为空"
+            ]
+            _missing_counts = (
+                _missing_rows.groupby("指标编码").size()
+                if not _missing_rows.empty
+                else {}
+            )
+            summary["缺失值单元格数"] = (
+                summary["指标编码"].astype(str).str.strip()
+                .map(_missing_counts).fillna(0).astype(int)
+            )
 
     return Step3StandardizationResult(
         data=data,
