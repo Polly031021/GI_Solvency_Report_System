@@ -5,8 +5,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from services.solvency_normalizer import load_taxonomy, normalize_tables
-from services.solvency_step3_standardizer import _expand_table_blocks
+import pandas as pd
+
+from services.solvency_normalizer import STANDARD_COLUMNS, load_taxonomy, normalize_tables
+from services.solvency_step3_standardizer import (
+    _deduplicate_candidates,
+    _expand_table_blocks,
+    _target_summary,
+    step3_metric_catalog,
+)
 
 TAXONOMY = load_taxonomy("config/solvency_taxonomy.xlsx")
 
@@ -187,3 +194,110 @@ def test_manual_edit_rebuilds_blocks_for_step3():
     )
     assert set(frame["期间口径"]) == {"本季度末数", "本年累计数"}
     assert set(frame["数值"].astype(float)) == {111.0, 222.0}
+
+
+def test_candidate_scoring_keeps_best_and_reports_conflict():
+    """P1：去重按候选得分保留正常披露值，并记录口径冲突。"""
+    data = pd.DataFrame([
+        {
+            "公司统一编码": "C001",
+            "报告期": "2025Q4",
+            "指标编码": "CORE_T1_CAPITAL",
+            "期间口径": "本季度末数",
+            "数值": 999.0,
+            "备注": "补漏匹配：原始标签'核心一级资本'",
+            "来源工作表": "S02 实际资本",
+            "来源页码": "10",
+            "指标名称": "核心一级资本",
+            "行次": "",
+            "单位": "万元",
+        },
+        {
+            "公司统一编码": "C001",
+            "报告期": "2025Q4",
+            "指标编码": "CORE_T1_CAPITAL",
+            "期间口径": "本季度末数",
+            "数值": 100.0,
+            "备注": "",
+            "来源工作表": "S02 实际资本",
+            "来源页码": "10",
+            "指标名称": "核心一级资本",
+            "行次": "1",
+            "单位": "万元",
+        },
+        {
+            "公司统一编码": "C001",
+            "报告期": "2025Q4",
+            "指标编码": "CORE_T1_CAPITAL",
+            "期间口径": "本季度末数",
+            "数值": 100.0,
+            "备注": "补漏匹配",
+            "来源工作表": "S05 最低资本",
+            "来源页码": "11",
+            "指标名称": "核心一级资本",
+            "行次": "",
+            "单位": "万元",
+        },
+        {
+            "公司统一编码": "C001",
+            "报告期": "2025Q4",
+            "指标编码": "ACTUAL_CAPITAL",
+            "期间口径": "本季度末数",
+            "数值": 50.0,
+            "备注": "补漏匹配",
+            "来源工作表": "S02 实际资本",
+            "来源页码": "10",
+            "指标名称": "实际资本",
+            "行次": "",
+            "单位": "万元",
+        },
+        {
+            "公司统一编码": "C001",
+            "报告期": "2025Q4",
+            "指标编码": "ACTUAL_CAPITAL",
+            "期间口径": "本季度末数",
+            "数值": 50.0,
+            "备注": "",
+            "来源工作表": "S02 实际资本",
+            "来源页码": "10",
+            "指标名称": "实际资本",
+            "行次": "2",
+            "单位": "万元",
+        },
+    ])
+    diagnostics: list[dict] = []
+    kept, removed, conflicts = _deduplicate_candidates(data, diagnostics)
+    assert len(kept) == 2
+    assert removed == 3
+    assert conflicts == 1
+    core = kept[kept["指标编码"] == "CORE_T1_CAPITAL"].iloc[0]
+    assert float(core["数值"]) == 100.0
+    assert str(core["备注"]) == ""
+    assert diagnostics[0]["状态"] == "口径冲突"
+    assert "999" in diagnostics[0]["原因"]
+
+
+def test_summary_diagnostic_status_is_refined():
+    """P1：未填报目标按诊断细分为值为空/未匹配/期间未识别/歧义待确认。"""
+    catalog = pd.DataFrame([
+        {"指标编码": "A", "指标名称": "A", "一级模块": "M", "二级模块": "", "指标属性": "披露"},
+        {"指标编码": "B", "指标名称": "B", "一级模块": "M", "二级模块": "", "指标属性": "披露"},
+        {"指标编码": "C", "指标名称": "C", "一级模块": "M", "二级模块": "", "指标属性": "披露"},
+        {"指标编码": "D", "指标名称": "D", "一级模块": "M", "二级模块": "", "指标属性": "披露"},
+    ])
+    diagnostics = pd.DataFrame([
+        {"指标编码": "A", "状态": "值为空"},
+        {"指标编码": "B", "状态": "未匹配"},
+        {"指标编码": "C", "状态": "期间未识别"},
+        {"指标编码": "D", "状态": "歧义待确认"},
+    ])
+    summary = _target_summary(
+        catalog,
+        pd.DataFrame(columns=STANDARD_COLUMNS),
+        diagnostics,
+    ).set_index("指标编码")
+    assert summary.loc["A", "诊断状态"] == "值为空"
+    assert summary.loc["B", "诊断状态"] == "未匹配"
+    assert summary.loc["C", "诊断状态"] == "期间未识别"
+    assert summary.loc["D", "诊断状态"] == "歧义待确认"
+    assert set(summary["填报状态"]) == {"未填报"}

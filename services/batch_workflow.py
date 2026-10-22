@@ -484,7 +484,11 @@ def standardize_document_tables(
             report_period=report_period,
             company_type=company_type,
         )
-        summary = _target_summary(result.target_catalog, data)
+        summary = _target_summary(
+            result.target_catalog,
+            data,
+            result.diagnostics,
+        )
         result = dataclasses.replace(result, data=data, target_summary=summary)
         return {
             "状态": "成功" if not data.empty else "失败",

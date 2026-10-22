@@ -380,6 +380,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     target_summary=_target_summary(
                         result.target_catalog,
                         st.session_state.standard_data,
+                        result.diagnostics,
                     ),
                 )
                 st.session_state.standard_workbook_bytes = result_workbook_bytes(result)
@@ -409,18 +410,42 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
         summary = st.session_state.standard_target_summary
         filled_targets = int((summary["填报状态"] == "已填报").sum())
         missing_targets = int((summary["填报状态"] == "未填报").sum())
+        has_diagnostic_status = "诊断状态" in summary.columns
+        conflict_targets = (
+            int((summary["诊断状态"] == "口径冲突").sum())
+            if has_diagnostic_status
+            else 0
+        )
         with st.container(horizontal=True):
             st.metric("目标指标", len(summary), border=True)
             st.metric("已填报指标", filled_targets, border=True)
             st.metric("未填报指标", missing_targets, border=True)
+            if has_diagnostic_status:
+                st.metric("口径冲突指标", conflict_targets, border=True)
             st.metric("窄表记录", len(st.session_state.standard_data), border=True)
         st.caption(f"本次使用：{st.session_state.standard_template_label}")
+        if has_diagnostic_status:
+            _status_counts = (
+                summary.loc[summary["诊断状态"].astype(str).ne(""), "诊断状态"]
+                .value_counts()
+            )
+            if not _status_counts.empty:
+                st.caption(
+                    "诊断状态分布："
+                    + "；".join(
+                        f"{status} {count}"
+                        for status, count in _status_counts.items()
+                    )
+                )
         for warning in st.session_state.standardization_warnings:
             st.warning(warning)
-        if missing_targets:
-            with st.expander("查看未填报目标指标", expanded=True):
+        if missing_targets or conflict_targets:
+            _attention_mask = summary["填报状态"].eq("未填报")
+            if has_diagnostic_status:
+                _attention_mask = _attention_mask | summary["诊断状态"].eq("口径冲突")
+            with st.expander("查看未填报/口径冲突目标指标", expanded=True):
                 st.dataframe(
-                    summary[summary["填报状态"] == "未填报"],
+                    summary[_attention_mask],
                     width="stretch",
                     hide_index=True,
                 )
