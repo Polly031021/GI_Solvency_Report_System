@@ -714,10 +714,38 @@ def resolve_metric_match(
 
 _AUTO_COLUMN_RE = re.compile(r"^列\d+$")
 
+
+def _extract_audit_qualifier(text: str) -> str:
+    """提取“审计后/审计前/未经审计”等列限定词，避免双行表头被去重吃掉。"""
+    value = str(text or "")
+    for token in ("审计后", "审计前", "未经审计"):
+        if token in value:
+            return token
+    return ""
+
+
+def _split_period_qualifier(period: str) -> tuple[str, str]:
+    """把期间拆成“基础期间 + 限定词”，例如“期末数-审计后”。"""
+    text = str(period or "").strip()
+    for token in ("审计后", "审计前", "未经审计"):
+        if text.endswith(token):
+            base = text[: -len(token)].rstrip(" -/—_：:")
+            if base:
+                return base, token
+        match = re.search(rf"[（(]\s*{token}\s*[）)]\s*$", text)
+        if match:
+            base = text[: match.start()].rstrip(" -/—_：:")
+            if base:
+                return base, token
+    return text, ""
+
 def _period_header(row: list[str], index: int) -> str:
     current = str(row[index]).strip() if index < len(row) else ""
     if _AUTO_COLUMN_RE.match(current):   # ★ 新增
         return ""
+
+    # ★ P0-2：审计后/审计前是列口径的一部分，必须在剥离括号说明前保留。
+    audit_qualifier = _extract_audit_qualifier(current)
 
     # ★ 新增：剥掉表头里的括号补充说明，让
     #   "本季度(期末)数" → "本季度数"
@@ -729,6 +757,12 @@ def _period_header(row: list[str], index: int) -> str:
         "",
         current,
     ).strip()
+
+    def _with_qualifier(period: str) -> str:
+        if audit_qualifier and period and audit_qualifier not in period:
+            return f"{period}-{audit_qualifier}"
+        return period
+
     if (
         any(
             token in current
@@ -736,21 +770,21 @@ def _period_header(row: list[str], index: int) -> str:
         )
         and "预测" not in current
     ):
-        return "本年累计数"
+        return _with_qualifier("本年累计数")
     if any(token in current for token in ("上年度", "上年末")):
-        return "上季度末数"
+        return _with_qualifier("上季度末数")
     if current == "累计" or current.endswith("累计"):
-        return "本年累计数"
+        return _with_qualifier("本年累计数")
 
     _PERIOD_TERMS_SORTED = sorted(PERIOD_TERMS, key=len, reverse=True)
     
     for term in _PERIOD_TERMS_SORTED:    # ★ 改
         if term in current:
-            return PERIOD_ALIASES.get(term, term)
+            return _with_qualifier(PERIOD_ALIASES.get(term, term))
     if re.search(r"20[0-9]{2}", current):
         if re.search(r"[0-9]{1,2}\s*月", current):
-            return "期末数"
-        return "本年累计数"
+            return _with_qualifier("期末数")
+        return _with_qualifier("本年累计数")
     return current
 
 # 存量类指标（资本/资产/负债类）的“本季度数”与“本季度末数”语义相同，
@@ -808,7 +842,12 @@ _QUALITY_PERIOD_CODES = {
 
 
 def _normalize_period_alias(period: str, metric_code: str = "") -> str:
-    """把不同叫法归一；存量类指标额外把本季度数/上季度数归一到末数。"""
+    """把不同叫法归一；存量类指标额外把本季度数/上季度数归一到末数。
+
+    P0-2：先拆出“审计后/审计前”等限定词，只归一基础期间，再原样拼回，
+    避免“本季度末数-审计后”和“本季度末数-审计前”在去重时互相覆盖。
+    """
+    period_base, period_qualifier = _split_period_qualifier(period)
     mapping = {
         "期末数": "本季度末数",
         "期初数": "上季度末数",
@@ -857,13 +896,16 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         mapping["上季末"] = "上季度末数"
     # ★ 品质类兜底：PDF 里 C 列通常是"本年度累计数"，
     #   若因表头错位被识别为"上季度数"，这里再纠正一次。
-    if metric_code in _QUALITY_PERIOD_CODES and period == "上季度数":
-        return "本年累计数"
+    if metric_code in _QUALITY_PERIOD_CODES and period_base == "上季度数":
+        normalized = "本年累计数"
+    else:
+        normalized = mapping.get(period_base, period_base)
+    if period_qualifier:
+        return f"{normalized}-{period_qualifier}"
+    return normalized
 
-    return mapping.get(period, period)
 
-
-def infer_period_label(value: object) -> str:
+def _infer_period_label_base(value: object) -> str:
     """Infer a canonical period from a human-readable header label.
 
     Returns an empty string when local semantic rules cannot decide. The
@@ -901,6 +943,16 @@ def infer_period_label(value: object) -> str:
     if "期末" in text:
         return "期末数"
     return ""
+
+
+def infer_period_label(value: object) -> str:
+    """推断期间；保留“审计后/审计前”等列限定词。"""
+    text = re.sub(r"\s+", "", str(value or ""))
+    qualifier = _extract_audit_qualifier(text)
+    base = _infer_period_label_base(value)
+    if base and qualifier and qualifier not in base:
+        return f"{base}-{qualifier}"
+    return base
 
 
 _HEADER_LABEL_TERMS = (

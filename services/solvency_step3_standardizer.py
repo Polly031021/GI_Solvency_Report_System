@@ -32,6 +32,7 @@ from .solvency_normalizer import (
     STANDARD_COLUMNS,
     _EXACT_LABEL_LOCKS,
     _normalize_label,
+    _split_period_qualifier,
     infer_period_label,
     normalize_tables,
 )
@@ -84,7 +85,9 @@ _PERIOD_DEDUP_ALIASES: dict[str, str] = {
 
 def _dedup_period(period: object) -> str:
     text = str(period or "").strip()
-    return _PERIOD_DEDUP_ALIASES.get(text, text)
+    base, qualifier = _split_period_qualifier(text)
+    mapped = _PERIOD_DEDUP_ALIASES.get(base, base)
+    return f"{mapped}-{qualifier}" if qualifier else mapped
 
 _CN_DIGITS = {
     # 小写
@@ -275,7 +278,7 @@ def read_target_template(
     return selected.reindex(columns=TARGET_TEMPLATE_COLUMNS), tuple(warnings)
 
 
-def _period_from_header(header_cells, col_index: int) -> str:
+def _period_from_header_base(header_cells, col_index: int) -> str:
     """从表头列名判断期间口径名称（与 solvency_normalizer.PERIOD_ALIASES 一致）。"""
     if not header_cells or col_index >= len(header_cells):
         return ""
@@ -343,6 +346,22 @@ def _period_from_header(header_cells, col_index: int) -> str:
     if "期初" in text:
         return "期初数"
     return ""
+
+
+def _period_from_header(header_cells, col_index: int) -> str:
+    """期间解析入口：保留“审计后/审计前”等列限定词，避免双行表头互相覆盖。"""
+    if not header_cells or col_index >= len(header_cells):
+        return ""
+    raw = str(header_cells[col_index])
+    base = _period_from_header_base(header_cells, col_index)
+    qualifier = ""
+    for token in ("审计后", "审计前", "未经审计"):
+        if token in raw:
+            qualifier = token
+            break
+    if base and qualifier and qualifier not in base:
+        return f"{base}-{qualifier}"
+    return base
 
 def _period_from_row_label(label: str) -> str:
     """当表头列名是"列2"之类的占位符时，用数据行的行标签推断期间。
