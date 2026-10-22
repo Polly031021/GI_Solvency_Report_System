@@ -46,6 +46,7 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
     PENDING_DEFINITION,
     PERFORMANCE_PATTERN_GRID,
     PREMIUM_GROWTH_STRUCTURE,
+    LOSS_EXPENSE_COST_RATIO,
     RISK_RATIO_SCATTER,
     SINGLE_METRIC_TREND,
     SOLVENCY_MATRIX,
@@ -57,12 +58,15 @@ from services.solvency_step7_chart_plans import (  # noqa: E402
 from services.step7_excel_config import Step7Module, load_step7_config  # noqa: E402
 
 QUANT_CODES = (
-    "INSURANCE_RISK_CAPITAL",
     "NON_LIFE_INSURANCE_RISK_CAPITAL",
     "MARKET_RISK_CAPITAL",
     "CREDIT_RISK_CAPITAL",
     "QUANT_RISK_DIVERSIFICATION_EFFECT",
-    "CONTRACT_LOSS_ABSORPTION_EFFECT",
+)
+INSURANCE_RISK_CODES = (
+    "NON_LIFE_PREMIUM_RESERVE_RISK_CAPITAL",
+    "NON_LIFE_CATASTROPHE_RISK_CAPITAL",
+    "NON_LIFE_INSURANCE_RISK_DIVERSIFICATION_EFFECT",
 )
 MARKET_CODES = (
     "INTEREST_RATE_RISK_CAPITAL",
@@ -83,6 +87,10 @@ CAPITAL_TIER_CODES = (
     "ANC_T1_CAPITAL",
     "ANC_T2_CAPITAL",
 )
+CAPITAL_AMOUNT_DISPLAY_CODES = (
+    "CORE_T1_CAPITAL",
+    "ANC_T1_CAPITAL",
+)
 
 # (图表名称, 图表类型, 指标编码, 图表配置)
 MODULE_SPECS = (
@@ -94,9 +102,10 @@ MODULE_SPECS = (
     ("综合充足率变化", CAPITAL_RATIO_COMBO, ("ACTUAL_CAPITAL", "MINIMUM_CAPITAL", "COMBINED_SOLVENCY_RATIO"), {}),
     ("核心充足率变化", CAPITAL_RATIO_COMBO, ("CORE_T1_CAPITAL", "MINIMUM_CAPITAL", "CORE_SOLVENCY_RATIO"), {}),
     ("核心资本占比", CAPITAL_STRUCTURE_COMBO, CAPITAL_TIER_CODES, {}),
-    ("资本规模与结构", CAPITAL_AMOUNT_COMBO, CAPITAL_TIER_CODES, {}),
+    ("资本规模与结构", CAPITAL_AMOUNT_COMBO, CAPITAL_AMOUNT_DISPLAY_CODES, {}),
     ("资本使用效率与核心资本占比气泡图", CAPITAL_EFFICIENCY_BUBBLE, ("ACTUAL_CAPITAL", "REGISTERED_CAPITAL", "CORE_T1_CAPITAL", "RECOGNIZED_ASSETS"), {}),
     ("量化风险最低资本构成", COMPONENT_STACK, QUANT_CODES, {}),
+    ("保险风险构成", COMPONENT_STACK, INSURANCE_RISK_CODES, {}),
     ("各类市场风险占比", COMPONENT_STACK, MARKET_CODES, {}),
     ("计入各级资本的保单未来盈余构成占比", COMPONENT_STACK, POLICY_SURPLUS_CODES, {}),
     ("效应发散", EFFECT_DIVERGING, ("QUANT_RISK_DIVERSIFICATION_EFFECT",), {}),
@@ -110,6 +119,18 @@ MODULE_SPECS = (
     ("增资发债信息统计", FINANCING_TABLE, (), {}),
     ("核心资本明细占比-待定", PENDING_DEFINITION, (), {}),
     ("能力五边形", CAPABILITY_RADAR, ("PREMIUM_GROWTH", "ROE", "TOTAL_ASSETS", "ACTUAL_CAPITAL", "COMBINED_SOLVENCY_RATIO"), {}),
+    (
+        "保险风险/认可负债率",
+        SINGLE_METRIC_TREND,
+        ("NON_LIFE_INSURANCE_RISK_TO_LIABILITIES",),
+        {},
+    ),
+    (
+        "投资收益率",
+        SINGLE_METRIC_TREND,
+        ("INVESTMENT_RETURN",),
+        {"years": 5, "annual_labels": True},
+    ),
     ("承保效益", UNDERWRITING_EFFICIENCY_SCATTER, (), {}),
     ("承保规模", STRUCTURE_CHANGE_CHART, ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"), {}),
     (
@@ -117,6 +138,12 @@ MODULE_SPECS = (
         PREMIUM_GROWTH_STRUCTURE,
         ("SIGNED_PREMIUM", "SIGNED_PREMIUM_MOTOR"),
         {"years": 5, "annual_scope": "本年累计数"},
+    ),
+    (
+        "赔付率与费用率",
+        LOSS_EXPENSE_COST_RATIO,
+        ("LOSS_RATIO", "EXPENSE_RATIO", "COMBINED_RATIO"),
+        {"years": 5},
     ),
     ("经营效益", STRUCTURE_CHANGE_CHART, ("NET_PROFIT", "SIGNED_PREMIUM"), {}),
     ("资本规模", STRUCTURE_CHANGE_CHART, ("CORE_T1_CAPITAL", "ANC_T1_CAPITAL", "ACTUAL_CAPITAL"), {}),
@@ -174,6 +201,10 @@ def test_excel_driven_step7_charts() -> None:
     at = _app_with_modules()
     at.run()
     assert not at.exception, [e.value for e in at.exception]
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "净利润排名" in markdown_text
+    assert "小型、外资系、农业保险和自保公司" in markdown_text
+    assert "部分集团子公司、大型公司及中型公司" in markdown_text
     print(f"PASS Excel 驱动 STEP7：{len(MODULE_SPECS)} 种图表类型全部渲染成功")
 
 
@@ -273,12 +304,35 @@ def test_capital_ratio_template_modules() -> None:
     selected = {
         module.chart_name: module
         for module in modules
-        if module.level_one == "关键偿付数据概览"
-        and module.level_two == "资本充足率"
+        if module.level_one == "行业对标与趋势研判"
+        and module.level_two == "核心指标速览"
+        and module.module_id
+        in {"combined_solvency_change", "core_solvency_change"}
     }
-    assert set(selected) == {"综合充足率变化", "核心充足率变化"}
+    assert set(selected) == {"综合偿付能力充足率", "核心偿付能力充足率"}
     assert all(module.chart_kind == CAPITAL_RATIO_COMBO for module in selected.values())
     assert all(module.requires_all for module in selected.values())
+    actual_ratio = next(
+        module
+        for module in modules
+        if module.level_one == "行业对标与趋势研判"
+        and module.level_two == "核心指标速览"
+        and module.chart_name == "实际资本/认可资产率"
+    )
+    assert actual_ratio.chart_kind == SINGLE_METRIC_TREND
+    assert actual_ratio.metric_codes == ("ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS",)
+    core_metric_modules = [
+        module
+        for module in modules
+        if module.level_one == "行业对标与趋势研判"
+        and module.level_two == "核心指标速览"
+        and module.module_id
+    ]
+    assert len(core_metric_modules) == 4
+    for module in core_metric_modules:
+        assert module.chart_config["annual_labels"] is True
+        assert module.chart_config["year_start"] == 2023
+        assert module.chart_config["year_end"] == 2025
 
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
     at.session_state["logged_in"] = True
@@ -289,15 +343,90 @@ def test_capital_ratio_template_modules() -> None:
     at.session_state["standard_data"] = data
     at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
     at.session_state["workflow_main_tab"] = "STEP7 公司报告"
-    at.session_state["company_nav_level_one"] = "关键偿付数据概览"
-    at.session_state["company_nav_level_two"] = "资本充足率"
+    at.session_state["company_nav_level_one"] = "行业对标与趋势研判"
+    at.session_state["company_nav_level_two"] = "核心指标速览"
     at.session_state["s7_company_types"] = ["全部"]
     at.session_state["s7_unit_mode"] = "亿元"
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     caption_text = "\n".join(item.value for item in at.caption)
     assert "按年度口径展示" in caption_text
-    print("PASS 关键偿付数据概览：综合/核心充足率变化年度图正常")
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "堆叠柱组合图" in markdown_text
+    assert "并列柱组合图" not in markdown_text
+    assert "核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本" in markdown_text
+    assert "行业平均核心资本占实际资本的比例约" in markdown_text
+    assert "说明目前的综合偿付能力充足率较高" in markdown_text
+    assert "还有提升资本利用率的空间" in markdown_text
+    print("PASS 行业对标与趋势研判：综合/核心偿付能力充足率年度图正常")
+
+
+def test_actual_capital_stack_template_module() -> None:
+    """The actual-capital change row must render the 100% capital stack."""
+    template_path = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    modules = load_step7_config(template_path)
+    module = next(
+        item
+        for item in modules
+        if item.level_one == "偿付能力水平深度拆解"
+        and item.level_two == "实际资本变动"
+    )
+    assert module.chart_name == "资本金额堆叠"
+    assert module.chart_kind == CAPITAL_AMOUNT_COMBO
+    assert module.metric_codes == CAPITAL_AMOUNT_DISPLAY_CODES
+    assert module.requires_all
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "偿付能力水平深度拆解"
+    at.session_state["company_nav_level_two"] = "实际资本变动"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    caption_text = "\n".join(item.value for item in at.caption)
+    assert "100%堆叠柱显示核心一级和附属一级资本构成" in caption_text
+    print("PASS 实际资本变动：资本金额堆叠图正常")
+
+
+def test_minimum_capital_template_modules() -> None:
+    """All minimum-capital view charts must render with annual settings."""
+    template_path = ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    data = synthetic_integrated_data()
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_notes_bytes_NON_LIFE_SOLVENCY"] = template_path.read_bytes()
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "偿付能力水平深度拆解"
+    at.session_state["company_nav_level_two"] = "最低资本变动"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    warning_text = "\n".join(item.value for item in at.warning)
+    assert "缺少" not in warning_text
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "财产险公司2025年度的最低资本以" in markdown_text
+    assert "平均占比" in markdown_text
+    assert "保费及准备金风险最低资本平均占比较高的主要是" in markdown_text
+    assert "巨灾风险最低资本平均占比" in markdown_text
+    assert "以该指标体现公司保险风险最低资本相对认可负债的压力因子值" in markdown_text
+    assert (
+        "明显低于其他类型公司的平均水平" in markdown_text
+        or "差异相对有限" in markdown_text
+    )
+    print("PASS 最低资本变动：三张年度图正常")
 
 
 if __name__ == "__main__":
@@ -306,4 +435,6 @@ if __name__ == "__main__":
     test_default_step7_config_without_upload()
     test_premium_growth_template_module()
     test_capital_ratio_template_modules()
+    test_actual_capital_stack_template_module()
+    test_minimum_capital_template_modules()
     print("全部通过")

@@ -296,10 +296,12 @@ def build_premium_growth_structure_chart(
     share_scale = alt.Scale(domain=[0, 100], zero=True, nice=False)
     growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=True)
     x_axis = alt.Axis(
-        title=None,
+        title="年份",
+        titleFontSize=9,
+        titlePadding=4,
         labelAngle=0,
-        labelFontSize=10,
-        labelPadding=7,
+        labelFontSize=8,
+        labelPadding=5,
     )
     x = alt.X("年度:N", sort=years, axis=x_axis)
 
@@ -314,8 +316,9 @@ def build_premium_growth_structure_chart(
             axis=alt.Axis(
                 format=".0f",
                 tickCount=6,
-                titlePadding=8,
-                labelFontSize=9,
+                titlePadding=5,
+                titleFontSize=8,
+                labelFontSize=8,
             ),
         ),
         y2=alt.Y2("占比终点:Q"),
@@ -336,7 +339,7 @@ def build_premium_growth_structure_chart(
         ],
     )
     bar_labels = bar_base.mark_text(
-        fontSize=10,
+        fontSize=8,
         fontWeight="bold",
         baseline="middle",
     ).encode(
@@ -360,7 +363,7 @@ def build_premium_growth_structure_chart(
     growth_layers: list[alt.Chart] = []
     if not panel.line_frame.empty:
         line_base = alt.Chart(panel.line_frame)
-        line_x = alt.X("年度:N", sort=years, axis=None)
+        line_x = x
         line_y = alt.Y(
             "同比增速:Q",
             scale=growth_scale,
@@ -368,8 +371,9 @@ def build_premium_growth_structure_chart(
                 orient="right",
                 format=".0f",
                 title="增速（%）",
-                titlePadding=4,
-                labelFontSize=9,
+                titlePadding=3,
+                titleFontSize=8,
+                labelFontSize=8,
                 tickCount=5,
                 grid=False,
             ),
@@ -415,7 +419,7 @@ def build_premium_growth_structure_chart(
         positive_labels = (
             line_base.transform_filter(alt.datum["同比增速"] >= 0)
             .mark_text(
-                fontSize=9,
+                fontSize=8,
                 fontWeight="bold",
                 color=GROWTH_LINE_COLOR,
                 baseline="middle",
@@ -431,7 +435,7 @@ def build_premium_growth_structure_chart(
         negative_labels = (
             line_base.transform_filter(alt.datum["同比增速"] < 0)
             .mark_text(
-                fontSize=9,
+                fontSize=8,
                 fontWeight="bold",
                 color=GROWTH_LINE_COLOR,
                 baseline="middle",
@@ -453,12 +457,12 @@ def build_premium_growth_structure_chart(
             title=alt.TitleParams(
                 text=panel.company,
                 anchor="middle",
-                fontSize=14,
+                fontSize=12,
                 color="#00338D",
                 offset=8,
             ),
-            width=470,
-            height=310,
+            width=280,
+            height=260,
         )
     )
     return apply_report_theme(chart)

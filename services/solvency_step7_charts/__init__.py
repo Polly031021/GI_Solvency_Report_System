@@ -50,6 +50,7 @@ from .trend import (
     prepare_metric_trend,
     build_single_metric_trend_chart,
     build_single_metric_trend_charts,
+    insurance_risk_liability_pressure_sentence,
     build_company_bar_trend_chart,
     build_company_period_bar_chart,
     build_company_line_trend_chart,
@@ -58,6 +59,9 @@ from .trend import (
 
 from .capital import (
     annual_period_order,
+    capital_structure_industry_ratios,
+    quant_risk_industry_sentence,
+    insurance_risk_industry_sentence,
     solvency_ratio_axis_domain,
     build_solvency_ratio_combo_chart,
     build_capital_ratio_combo_chart,
@@ -105,6 +109,18 @@ from .premium_growth import (
     group_premium_growth_panels,
     prepare_premium_growth_panel,
     premium_growth_axis_domain,
+)
+
+from .loss_expense import (
+    BREAKEVEN_COLOR,
+    EXPENSE_COLOR,
+    LOSS_COLOR,
+    LOSS_EXPENSE_GROUP_ORDER,
+    LossExpensePanel,
+    build_loss_expense_panel_chart,
+    group_loss_expense_panels,
+    loss_expense_axis_domain,
+    prepare_loss_expense_panel,
 )
 
 from .industry_premium import (
@@ -167,10 +183,14 @@ __all__ = [
     "metric_rows",
     "trend_y_domain",
     "annual_period_order",
+    "capital_structure_industry_ratios",
+    "quant_risk_industry_sentence",
+    "insurance_risk_industry_sentence",
     "build_metric_trend_group",
     "prepare_metric_trend",
     "build_single_metric_trend_chart",
     "build_single_metric_trend_charts",
+    "insurance_risk_liability_pressure_sentence",
     "build_company_bar_trend_chart",
     "build_company_period_bar_chart",
     "build_company_line_trend_chart",
@@ -207,6 +227,15 @@ __all__ = [
     "group_premium_growth_panels",
     "prepare_premium_growth_panel",
     "premium_growth_axis_domain",
+    "BREAKEVEN_COLOR",
+    "EXPENSE_COLOR",
+    "LOSS_COLOR",
+    "LOSS_EXPENSE_GROUP_ORDER",
+    "LossExpensePanel",
+    "build_loss_expense_panel_chart",
+    "group_loss_expense_panels",
+    "loss_expense_axis_domain",
+    "prepare_loss_expense_panel",
     "ANNUAL_SCOPE_ALIASES",
     "DISPLAY_UNITS",
     "MOTOR_PREMIUM_CODE",
