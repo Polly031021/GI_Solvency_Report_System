@@ -339,6 +339,7 @@ def test_numeric_placeholders_are_missing_not_zero() -> None:
     assert int(summary.loc["RECOGNIZED_ASSETS", "缺失值单元格数"]) == 2
     assert int(summary.loc["RECOGNIZED_LIABILITIES", "缺失值单元格数"]) == 1
     assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "未填报"
+    assert summary.loc["RECOGNIZED_ASSETS", "诊断状态"] == "值为空"
     assert any("按缺失处理（未写0）" in warning for warning in result.warnings)
     print("PASS 空白/占位符按缺失处理，不写假0")
 

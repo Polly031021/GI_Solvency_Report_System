@@ -55,6 +55,14 @@ TARGET_TEMPLATE_COLUMNS = [
 ]
 
 # 去重时把不同叫法归一到同一期间 key，仅用于去重，不改输出的"期间口径"字段
+_PERIOD_SORT_PRIORITY = {
+    "本季度末数": 0,
+    "上季度末数": 1,
+    "下季度末预测数": 2,
+    "本年累计数": 3,
+    "近三年平均": 4,
+}
+
 _PERIOD_DEDUP_ALIASES: dict[str, str] = {
     "本季度数": "本季度末数",
     "上季度数": "上季度末数",
@@ -88,6 +96,173 @@ def _dedup_period(period: object) -> str:
     base, qualifier = _split_period_qualifier(text)
     mapped = _PERIOD_DEDUP_ALIASES.get(base, base)
     return f"{mapped}-{qualifier}" if qualifier else mapped
+
+
+def _dedup_candidate_score(row: pd.Series) -> float:
+    """给同一指标/期间下的候选记录打分，分数高者保留。
+
+    数值有效最重要；补漏匹配、单位未识别、默认期间和空白按0的记录降权，
+    避免低质量候选在去重时顶掉正常披露值。
+    """
+    score = 0.0
+    numeric = pd.to_numeric(row.get("数值"), errors="coerce")
+    if pd.notna(numeric):
+        score += 20.0
+    note = str(row.get("备注", "") or "")
+    if "补漏匹配" in note:
+        score -= 8.0
+    if "未识别原始单位" in note:
+        score -= 4.0
+    if "期间未识别" in note or "按默认口径" in note:
+        score -= 3.0
+    if "按0处理" in note:
+        score -= 2.0
+    if str(row.get("行次", "") or "").strip():
+        score += 1.0
+    if str(row.get("单位", "") or "").strip():
+        score += 1.0
+    if str(row.get("来源工作表", "") or "").strip():
+        score += 1.0
+    return score
+
+
+def _candidate_value_key(value: object) -> str:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.notna(numeric):
+        return f"num:{round(float(numeric), 6)}"
+    return f"text:{str(value or '').strip()}"
+
+
+def _deduplicate_candidates(
+    data: pd.DataFrame,
+    diagnostics: list[dict],
+) -> tuple[pd.DataFrame, int, int]:
+    """按候选得分去重，并记录同指标/同期间的口径冲突。
+
+    不再按来源工作表拆分重复项：一个指标在同一报告期同一期间只应保留
+    一条标准记录。若候选值不同，保留得分最高者，并在诊断中写明冲突值
+    和来源表，供人工核对。
+    """
+    if data.empty:
+        return data, 0, 0
+    working = data.copy()
+    working["_期间口径_去重"] = working["期间口径"].map(_dedup_period)
+    key_columns = [
+        "公司统一编码",
+        "报告期",
+        "指标编码",
+        "_期间口径_去重",
+    ]
+    existing_keys = [column for column in key_columns if column in working.columns]
+    if not existing_keys:
+        return data, 0, 0
+
+    kept_indexes: list = []
+    removed = 0
+    conflicts = 0
+    for _, group in working.groupby(existing_keys, sort=False, dropna=False):
+        if len(group) == 1:
+            kept_indexes.append(group.index[0])
+            continue
+        scored = sorted(
+            (
+                (_dedup_candidate_score(group.loc[index]), index)
+                for index in group.index
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        best_score, best_index = scored[0]
+        kept_indexes.append(best_index)
+        removed += len(group) - 1
+
+        value_keys = {
+            _candidate_value_key(group.loc[index].get("数值"))
+            for index in group.index
+        }
+        if len(value_keys) <= 1:
+            continue
+        conflicts += 1
+        best_row = group.loc[best_index]
+        runner_index = scored[1][1]
+        runner_row = group.loc[runner_index]
+        best_value = str(best_row.get("数值", ""))
+        runner_value = str(runner_row.get("数值", ""))
+        diagnostics.append({
+            "目标表": str(best_row.get("来源工作表", "")),
+            "来源页码": str(best_row.get("来源页码", "")),
+            "原始项目": str(best_row.get("指标名称", "")),
+            "指标编码": str(best_row.get("指标编码", "")).strip(),
+            "状态": "口径冲突",
+            "原因": (
+                f"同一指标/期间存在 {len(group)} 条候选且取值不同"
+                f"（保留 {best_value}，其他如 {runner_value}），"
+                "已按候选得分保留最高分记录"
+            ),
+            "最佳候选": (
+                f"{best_value}@{best_row.get('来源工作表', '')}"
+            ),
+            "最佳得分": round(float(best_score), 2),
+            "第二候选": (
+                f"{runner_value}@{runner_row.get('来源工作表', '')}"
+            ),
+            "第二得分": round(float(scored[1][0]), 2),
+        })
+
+    kept_set = set(kept_indexes)
+    result = working.loc[
+        [index for index in working.index if index in kept_set]
+    ].drop(columns=["_期间口径_去重"])
+    # 保持原有展示顺序：本季度末数/上季度末数/预测/本年累计优先。
+    result["_期间排序"] = (
+        result["期间口径"].map(_dedup_period)
+        .map(lambda period: _PERIOD_SORT_PRIORITY.get(period, 99))
+    )
+    result = (
+        result.sort_values("_期间排序", kind="stable")
+        .drop(columns=["_期间排序"])
+        .reset_index(drop=True)
+    )
+    return result, removed, conflicts
+
+
+def _attach_diagnostic_status(
+    summary: pd.DataFrame,
+    diagnostics: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """把诊断状态映射到填报汇总，保留“未填报”兼容字段。
+
+    “填报状态”仍只有已填报/未填报；新增“诊断状态”细分未匹配、
+    期间未识别、值为空、口径冲突和歧义待确认。
+    """
+    if summary is None or summary.empty:
+        return summary
+    summary["诊断状态"] = ""
+    if (
+        diagnostics is None
+        or diagnostics.empty
+        or "状态" not in diagnostics.columns
+        or "指标编码" not in diagnostics.columns
+    ):
+        return summary
+
+    priority = ("口径冲突", "歧义待确认", "期间未识别", "值为空", "未匹配")
+    status_by_code: dict[str, str] = {}
+    for code, group in diagnostics.groupby("指标编码", dropna=False):
+        code_text = str(code or "").strip()
+        if not code_text:
+            continue
+        statuses = {str(value).strip() for value in group["状态"] if str(value).strip()}
+        for candidate in priority:
+            if candidate in statuses:
+                status_by_code[code_text] = candidate
+                break
+
+    mapped = summary["指标编码"].astype(str).str.strip().map(status_by_code)
+    filled = summary["填报状态"].astype(str).eq("已填报")
+    summary.loc[~filled, "诊断状态"] = mapped[~filled].fillna("未匹配")
+    summary.loc[filled & mapped.eq("口径冲突"), "诊断状态"] = "口径冲突"
+    return summary
+
 
 _CN_DIGITS = {
     # 小写
@@ -799,6 +974,7 @@ def _expand_table_blocks(
 def _target_summary(
     target_catalog: pd.DataFrame,
     data: pd.DataFrame,
+    diagnostics: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     summary = target_catalog[
         ["指标编码", "指标名称", "一级模块", "二级模块", "指标属性"]
@@ -839,7 +1015,7 @@ def _target_summary(
         summary["填报记录数"] = 0
         summary["已填期间"] = ""
         summary["填报状态"] = "未填报"
-        return summary
+        return _attach_diagnostic_status(summary, diagnostics)
 
     normalized = data.copy()
     normalized["_code"] = normalized["指标编码"].astype(str).str.strip()
@@ -873,7 +1049,7 @@ def _target_summary(
         summary["口径冲突提示"] = summary["期间口径明细"].map(
             lambda s: "⚠ 多口径并存，请核对" if s and ("、" in s) else ""
         )
-    return summary
+    return _attach_diagnostic_status(summary, diagnostics)
 
 
 def standardize_to_target(
@@ -1405,76 +1581,25 @@ def standardize_to_target(
             data = data[~bad_mask].reset_index(drop=True)
             warnings.append("已剔除资本工具表发行金额误挂到附属一级资本的记录。")
             
-    # ★ 去重：同一公司/报告期/指标/归一化期间只保留一条
+    # ★ P1：候选打分去重，替换原先按来源工作表 keep=first 的做法。
+    #   同一指标/报告期/期间只保留得分最高的一条；取值不同时写入口径冲突诊断。
+    _dedup_removed = 0
+    _conflict_count = 0
     if not data.empty:
-        # 临时加一列归一化期间，仅用于去重
-        data["_期间口径_去重"] = data["期间口径"].map(_dedup_period)
-
-        # 优先保留"规范期间名"的记录：本季度末数 > 上季度末数 > 下季度末预测数 > 其他
-        _PERIOD_SORT_PRIORITY = {
-            "本季度末数": 0,
-            "上季度末数": 1,
-            "下季度末预测数": 2,
-            "本年累计数": 3,
-            "近三年平均": 4,
-        }
-        data["_期间排序"] = data["_期间口径_去重"].map(
-            lambda p: _PERIOD_SORT_PRIORITY.get(p, 99)
+        data, _dedup_removed, _conflict_count = _deduplicate_candidates(
+            data,
+            diagnostics,
         )
-        data = data.sort_values("_期间排序", kind="stable").drop(columns=["_期间排序"])
-
-        dedup_keys = [
-            "公司统一编码",
-            "报告期",
-            "指标编码",
-            "_期间口径_去重",
-            "来源工作表",     # ★ 新增
-        ]
-        existing_keys = [k for k in dedup_keys if k in data.columns]
-        if existing_keys:
-            before = len(data)
-            data = (
-                data.drop_duplicates(subset=existing_keys, keep="first")
-                .reset_index(drop=True)
+        if _dedup_removed:
+            warnings.append(f"候选打分去重移除了 {_dedup_removed} 条重复记录。")
+        if _conflict_count:
+            warnings.append(
+                f"发现 {_conflict_count} 处同指标同期间口径冲突，"
+                "已保留候选得分最高记录，详见“匹配诊断”。"
             )
-            removed = before - len(data)
-            if removed:
-                warnings.append(f"去重移除了 {removed} 条同粒度重复记录。")
-
-        # 去重完成后删掉临时列
-        data = data.drop(columns=["_期间口径_去重"])
 
     diagnostic_frame = pd.DataFrame(diagnostics)
-    summary = _target_summary(target_catalog, data)
-    
-
-
-    # ---------- 去重：同一公司/报告期/指标/期间/来源只保留一条 ----------
-    if not data.empty:
-        # ★ 修复：第一次去重已删掉 _期间口径_去重，这里必须重算，
-        #   否则 effective dedup key 会丢掉"期间"维度，
-        #   把同一指标的本季度末数/上季度末数/下季度预测数误合并。
-        data["_期间口径_去重"] = data["期间口径"].map(_dedup_period)
-        dedup_keys = [
-            "公司统一编码",
-            "报告期",
-            "指标编码",
-            "_期间口径_去重",
-            "来源工作表",
-        ]
-        existing_keys = [k for k in dedup_keys if k in data.columns]
-        if existing_keys:
-            before = len(data)
-            data = (
-                data.drop_duplicates(subset=existing_keys, keep="first")
-                .reset_index(drop=True)
-            )
-            removed = before - len(data)
-            if removed:
-                warnings.append(f"去重移除了 {removed} 条同粒度重复记录。")
-        # ★ 修复：用完后删掉临时列，避免污染输出
-        if "_期间口径_去重" in data.columns:
-            data = data.drop(columns=["_期间口径_去重"])
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
 
     if not data.empty and "备注" in data.columns:
         _blank_zero_count = int(
@@ -1525,7 +1650,7 @@ def standardize_to_target(
         data["指标编码"] = code_norm
 
     diagnostic_frame = pd.DataFrame(diagnostics)
-    summary = _target_summary(target_catalog, data)
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
     missing_count = int((summary["填报状态"] == "未填报").sum())
 
     if missing_count:
@@ -1643,7 +1768,7 @@ def standardize_to_target(
 
     # ★ 注册资本是上面才追加进 data 的，之前的 summary 没包含它，
     #   这里重新算一遍，保证"填报汇总"里 REGISTERED_CAPITAL 显示"已填报"。
-    summary = _target_summary(target_catalog, data)
+    summary = _target_summary(target_catalog, data, diagnostic_frame)
 
     # ===== ★ 新增：S05 表期间口径整体错位修正 =====
     # 场景：某些 PDF 的 S05 表列序与表头识别不一致，导致该表所有行

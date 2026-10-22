@@ -1225,7 +1225,7 @@ def normalize_tables(
                         "目标表": table.table_name,
                         "来源页码": "、".join(map(str, table.source_pages or [table.page])),
                         "原始项目": label,
-                        "状态": "歧义" if decision.ambiguous else "未匹配",
+                        "状态": "歧义待确认" if decision.ambiguous else "未匹配",
                         "原因": decision.reason,
                         "最佳候选": decision.candidate_name,
                         "最佳得分": round(decision.score, 3),
@@ -1394,7 +1394,23 @@ def normalize_tables(
                             period = "本季度末数"
                     else:
                         # 表头存在但期间确实无法识别（例如“列2”“项目”），
-                        # 不臆造期间；留给补漏匹配按行标签兜底。
+                        # 不臆造期间；留给补漏匹配按行标签兜底，同时写诊断。
+                        if diagnostics is not None and label:
+                            diagnostics.append({
+                                "目标表": table.table_name,
+                                "来源页码": "、".join(map(str, table.source_pages or [table.page])),
+                                "原始项目": label,
+                                "指标编码": str(metric.get("指标编码", "")).strip(),
+                                "状态": "期间未识别",
+                                "原因": (
+                                    f"表头'{str(headers[header_index]).strip()}'"
+                                    "无法识别期间，且该表无可用默认口径"
+                                ),
+                                "最佳候选": str(metric.get("指标名称", "")),
+                                "最佳得分": 1.0,
+                                "第二候选": "",
+                                "第二得分": 0,
+                            })
                         continue
                     period_default_note = (
                         f"期间未识别，按默认口径'{period}'处理"

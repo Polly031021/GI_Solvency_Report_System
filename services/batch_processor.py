@@ -503,6 +503,7 @@ def process_one_pdf_bytes(
                 _new_summary = _target_summary(
                     std_result.target_catalog,
                     _patched_data,
+                    std_result.diagnostics,
                 )
                 if _dc.is_dataclass(std_result):
                     std_result = _dc.replace(std_result, target_summary=_new_summary)
