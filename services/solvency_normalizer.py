@@ -373,17 +373,42 @@ def load_taxonomy(path: str | Path) -> pd.DataFrame:
     return frame
 
 
+_NUMERIC_FOOTNOTE_SUFFIX_RE = re.compile(
+    r"(?:注|附注)\s*[0-9一二三四五六七八九十百]*\s*$"
+)
+_NUMERIC_CIRCLED_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*$")
+
+
 def parse_numeric(value):
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return np.nan
-    text = str(value).strip().replace(",", "").replace("，", "")
+    text = str(value).strip().translate(
+        str.maketrans("０１２３４５６７８９．，－", "0123456789.,-")
+    )
+    text = re.sub(r"\s+", "", text)
+    text = text.replace(",", "").replace("，", "")
     if text in {"", "-", "—", "--", "不适用", "未披露"}:
         return np.nan
+    # ★ P2：先剥离常见脚注/标记，再处理百分号。
+    # 这样“12.3%注1”也能解析为 12.3，而不是因尾注被判为缺失。
+    text = text.lstrip("¥￥$").strip()
+    text = _NUMERIC_CIRCLED_RE.sub("", text).strip()
+    text = _NUMERIC_FOOTNOTE_SUFFIX_RE.sub("", text).strip()
+    text = re.sub(r"[\(（]\s*(?:注|附注)\s*\d*\s*[\)）]\s*$", "", text).strip()
+    text = re.sub(r"[\[【]\s*\d{1,3}\s*[\]】]\s*$", "", text).strip()
+    text = text.rstrip("*#△▲※†‡").strip()
     text = text.replace("％", "%")
     if text.endswith("%"):
         text = text[:-1].strip()
+    # “1234.56(1)”是脚注；而“(1234.56)”是负数，必须保留。
+    if not (text.startswith("(") or text.startswith("（")):
+        text = re.sub(r"[\(（]\s*\d{1,3}\s*[\)）]\s*$", "", text).strip()
+
     if (text.startswith("(") and text.endswith(")")) or (text.startswith("（") and text.endswith("）")):
         text = "-" + text[1:-1]
+        # 负号括号内也可能带脚注，例如“(1,234.56)注1”。
+        text = _NUMERIC_FOOTNOTE_SUFFIX_RE.sub("", text).strip()
+        text = text.rstrip("*#△▲※†‡").strip()
     try:
         return float(text)
     except ValueError:
@@ -1038,7 +1063,7 @@ def _locate_table_header(
     rows: Sequence[Sequence[str]],
 ) -> tuple[int, bool] | None:
     best: tuple[int, int] | None = None
-    for index, row in enumerate(rows[:8]):
+    for index, row in enumerate(rows[:12]):
         score, label_hits, period_hits, numeric = _header_row_signal(row)
         nonempty = sum(bool(str(cell or "").strip()) for cell in row)
         if numeric > 1:
