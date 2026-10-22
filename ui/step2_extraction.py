@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ import streamlit as st
 from services.report_profiles import ReportProfile
 from services.solvency_ai_table_extractor import PageGrid, build_pdf_grids, extraction_logs_frame
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
-from services.solvency_normalizer import STANDARD_COLUMNS
+from services.solvency_normalizer import STANDARD_COLUMNS, narrow_table_view
 from services.batch_extraction import (
     FlexibleTable,
     detect_table_unit,
@@ -1193,7 +1194,91 @@ def _reextract_table(tables: list, index: int, method_option: str) -> None:
     st.rerun()
 
 
-def _render_extraction_results() -> None:
+def _render_step3_preview(active_profile: ReportProfile) -> None:
+    """只读 STEP3 视图：在 STEP2 内提前看标准窄表与诊断。"""
+    tables = list(st.session_state.raw_tables or [])
+    if not tables:
+        return
+    st.markdown("##### STEP3 视图预览")
+    st.caption("按当前中间表只读运行一次 STEP3，不会覆盖正式标准数据。")
+    token = tuple(_table_snapshot(table) for table in tables)
+    key = f"step2_step3_preview_{active_profile.profile_id}"
+    if st.button("生成 / 刷新 STEP3 视图", key=f"{key}_button"):
+        try:
+            from .profile_settings import resolve_profile_paths, resolve_profile_taxonomy
+            from services.solvency_step3_standardizer import standardize_to_target, step3_metric_catalog
+
+            taxonomy_path, _ = resolve_profile_paths(active_profile)
+            taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
+            derived = active_profile.profile_id == "LIFE_SOLVENCY"
+            catalog = step3_metric_catalog(taxonomy, include_derived=derived)
+            meta = dict(st.session_state.metadata or {})
+            meta["公司"] = (
+                str(meta.get("公司") or meta.get("公司名称") or "").strip()
+                or Path(str(st.session_state.pdf_name or "")).stem
+            )
+            meta["来源文件"] = str(st.session_state.pdf_name or "")
+            result = standardize_to_target(
+                tables,
+                taxonomy,
+                meta,
+                active_profile.company_types[0],
+                catalog,
+                report_profile_id=active_profile.profile_id,
+                allowed_company_types=active_profile.company_types,
+                include_derived=derived,
+            )
+            st.session_state[key] = {
+                "token": token,
+                "data": result.data,
+                "summary": result.target_summary,
+                "diagnostics": result.diagnostics,
+                "warnings": list(result.warnings),
+            }
+        except Exception as exc:
+            st.error(f"STEP3 视图生成失败：{exc}")
+    preview = st.session_state.get(key)
+    if not preview:
+        st.info("点击上方按钮生成预览。")
+        return
+    if preview.get("token") != token:
+        st.warning("中间表已修改，当前预览是旧版本，请刷新。")
+    data = preview.get("data")
+    summary = preview.get("summary")
+    diagnostics = preview.get("diagnostics")
+    for warning in preview.get("warnings", []):
+        st.warning(warning)
+    filled = 0
+    conflicts = 0
+    if isinstance(summary, pd.DataFrame) and not summary.empty:
+        if "填报状态" in summary.columns:
+            filled = int(summary["填报状态"].eq("已填报").sum())
+        if "诊断状态" in summary.columns:
+            conflicts = int(summary["诊断状态"].eq("口径冲突").sum())
+    with st.container(horizontal=True):
+        st.metric("窄表记录", len(data) if isinstance(data, pd.DataFrame) else 0, border=True)
+        st.metric("已填报指标", filled, border=True)
+        st.metric("口径冲突指标", conflicts, border=True)
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        st.dataframe(narrow_table_view(data).head(200), width="stretch", hide_index=True)
+    if isinstance(diagnostics, pd.DataFrame) and not diagnostics.empty:
+        with st.expander("查看 STEP3 视图诊断"):
+            st.dataframe(diagnostics, width="stretch", hide_index=True)
+    if (
+        isinstance(summary, pd.DataFrame)
+        and not summary.empty
+        and "诊断状态" in summary.columns
+    ):
+        attention = summary[
+            summary["填报状态"].eq("未填报")
+            | summary["诊断状态"].eq("口径冲突")
+        ]
+        if not attention.empty:
+            with st.expander("查看未填报 / 口径冲突指标"):
+                st.dataframe(attention, width="stretch", hide_index=True)
+
+
+def _render_extraction_results(active_profile: ReportProfile | None = None) -> None:
     """STEP2：中间表预览、金标准对比与下载。"""
     if st.session_state.raw_tables:
         tables = st.session_state.raw_tables
@@ -1237,6 +1322,8 @@ def _render_extraction_results() -> None:
             st.caption(f"自动校验依据：{selected_table.evidence}")
 
         _render_table_editor(tables, selected_table_index)
+        if active_profile is not None:
+            _render_step3_preview(active_profile)
 
         table_col, pdf_col = st.columns([1.15, 1], gap="large")
         with table_col:
@@ -1335,7 +1422,7 @@ def _render_extraction_single_tab(active_profile: ReportProfile) -> None:
             df = extraction_logs_frame(logs)
         st.dataframe(df, width="stretch", hide_index=True)
         _render_number_quality_panel()
-        _render_extraction_results()
+        _render_extraction_results(active_profile)
 
 
 def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
