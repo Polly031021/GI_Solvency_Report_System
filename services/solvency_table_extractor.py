@@ -198,9 +198,475 @@ def _clean_cell(value) -> str:
     return value
 
 
+def _compact_grid(cleaned: list[list[str]]) -> list[list[str]]:
+    """Remove columns that are empty across every row."""
+    if not cleaned:
+        return []
+    width = max(len(row) for row in cleaned)
+    padded = [row + [""] * (width - len(row)) for row in cleaned]
+    keep = [
+        index
+        for index in range(width)
+        if any(row[index].strip() for row in padded)
+    ]
+    return [[row[index] for index in keep] for row in padded]
+
+
 def _clean_rows(rows: list[list]) -> list[list[str]]:
     cleaned = [[_clean_cell(cell) for cell in row] for row in rows if row]
-    return [row for row in cleaned if any(cell for cell in row)]
+    cleaned = [row for row in cleaned if any(cell for cell in row)]
+    return _compact_grid(cleaned)
+
+
+def _merge_split_cjk_label(rows: list[list[str]]) -> list[list[str]]:
+    """Merge a leading Chinese character split into its own text-table cell.
+
+    Some PDFs position the first glyph of each label slightly to the left of
+    the remaining text. Text-alignment extraction then produces
+    ``["1", "核", "心一级资本", ...]``. Line-frame extraction is preferred, but
+    this repair keeps the fallback usable for borderless tables.
+    """
+    repaired: list[list[str]] = []
+    row_number_re = re.compile(r"^\d+(?:\.\d+)*$")
+    for source in rows:
+        row = list(source)
+        nonempty = [
+            index for index, cell in enumerate(row) if str(cell).strip()
+        ]
+        if len(nonempty) < 2:
+            repaired.append(row)
+            continue
+        label_start = nonempty[0]
+        first = str(row[label_start]).strip()
+        if row_number_re.fullmatch(first) and len(nonempty) >= 3:
+            label_start = nonempty[1]
+        label_char = str(row[label_start]).strip()
+        next_index = next(
+            (index for index in nonempty if index > label_start),
+            None,
+        )
+        if next_index is None:
+            repaired.append(row)
+            continue
+        next_cell = str(row[next_index]).strip()
+        if (
+            len(label_char) == 1
+            and "\u4e00" <= label_char <= "\u9fff"
+            and next_cell
+            and "\u4e00" <= next_cell[0] <= "\u9fff"
+        ):
+            row[label_start] = label_char + next_cell
+            row[next_index] = ""
+        repaired.append(row)
+    return _compact_grid(repaired)
+
+
+_ROW_NUMBER_RE = re.compile(r"^\d+(?:[.．]\d+)*$")
+_WRAP_STOP_PREFIXES = (
+    "其中",
+    "减：",
+    "减:",
+    "加：",
+    "加:",
+    "注：",
+    "注:",
+    "单位：",
+    "单位:",
+    "公司名称",
+)
+
+
+def _is_numeric_cell(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text in {"-", "--", "—", "–", "/", "－"}:
+        return True
+    cleaned = (
+        text.replace(",", "")
+        .replace("，", "")
+        .replace("%", "")
+        .replace("％", "")
+        .strip("()（）")
+    )
+    try:
+        float(cleaned)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_number_index(row: list[str]) -> int | None:
+    for index in range(min(3, len(row))):
+        text = str(row[index] or "").strip()
+        if _ROW_NUMBER_RE.fullmatch(text):
+            return index
+    return None
+
+
+def _row_label_index(row: list[str], *, after: int = -1) -> int | None:
+    for index in range(after + 1, len(row)):
+        text = str(row[index] or "").strip()
+        if not text or _ROW_NUMBER_RE.fullmatch(text) or _is_numeric_cell(text):
+            continue
+        if any("\u4e00" <= char <= "\u9fff" for char in text):
+            return index
+    return None
+
+
+def _is_wrapped_continuation(row: list[str], previous: list[str] | None) -> bool:
+    if previous is None or _row_number_index(row) is not None:
+        return False
+    nonempty = [
+        str(cell or "").strip()
+        for cell in row
+        if str(cell or "").strip()
+    ]
+    if not nonempty or any(_is_numeric_cell(cell) for cell in nonempty):
+        return False
+    text = "".join(nonempty)
+    if "单位" in text or any(
+        text.startswith(prefix) for prefix in _WRAP_STOP_PREFIXES
+    ):
+        return False
+    if text in {"效益类指标", "规模类指标", "品质类指标", "综合类指标"}:
+        return False
+    if re.match(r"^[一二三四五六七八九十]+[、.．]", text):
+        return False
+    if any(
+        token in text
+        for token in ("指标名称", "项目", "行次", "本季度", "上季度", "期末", "期初")
+    ):
+        return False
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+def _merge_wrapped_table_rows(
+    rows: list[list[str]],
+) -> tuple[list[list[str]], list[dict[str, str]]]:
+    """Join visual text lines that belong to one logical table row.
+
+    A wrapped label is normally a row with no row number, no numeric value and
+    only a Chinese text fragment. It is appended to the preceding logical row's
+    label. Section titles, "其中："/"减："/"加：" rows and rows with their own
+    numbers are intentionally left alone.
+    """
+    if len(rows) < 2:
+        return rows, []
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:10])
+            if any(
+                token in str(cell)
+                for cell in row
+                for token in ("指标名称", "项目", "行次", "本季度", "期末", "期初")
+            )
+        ),
+        -1,
+    )
+    merged: list[list[str]] = []
+    repairs: list[dict[str, str]] = []
+    for index, source in enumerate(rows):
+        row = list(source)
+        if header_index < 0 or index <= header_index:
+            merged.append(row)
+            continue
+        previous = merged[-1] if merged else None
+        if not _is_wrapped_continuation(row, previous):
+            merged.append(row)
+            continue
+        previous_label_index = _row_label_index(previous or [])
+        if previous_label_index is None:
+            merged.append(row)
+            continue
+        fragment = "".join(
+            str(cell or "").strip()
+            for cell in row
+            if str(cell or "").strip()
+        )
+        previous[previous_label_index] = (
+            str(previous[previous_label_index] or "").strip() + fragment
+        )
+        repairs.append(
+            {
+                "行号": str(index + 1),
+                "合并标签": fragment,
+                "结果": previous[previous_label_index],
+            }
+        )
+    return _compact_grid(merged), repairs
+
+
+_PERIOD_HEADER_TOKENS = (
+    "本季度",
+    "本季末",
+    "上季度",
+    "上季末",
+    "本年累计",
+    "本年度累计",
+    "期末",
+    "期初",
+    "下季度",
+    "基本情景",
+    "预测",
+)
+
+
+def _period_header_cells(row: list[str]) -> list[str]:
+    raw_cells: list[str] = []
+    for cell in row:
+        text = str(cell or "").strip()
+        if not text or not any(token in text for token in _PERIOD_HEADER_TOKENS):
+            continue
+        if (
+            any(group in text for group in ("基本情景下", "压力情景下"))
+            and "预测" not in text
+            and "下季度" not in text
+        ):
+            # Group heading such as "基本情景下"; the actual period is the
+            # sub-header on the next visual line.
+            continue
+        raw_cells.append(text)
+
+    # 有的 pdfplumber 网格把“上季度数”和“下季度预测数”的前半截压进
+    # 同一单元格，例如“上季度数 下季” + “度预测数”。拆成两个期间，
+    # 避免第三个数值因表头不可识别而丢失。
+    cells: list[str] = []
+    index = 0
+    while index < len(raw_cells):
+        text = raw_cells[index]
+        next_text = raw_cells[index + 1] if index + 1 < len(raw_cells) else ""
+        if "上季度" in text and "下季" in text:
+            cells.append("上季度数")
+            cells.append("下季度末预测数")
+            if "预测" in next_text:
+                index += 1
+        elif (
+            ("下季" in text or "下季度" in text)
+            and "预测" not in text
+            and "预测" in next_text
+        ):
+            cells.append("下季度末预测数")
+            index += 1
+        else:
+            cells.append(text)
+        index += 1
+    return cells
+
+
+_PERIOD_SUBHEADER_RE = re.compile(r"非认可价值|认可价值|账面价值")
+_PERIOD_CELL_TOKENS = (
+    "下季度末预测数",
+    "下季度预测数",
+    "本季度末数",
+    "上季度末数",
+    "本季度数",
+    "上季度数",
+    "本年累计数",
+    "期末数",
+    "期初数",
+)
+
+
+def _period_cells_in_header(header_row: list[str]) -> list[tuple[int, str]]:
+    cells: list[tuple[int, str]] = []
+    for index, cell in enumerate(header_row):
+        text = str(cell or "").strip()
+        if not text:
+            continue
+        for token in _PERIOD_CELL_TOKENS:
+            if token in text:
+                cells.append((index, token))
+                break
+    return cells
+
+
+def _reconstruct_period_subheader_columns(
+    rows: list[list[str]],
+) -> list[list[str]]:
+    """还原“本季度数/上季度数 × 账面价值/非认可价值/认可价值”双层表头。
+
+    这类表的 pdfplumber 原始表头常把六个子表头压进一个单元格，数据行却是
+    独立的 6 列或 4 列。按期间列位置、数据行数值数量和子表头顺序重建
+    规范表头，可避免 Step3 把认可价值误当成上季度数。
+    """
+    if len(rows) < 3:
+        return rows
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:12])
+            if any(
+                token in "".join(str(cell) for cell in row)
+                for token in ("指标名称", "项目", "指标")
+            )
+        ),
+        None,
+    )
+    if header_index is None:
+        return rows
+    header_row = rows[header_index]
+    header_text = "".join(str(cell or "") for cell in header_row)
+    subheaders = _PERIOD_SUBHEADER_RE.findall(header_text)
+    period_cells = _period_cells_in_header(header_row)
+    if len(subheaders) < 2 or len(period_cells) < 2:
+        return rows
+
+    data_rows = rows[header_index + 1:]
+    capacities: list[int] = []
+    for row in data_rows:
+        label_index = _row_label_index(row)
+        if label_index is None:
+            continue
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if str(cell or "").strip()
+        ]
+        capacities.append(len(values))
+    if not capacities:
+        return rows
+    max_values = max(capacities)
+    period_count = len(period_cells)
+    if max_values < period_count or max_values % period_count:
+        return rows
+    group_width = max_values // period_count
+    if group_width <= 0:
+        return rows
+
+    per_period_subheaders = len(subheaders) // period_count
+    if group_width == per_period_subheaders:
+        chosen_subheaders = subheaders[:group_width]
+    elif group_width == 2 and {"账面价值", "认可价值"}.issubset(set(subheaders)):
+        chosen_subheaders = ["账面价值", "认可价值"]
+    elif group_width == 1:
+        chosen_subheaders = []
+    else:
+        return rows
+
+    canonical_header = ["行次", "项目"]
+    for _, period in period_cells:
+        for subheader in chosen_subheaders:
+            canonical_header.append(
+                f"{period}/{subheader}" if subheader else period
+            )
+
+    reconstructed = [canonical_header]
+    changed = False
+    total_values = group_width * period_count
+    for row in data_rows:
+        label_index = _row_label_index(row)
+        if label_index is None:
+            continue
+        label = str(row[label_index] or "").strip()
+        if not label:
+            continue
+        row_number = ""
+        if label_index > 0:
+            previous = str(row[label_index - 1] or "").strip()
+            if _ROW_NUMBER_RE.fullmatch(previous):
+                row_number = previous
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if str(cell or "").strip()
+        ]
+        if not values and not row_number:
+            continue
+        values = [*values, *[""] * max(0, total_values - len(values))][:total_values]
+        reconstructed.append([row_number, label, *values])
+        changed = True
+    return reconstructed if changed else rows
+
+
+def _reconstruct_logical_columns(
+    rows: list[list[str]],
+) -> list[list[str]]:
+    """Recover logical columns from PDF tables with merged header cells.
+
+    Some reports expose a visually 3-column table as 5-8 pdfplumber columns:
+    label and values alternate between boundary columns. This reconstructs
+    the grid from the period headers and the numeric values in each data row.
+    It is deliberately skipped unless the header/data counts agree exactly.
+    """
+    rebuilt = _reconstruct_period_subheader_columns(rows)
+    if rebuilt is not rows:
+        return rebuilt
+    if len(rows) < 3:
+        return rows
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:12])
+            if any(
+                token in "".join(str(cell) for cell in row)
+                for token in ("指标名称", "项目", "指标")
+            )
+        ),
+        0,
+    )
+    header_row = rows[header_index]
+    period_headers = _period_header_cells(header_row)
+    # Look at the next header line for a split forecast header such as
+    # "基本情景下" / "下季度预测数".
+    if header_index + 1 < len(rows):
+        next_periods = _period_header_cells(rows[header_index + 1])
+        if next_periods and len(next_periods) <= len(period_headers):
+            period_headers.extend(
+                item for item in next_periods if item not in period_headers
+            )
+    if len(period_headers) < 2:
+        return rows
+
+    data_rows: list[tuple[list[str], list[str]]] = []
+    matched = 0
+    for source in rows[header_index + 1:]:
+        row = list(source)
+        label_index = _row_label_index(row)
+        if label_index is None:
+            data_rows.append(([], []))
+            continue
+        values = [
+            str(cell or "").strip()
+            for cell in row[label_index + 1:]
+            if _is_numeric_cell(cell)
+        ]
+        labels = [str(row[label_index] or "").strip()]
+        if len(values) == len(period_headers) and labels[0]:
+            data_rows.append((labels, values))
+            matched += 1
+        else:
+            data_rows.append((labels, values))
+    if matched < 2:
+        return rows
+    # Only reconstruct if the majority of populated data rows agree with
+    # the period header count; single rows with blank trailing values should
+    # not block the whole table.
+    populated = sum(1 for labels, values in data_rows if values)
+    if matched < max(2, populated * 0.6):
+        return rows
+
+    header_label = next(
+        (
+            str(cell or "").strip()
+            for cell in header_row
+            if str(cell or "").strip()
+        ),
+        "指标名称",
+    )
+    if "指标" not in header_label and "项目" not in header_label:
+        header_label = "指标名称"
+    reconstructed = [[header_label, *period_headers]]
+    for labels, values in data_rows:
+        if not labels and not values:
+            continue
+        label = labels[0] if labels else ""
+        reconstructed.append(
+            [label, *values[: len(period_headers)]]
+            + [""] * max(0, len(period_headers) - len(values))
+        )
+    return reconstructed
 def _repair_solvency_main(rows: list[list[str]]) -> list[list[str]]:
     repaired = [["指标名称", "本季度末数", "上季度末数", "下季度末预测数"]]
     capital_component_labels = (
@@ -317,6 +783,20 @@ def _slice_target_rows(
         start_index = max(0, marker_index - 1) if marker_index else 0
 
     end_index = len(rows)
+    if str(config.get("boundary_end_mode", "") or "").strip() == "page_tail":
+        # Operating-metrics tables often have no explicit final row on the
+        # first page.  Keep every row until the next section (or page bottom)
+        # instead of stopping at the first "综合成本率" sub-item.
+        stop_terms = _profile_terms(config, "stop_terms")
+        stop_index = next(
+            (
+                index
+                for index in range(start_index + 1, len(rows))
+                if any(term in row_texts[index] for term in stop_terms)
+            ),
+            None,
+        )
+        return rows[start_index:(stop_index if stop_index is not None else len(rows))]
     profile_end_markers = _profile_terms(config, "end_item_terms")
     end_markers = profile_end_markers or TABLE_END_MARKERS.get(table_id, ())
     for index in range(start_index + 1, len(rows)):
@@ -433,7 +913,11 @@ def page_table_candidates(
             tables = []
         for rows in tables:
             raw_index += 1
-            cleaned = _slice_target_rows(table_id, _clean_rows(rows), config)
+            cleaned_rows, wrap_repairs = _merge_wrapped_table_rows(
+                _clean_rows(rows)
+            )
+            cleaned_rows = _reconstruct_logical_columns(cleaned_rows)
+            cleaned = _slice_target_rows(table_id, cleaned_rows, config)
             if len(cleaned) < 2:
                 continue
             signatures = TABLE_SIGNATURES.get(table_id, ())
@@ -449,6 +933,10 @@ def page_table_candidates(
             score, evidence = _candidate_quality(table_id, cleaned, strategy)
             if score < 0:
                 continue
+            if wrap_repairs:
+                evidence = (
+                    f"{evidence}；已合并{len(wrap_repairs)}个换行标签片段"
+                )
             # ★ Profile 配置加权：一页多表时用目标表自己的表名/内容词/表头词
             #   把"真正的目标表"排在前面，并用排除项压掉相邻表的候选。
             if config:
@@ -495,6 +983,7 @@ def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
     best_tables: list[list[list[str]]] = []
     best_score = -1.0
     best_strategy = ""
+    wrap_repair_count = 0
     for strategy, settings in _PAGE_STRATEGIES:
         try:
             raw_tables = page.extract_tables(table_settings=settings) or []
@@ -505,6 +994,11 @@ def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
         seen: set[str] = set()
         for raw_rows in raw_tables:
             rows = _clean_rows(raw_rows)
+            if strategy == "文字对齐识别":
+                rows = _merge_split_cjk_label(rows)
+            rows, wrap_repairs = _merge_wrapped_table_rows(rows)
+            rows = _reconstruct_logical_columns(rows)
+            wrap_repair_count += len(wrap_repairs)
             if len(rows) < 2:
                 continue
             width = max((len(row) for row in rows), default=0)
@@ -518,6 +1012,30 @@ def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
 
         if not cleaned_tables:
             continue
+        if strategy == "线框识别":
+            usable_numeric_cells = sum(
+                bool(re.search(r"\d", cell))
+                for table in cleaned_tables
+                for row in table
+                for cell in row
+                if cell
+            )
+            if usable_numeric_cells >= 2:
+                # 线框结果与 PDF 的真实列边界一致；文字对齐结果容易把
+                # 千分位金额和标签首字拆成独立列，因此不再让它仅凭“数字
+                # 单元格更多”胜出。
+                return (
+                    cleaned_tables,
+                    (
+                        f"整页全表（线框识别｜共{len(cleaned_tables)}张表"
+                        + (
+                            f"｜已合并{wrap_repair_count}个换行标签片段"
+                            if wrap_repair_count
+                            else ""
+                        )
+                        + "）"
+                    ),
+                )
         numeric_cells = sum(
             bool(re.search(r"\d", cell))
             for table in cleaned_tables
@@ -542,7 +1060,15 @@ def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
         return [], "整页全表提取未识别到可用表格"
     return (
         best_tables,
-        f"整页全表（{best_strategy}｜共{len(best_tables)}张表）",
+        (
+            f"整页全表（{best_strategy}｜共{len(best_tables)}张表"
+            + (
+                f"｜已合并{wrap_repair_count}个换行标签片段"
+                if wrap_repair_count
+                else ""
+            )
+            + "）"
+        ),
     )
 
 

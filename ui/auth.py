@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hmac
 import os
+import secrets
+import time
+from threading import Lock
 
 import streamlit as st
 
@@ -13,6 +16,78 @@ from .config import (
     NORMAL_USER_ROLE,
     PROJECT_MEMBER_ROLE,
 )
+
+_SESSION_QUERY_KEY = "solvency_session"
+_SESSION_TTL_SECONDS = 12 * 60 * 60
+_SESSION_STORE: dict[str, dict[str, object]] = {}
+_SESSION_STORE_LOCK = Lock()
+
+
+def _purge_expired_sessions() -> None:
+    now = time.time()
+    with _SESSION_STORE_LOCK:
+        expired = [
+            token
+            for token, record in _SESSION_STORE.items()
+            if float(record.get("expires_at", 0)) <= now
+        ]
+        for token in expired:
+            _SESSION_STORE.pop(token, None)
+
+
+def _query_session_token() -> str:
+    value = st.query_params.get(_SESSION_QUERY_KEY, "")
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _write_query_session_token(token: str | None) -> None:
+    if token:
+        st.query_params[_SESSION_QUERY_KEY] = token
+        return
+    params = dict(st.query_params)
+    params.pop(_SESSION_QUERY_KEY, None)
+    st.query_params.clear()
+    if params:
+        st.query_params.update(params)
+
+
+def _persist_current_login() -> None:
+    """Keep login state across browser refreshes without writing secrets to disk."""
+    token = secrets.token_urlsafe(32)
+    with _SESSION_STORE_LOCK:
+        _SESSION_STORE[token] = {
+            "expires_at": time.time() + _SESSION_TTL_SECONDS,
+            "user_role": st.session_state.get("user_role"),
+            "llm_provider": st.session_state.get("llm_provider", ""),
+            "llm_base_url": st.session_state.get("llm_base_url", ""),
+            "llm_model": st.session_state.get("llm_model", ""),
+            "llm_api_key": st.session_state.get("llm_api_key", ""),
+        }
+    st.session_state["_session_token"] = token
+    _write_query_session_token(token)
+
+
+def _restore_login_from_query() -> bool:
+    _purge_expired_sessions()
+    token = _query_session_token()
+    if not token:
+        return False
+    with _SESSION_STORE_LOCK:
+        record = _SESSION_STORE.get(token)
+        record = dict(record) if record else None
+    if not record or float(record.get("expires_at", 0)) <= time.time():
+        _write_query_session_token(None)
+        return False
+    st.session_state["_session_token"] = token
+    st.session_state.logged_in = True
+    st.session_state.user_role = record.get("user_role")
+    st.session_state.llm_provider = record.get("llm_provider", "")
+    st.session_state.llm_base_url = record.get("llm_base_url", "")
+    st.session_state.llm_model = record.get("llm_model", "")
+    st.session_state.llm_api_key = record.get("llm_api_key", "")
+    return True
 
 
 def initialize_login_state() -> None:
@@ -33,6 +108,8 @@ def initialize_login_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
+    if not st.session_state.logged_in:
+        _restore_login_from_query()
 
 
 def _provider_name_from_base_url(base_url: str) -> str:
@@ -55,8 +132,16 @@ def _expected_login_code(role: str) -> str:
 
 
 def logout() -> None:
+    token = str(
+        st.session_state.get("_session_token", "") or _query_session_token()
+    ).strip()
+    if token:
+        with _SESSION_STORE_LOCK:
+            _SESSION_STORE.pop(token, None)
+    _write_query_session_token(None)
     st.session_state.logged_in = False
     st.session_state.user_role = None
+    st.session_state.pop("_session_token", None)
     st.session_state.llm_api_key = ""
     st.session_state.login_api_key_input = ""
     st.session_state.login_security_code = ""
@@ -177,6 +262,7 @@ def render_login_page() -> None:
                 st.session_state.llm_api_key = str(st.session_state.login_api_key_input).strip()
                 st.session_state.pop("workflow_main_tab", None)
                 st.session_state.pop("profile_settings_tabs", None)
+                _persist_current_login()
                 st.rerun()
 
         st.markdown(

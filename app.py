@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from ui.auth import initialize_login_state, logout, render_login_page
@@ -26,13 +27,14 @@ from ui.report_pages import (
     render_industry_report_workspace,
 )
 from ui.session import initialize_state
-from ui.step0_monitor import render_monitor_tab
+from ui.settings_transfer import render_workflow_settings_transfer
+from ui.step0_monitor import load_monitor_companies, render_monitor_tab
 from ui.step1_locator import render_locator_tab
 from ui.step2_extraction import render_extraction_tab
 from ui.step3_standardization import render_standardization_tab
 from ui.step4_validation import render_validation_tab
 from ui.step5_integration import render_step5_review, render_integration_tab
-from ui.step6_analysis import render_analysis_tab
+from ui.step6_analysis import render_analysis_sidebar, render_analysis_tab
 from ui.theme import render_analysis_tab_styles, render_app_styles
 
 
@@ -77,6 +79,10 @@ def main() -> None:
         if is_project_member
         else WORKFLOW_TAB_LABELS[6:8]
     )
+    requested_workflow_tab = st.session_state.get(
+        "workflow_main_tab",
+        visible_workflow_labels[0],
+    )
     visible_tabs = st.tabs(
         visible_workflow_labels,
         default=visible_workflow_labels[0],
@@ -90,57 +96,96 @@ def main() -> None:
     )
     active_workflow_tab = st.session_state.get(
         "workflow_main_tab",
-        visible_workflow_labels[0],
+        requested_workflow_tab,
     )
+    if requested_workflow_tab in visible_workflow_labels:
+        active_workflow_tab = requested_workflow_tab
     analysis_tabs_active = active_workflow_tab in ANALYSIS_TAB_LABELS
     if analysis_tabs_active:
         render_analysis_tab_styles()
+    render_workflow_settings_transfer(active_profile, active_workflow_tab)
 
+    # Streamlit 的 st.tabs 会执行所有页签内容。批量上传 89 份 PDF 时，
+    # 让未激活的 STEP 也反复读取文件和处理数据会造成明显卡顿，因此只在
+    # 当前页签真正激活时渲染对应工作流。
     if is_project_member:
-        # 指标字典在 STEP3/STEP4/STEP5 之间共用，只解析一次。
-        taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
-        with tabs[0]:
-            monitor_companies = render_monitor_tab(active_profile)
-        with tabs[1]:
-            render_locator_tab(active_profile)
-        with tabs[2]:
-            render_extraction_tab(active_profile)
-        with tabs[3]:
-            render_standardization_tab(active_profile, taxonomy, is_project_member)
-        with tabs[4]:
-            render_validation_tab(active_profile, rules_path, taxonomy)
-        with tabs[5]:
-            integration_mode = render_integration_tab(
-                active_profile, monitor_companies, taxonomy
+        if active_workflow_tab == WORKFLOW_TAB_LABELS[0]:
+            with tabs[0]:
+                render_monitor_tab(active_profile)
+        elif active_workflow_tab == WORKFLOW_TAB_LABELS[1]:
+            with tabs[1]:
+                render_locator_tab(active_profile)
+        elif active_workflow_tab == WORKFLOW_TAB_LABELS[2]:
+            with tabs[2]:
+                render_extraction_tab(active_profile)
+        elif active_workflow_tab == WORKFLOW_TAB_LABELS[3]:
+            taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
+            with tabs[3]:
+                render_standardization_tab(active_profile, taxonomy, is_project_member)
+        elif active_workflow_tab == WORKFLOW_TAB_LABELS[4]:
+            taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
+            with tabs[4]:
+                render_validation_tab(active_profile, rules_path, taxonomy)
+        elif active_workflow_tab == WORKFLOW_TAB_LABELS[5]:
+            taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
+            with tabs[5]:
+                integration_mode = render_integration_tab(
+                    active_profile,
+                    load_monitor_companies(),
+                    taxonomy,
+                )
+            render_step5_review(
+                st.session_state.integration_preview,
+                integration_mode,
+                bool(tabs[5].open),
             )
-        preview = st.session_state.integration_preview
-        step5_is_open = bool(tabs[5].open)
-        render_step5_review(preview, integration_mode, step5_is_open)
 
-    raw_analysis_source = (
-        st.session_state.integrated_data
-        if not st.session_state.integrated_data.empty
-        else st.session_state.standard_data
-    )
-    shared_analysis_source, _ = prepare_visualization_source(
-        raw_analysis_source,
-        active_profile.profile_id,
-    )
-
-    with tabs[6]:
-        render_analysis_tab(
-            active_profile, is_project_member, analysis_tabs_active, active_workflow_tab
+    analysis_source = pd.DataFrame()
+    if active_workflow_tab in (
+        WORKFLOW_TAB_LABELS[6],
+        WORKFLOW_TAB_LABELS[7],
+        WORKFLOW_TAB_LABELS[8],
+    ):
+        raw_analysis_source = (
+            st.session_state.integrated_data
+            if not st.session_state.integrated_data.empty
+            else st.session_state.standard_data
         )
-    with tabs[7]:
-        if active_workflow_tab == WORKFLOW_TAB_LABELS[7]:
+        analysis_source, _ = prepare_visualization_source(
+            raw_analysis_source,
+            active_profile.profile_id,
+        )
+
+    if active_workflow_tab == WORKFLOW_TAB_LABELS[6]:
+        with tabs[6]:
+            render_analysis_tab(
+                active_profile,
+                is_project_member,
+                analysis_tabs_active,
+                active_workflow_tab,
+            )
+    elif active_workflow_tab == WORKFLOW_TAB_LABELS[7]:
+        render_analysis_sidebar(
+            active_profile,
+            is_project_member,
+            analysis_source,
+        )
+        with tabs[7]:
             company_report_source = st.session_state.step6_analysis_source
             if company_report_source.empty:
-                company_report_source = shared_analysis_source
+                company_report_source = analysis_source
             render_company_report_workspace(company_report_source)
-    if is_project_member:
+    elif (
+        is_project_member
+        and active_workflow_tab == WORKFLOW_TAB_LABELS[8]
+    ):
+        render_analysis_sidebar(
+            active_profile,
+            is_project_member,
+            analysis_source,
+        )
         with tabs[8]:
-            if active_workflow_tab == WORKFLOW_TAB_LABELS[8]:
-                render_industry_report_workspace(shared_analysis_source)
+            render_industry_report_workspace(analysis_source)
 
 
 if __name__ == "__main__":

@@ -45,14 +45,15 @@ def locate_tables_hybrid(
     """Locate target disclosures through rules, optionally with LLM support.
 
     mode="hybrid" keeps the historical primary-LLM behaviour. mode="rule"
-    runs the offline path only (boundary analysis + radar + directory); when
-    llm_verify=True the text model is called once afterwards to cross-check
-    the rule result instead of contributing pages itself.
+    runs the offline path only (boundary analysis + radar + directory);
+    mode="rule_vision" keeps text pages on the rule path and sends only
+    low-text/image pages to the vision model.
     """
     mode = (mode or "hybrid").lower()
-    if mode not in {"hybrid", "rule"}:
-        raise ValueError("mode must be 'hybrid' or 'rule'")
+    if mode not in {"hybrid", "rule", "rule_vision"}:
+        raise ValueError("mode must be 'hybrid', 'rule' or 'rule_vision'")
     rule_mode = mode == "rule"
+    rule_vision_mode = mode == "rule_vision"
     llm_configured = all(str(value or "").strip() for value in (api_key, base_url, model))
     verify_with_llm = rule_mode and llm_verify and llm_configured
 
@@ -103,7 +104,7 @@ def locate_tables_hybrid(
     )
     ai_error = ""
     ai_result: dict = {}
-    run_text_llm = (not rule_mode) or verify_with_llm
+    run_text_llm = mode == "hybrid" or verify_with_llm
     if run_text_llm and searchable_pages and llm_configured:
         try:
             content = _call_chat(
@@ -283,6 +284,11 @@ def locate_tables_hybrid(
         status_parts.append(
             "已完成规则法定位：本地边界分析＋表格雷达＋目录换算"
             + ("＋大模型复核" if verify_with_llm else "（未调用大模型）")
+        )
+    elif rule_vision_mode:
+        status_parts.append(
+            "已完成混合定位：可检索文字页使用规则法，"
+            "低文本/图片页使用视觉大模型"
         )
     else:
         if low_text_pages:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from threading import Lock
+from types import SimpleNamespace
 
 import fitz
 import pandas as pd
@@ -13,7 +15,7 @@ import streamlit as st
 from services.report_profiles import ReportProfile
 from services.solvency_ai_table_extractor import PageGrid, build_pdf_grids, extraction_logs_frame
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
-from services.solvency_normalizer import STANDARD_COLUMNS
+from services.solvency_normalizer import STANDARD_COLUMNS, narrow_table_view
 from services.batch_extraction import (
     FlexibleTable,
     detect_table_unit,
@@ -34,8 +36,16 @@ from services.solvency_rule_table_extractor import (
     page_has_searchable_text,
     preview_page_engine,
 )
+from services.batch_workflow import document_pdf_bytes, extract_document_tables
 from services.solvency_table_extractor import TABLE_SIGNATURES
 
+from .batch_workspace import (
+    batch_documents,
+    failed_batch_companies,
+    render_batch_status,
+    replace_document,
+    selected_batch_document,
+)
 from .cache import read_gold_manifest, render_pdf_page
 from .helpers import dedupe_column_names
 from .session import llm_credentials_ready
@@ -239,6 +249,11 @@ def build_tables_from_page_results(
             None,
         )
         target_terms = _target_frame_terms(table_match, base_table_id)
+        table_config = (
+            dict(table_match.table_config)
+            if table_match is not None and isinstance(table_match.table_config, dict)
+            else {}
+        )
         # 按页码排序
         page_dfs.sort(key=lambda x: x[0])
 
@@ -252,6 +267,7 @@ def build_tables_from_page_results(
         # ============================================================
         _all_rows: list[list] = []
         table_blocks: list[dict] = []
+        _last_page = None
         for _page, _payload, *_ in page_dfs:
             if _payload is None:
                 continue
@@ -287,11 +303,16 @@ def build_tables_from_page_results(
                     if _frame_matches_target(rows, target_terms)
                 ]
                 _page_frames = _matched_frames or _frame_rows
-            if whole_page:
-                table_blocks.extend(
-                    {"page": int(_page), "rows": rows}
-                    for rows in _page_frames
-                )
+            # 无论是否开启“整页全表”，都为每个页内帧保留独立表块；
+            # STEP3 只消费 table_blocks，不再依赖合并表的全局表头。
+            table_blocks.extend(
+                {
+                    "page": int(_page),
+                    "rows": rows,
+                    "unit": detect_table_unit(rows) or "",
+                }
+                for rows in _page_frames
+            )
             if not _page_frames:
                 continue
             # 一页多表时仍合成同一张中间表展示，只在表与表之间插入
@@ -300,6 +321,14 @@ def build_tables_from_page_results(
                 (len(row) for rows in _page_frames for row in rows),
                 default=0,
             )
+            # ★ P2：跨页时插入页分隔行，Step2 合并表能看清每页边界；
+            #   STEP3 仍优先使用 table_blocks，不受该展示行影响。
+            if _all_rows and _last_page is not None and _page != _last_page:
+                _all_rows.append(
+                    [f"【第{_page}页表格分块】"]
+                    + [""] * max(0, _page_width - 1)
+                )
+            _last_page = _page
             for _frame_index, _rows in enumerate(_page_frames):
                 if _frame_index:
                     _all_rows.append(
@@ -322,11 +351,31 @@ def build_tables_from_page_results(
             if looks_like_header(_candidate):
                 _header_candidates.append((_i, _candidate))
 
+        _canonical_headers = [
+            str(item).strip()
+            for item in (table_config.get("canonical_headers") or ())
+            if str(item).strip()
+        ]
         if _header_candidates:
             # 选"丰富度最高"的作为统一表头
             _start_idx, _header_row = max(
                 _header_candidates, key=lambda item: header_richness(item[1])
             )
+        elif _canonical_headers:
+            # Some non-life reports put the section title at the top of the
+            # extracted grid and omit the visible header.  Do not promote that
+            # title to the header: use the profile's canonical header and keep
+            # every extracted row as data.
+            _width = max((len(row) for row in _all_rows), default=0)
+            _header_row = [
+                canonical_header_cell(
+                    _canonical_headers[index]
+                    if index < len(_canonical_headers)
+                    else f"列{index + 1}"
+                )
+                for index in range(_width)
+            ]
+            _start_idx = -1
         else:
             _start_idx = 0
             _header_row = [canonical_header_cell(c) for c in _all_rows[0]]
@@ -499,7 +548,7 @@ def build_tables_from_page_results(
             unit=table_unit,
             unit_source=table_unit or "未识别",
             source_grid_raw=grid_raw,
-            table_blocks=table_blocks if whole_page else [],
+            table_blocks=table_blocks,
         )
         raw_tables.append(table_obj)
     return raw_tables
@@ -838,6 +887,58 @@ def _frame_factory(rows: list[list[str]], unit: str = ""):
     return to_frame
 
 
+_BLOCK_SEPARATOR_RE = re.compile(
+    r"^【.*(?:整页第\d+张表|第\d+页表格分块|表格分块).*】$"
+)
+
+
+def _rebuild_table_blocks(
+    rows: list[list[str]],
+    page: int,
+    unit: str = "",
+) -> list[dict]:
+    """人工编辑后重建可定位表头的数据块，保留单位与分块分隔行信息。
+
+    旧的 table_blocks 对应的是编辑前网格，不能继续使用；但也不能直接
+    清空，否则 STEP3 会退回旧合并表、忽略人工修正后的表头。这里按
+    “【整页第N张表】/【第N页表格分块】”分隔行重建；没有分隔行时整张表
+    作为一个块。分隔行本身不写入数据，避免污染表头识别。
+    """
+    blocks: list[dict] = []
+    current: list[list[str]] = []
+    current_page = int(page or 1)
+
+    def flush() -> None:
+        if not current:
+            return
+        block = {
+            "page": current_page,
+            "rows": [list(row) for row in current],
+        }
+        if unit and unit != "未识别":
+            block["unit"] = unit
+        blocks.append(block)
+
+    for row in rows:
+        cells = [str(cell) for cell in row]
+        first = next((cell.strip() for cell in cells if cell.strip()), "")
+        if _BLOCK_SEPARATOR_RE.match(first):
+            flush()
+            current = []
+            page_match = re.search(r"第(\d+)页", first)
+            if page_match:
+                current_page = int(page_match.group(1))
+            continue
+        current.append(cells)
+    flush()
+    if not blocks:
+        blocks = [{
+            "page": int(page or 1),
+            "rows": [list(row) for row in rows],
+        }]
+    return blocks
+
+
 def persist_table_rows(table, rows: list[list[str]]) -> None:
     """把编辑后的网格写回中间表对象，并刷新表格快照。"""
     # 注意：FlexibleTable 对未知字段一律返回默认值，因此这里只能用 vars() 判断，
@@ -846,9 +947,13 @@ def persist_table_rows(table, rows: list[list[str]]) -> None:
         table.original_rows = [list(row) for row in table.rows]
     table.rows = [list(row) for row in rows]
     table.to_frame = _frame_factory(table.rows, str(getattr(table, "unit", "") or ""))
-    # 人工修改后，原页内表块已不再对应编辑后的网格；Step3 直接使用
-    # 编辑后的合并表，避免旧表头覆盖人工修改。
-    table.table_blocks = []
+    # ★ P0-4：保留可定位表头的数据块；按编辑后的内容重建，既尊重人工修改，
+    #   又不让 STEP3 完全回退到旧的合并表。
+    table.table_blocks = _rebuild_table_blocks(
+        table.rows,
+        int(getattr(table, "page", 1) or 1),
+        str(getattr(table, "unit", "") or ""),
+    )
     table.edited = True
 
 
@@ -908,6 +1013,62 @@ def _record_edit_event(table, action: str, result: str) -> None:
             "结果": result,
         }
     )
+
+
+def _render_table_blocks_view(table) -> None:
+    """按页内表块查看，避免跨页合并表把不同页表头混在一起。"""
+    blocks = list(getattr(table, "table_blocks", []) or [])
+    if not blocks:
+        return
+    headers = []
+    for block in blocks:
+        rows = _normalized_rows(block.get("rows", []) if isinstance(block, dict) else block)
+        headers.append(tuple(rows[0]) if rows else ())
+    if len(set(headers)) > 1:
+        st.info(
+            "检测到各页表头不完全一致：下方按页内表块分别展示，"
+            "STEP3 也会按表块独立识别期间和单位。",
+            icon=":material/info:",
+        )
+    with st.expander("按页内表块查看（表头独立）", expanded=False):
+        st.caption(
+            "每个表块保留自己的表头和数据区，跨页续块没有表头时会继承上一块。"
+        )
+        for block_index, block in enumerate(blocks, start=1):
+            rows = _normalized_rows(
+                block.get("rows", []) if isinstance(block, dict) else block
+            )
+            if not rows:
+                continue
+            page = block.get("page", "") if isinstance(block, dict) else ""
+            width = max((len(row) for row in rows), default=0)
+            header_text = "".join(rows[0])
+            has_header = any(
+                token in header_text
+                for token in (
+                    "项目", "指标名称", "行次", "序号",
+                    "本季度", "上季度", "期末", "期初", "本年累计",
+                )
+            )
+            if has_header:
+                frame = pd.DataFrame(
+                    [row for row in rows[1:]],
+                    columns=dedupe_column_names(rows[0]),
+                )
+            else:
+                frame = pd.DataFrame(
+                    rows,
+                    columns=[f"列{index + 1}" for index in range(width)],
+                )
+            unit = ""
+            if isinstance(block, dict):
+                unit = str(block.get("unit") or "").strip()
+            unit = unit or str(getattr(table, "unit", "") or "")
+            caption = f"第 {page} 页 · 表块 {block_index} · {max(len(rows) - 1, 0)} 条数据行"
+            if unit and unit != "未识别":
+                caption += f" · 单位：{unit}"
+            st.caption(caption)
+            st.dataframe(frame, width="stretch", hide_index=True)
 
 
 def _render_table_editor(tables: list, selected_index: int) -> None:
@@ -1102,7 +1263,91 @@ def _reextract_table(tables: list, index: int, method_option: str) -> None:
     st.rerun()
 
 
-def _render_extraction_results() -> None:
+def _render_step3_preview(active_profile: ReportProfile) -> None:
+    """只读 STEP3 视图：在 STEP2 内提前看标准窄表与诊断。"""
+    tables = list(st.session_state.raw_tables or [])
+    if not tables:
+        return
+    st.markdown("##### STEP3 视图预览")
+    st.caption("按当前中间表只读运行一次 STEP3，不会覆盖正式标准数据。")
+    token = tuple(_table_snapshot(table) for table in tables)
+    key = f"step2_step3_preview_{active_profile.profile_id}"
+    if st.button("生成 / 刷新 STEP3 视图", key=f"{key}_button"):
+        try:
+            from .profile_settings import resolve_profile_paths, resolve_profile_taxonomy
+            from services.solvency_step3_standardizer import standardize_to_target, step3_metric_catalog
+
+            taxonomy_path, _ = resolve_profile_paths(active_profile)
+            taxonomy = resolve_profile_taxonomy(active_profile, taxonomy_path)
+            derived = active_profile.profile_id == "LIFE_SOLVENCY"
+            catalog = step3_metric_catalog(taxonomy, include_derived=derived)
+            meta = dict(st.session_state.metadata or {})
+            meta["公司"] = (
+                str(meta.get("公司") or meta.get("公司名称") or "").strip()
+                or Path(str(st.session_state.pdf_name or "")).stem
+            )
+            meta["来源文件"] = str(st.session_state.pdf_name or "")
+            result = standardize_to_target(
+                tables,
+                taxonomy,
+                meta,
+                active_profile.company_types[0],
+                catalog,
+                report_profile_id=active_profile.profile_id,
+                allowed_company_types=active_profile.company_types,
+                include_derived=derived,
+            )
+            st.session_state[key] = {
+                "token": token,
+                "data": result.data,
+                "summary": result.target_summary,
+                "diagnostics": result.diagnostics,
+                "warnings": list(result.warnings),
+            }
+        except Exception as exc:
+            st.error(f"STEP3 视图生成失败：{exc}")
+    preview = st.session_state.get(key)
+    if not preview:
+        st.info("点击上方按钮生成预览。")
+        return
+    if preview.get("token") != token:
+        st.warning("中间表已修改，当前预览是旧版本，请刷新。")
+    data = preview.get("data")
+    summary = preview.get("summary")
+    diagnostics = preview.get("diagnostics")
+    for warning in preview.get("warnings", []):
+        st.warning(warning)
+    filled = 0
+    conflicts = 0
+    if isinstance(summary, pd.DataFrame) and not summary.empty:
+        if "填报状态" in summary.columns:
+            filled = int(summary["填报状态"].eq("已填报").sum())
+        if "诊断状态" in summary.columns:
+            conflicts = int(summary["诊断状态"].eq("口径冲突").sum())
+    with st.container(horizontal=True):
+        st.metric("窄表记录", len(data) if isinstance(data, pd.DataFrame) else 0, border=True)
+        st.metric("已填报指标", filled, border=True)
+        st.metric("口径冲突指标", conflicts, border=True)
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        st.dataframe(narrow_table_view(data).head(200), width="stretch", hide_index=True)
+    if isinstance(diagnostics, pd.DataFrame) and not diagnostics.empty:
+        with st.expander("查看 STEP3 视图诊断"):
+            st.dataframe(diagnostics, width="stretch", hide_index=True)
+    if (
+        isinstance(summary, pd.DataFrame)
+        and not summary.empty
+        and "诊断状态" in summary.columns
+    ):
+        attention = summary[
+            summary["填报状态"].eq("未填报")
+            | summary["诊断状态"].eq("口径冲突")
+        ]
+        if not attention.empty:
+            with st.expander("查看未填报 / 口径冲突指标"):
+                st.dataframe(attention, width="stretch", hide_index=True)
+
+
+def _render_extraction_results(active_profile: ReportProfile | None = None) -> None:
     """STEP2：中间表预览、金标准对比与下载。"""
     if st.session_state.raw_tables:
         tables = st.session_state.raw_tables
@@ -1146,6 +1391,9 @@ def _render_extraction_results() -> None:
             st.caption(f"自动校验依据：{selected_table.evidence}")
 
         _render_table_editor(tables, selected_table_index)
+        _render_table_blocks_view(selected_table)
+        if active_profile is not None:
+            _render_step3_preview(active_profile)
 
         table_col, pdf_col = st.columns([1.15, 1], gap="large")
         with table_col:
@@ -1199,7 +1447,7 @@ def _render_extraction_results() -> None:
             )
 
 
-def render_extraction_tab(active_profile: ReportProfile) -> None:
+def _render_extraction_single_tab(active_profile: ReportProfile) -> None:
     """STEP2 表格智能转换。"""
     st.subheader("表格智能转换")
     st.caption(
@@ -1244,7 +1492,279 @@ def render_extraction_tab(active_profile: ReportProfile) -> None:
             df = extraction_logs_frame(logs)
         st.dataframe(df, width="stretch", hide_index=True)
         _render_number_quality_panel()
-        _render_extraction_results()
+        _render_extraction_results(active_profile)
+
+
+def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
+    """STEP2 batch: rule extraction by default, shared results for STEP3."""
+    st.subheader("批量表格提取")
+    st.caption(
+        "批量默认让文字页走规则法，图片型页面自动转视觉大模型；"
+        "可在下方关闭图片页视觉兜底。所有公司共用 STEP1 已确认的页码。"
+    )
+    documents = render_batch_status(active_profile, detail_key="extraction")
+    if not documents:
+        st.info("请先在 STEP1 的“批量处理（多公司）”中上传 PDF 并确认页码。")
+        return
+
+    with st.expander("批量提取设置", expanded=True):
+        method = st.selectbox(
+            "提取方式",
+            [MODE_RULE, MODE_AUTO, MODE_LLM, MODE_VISION],
+            key="batch_extraction_method",
+            help=(
+                "默认“全部规则法”。智能模式仅对规则法失败的文字页或扫描页调用模型；"
+                "全部大模型/图片模式会让 token 消耗随文件数和页数线性增长。"
+            ),
+        )
+        allow_llm_fallback = st.toggle(
+            "规则法失败时允许大模型兜底",
+            key="batch_allow_llm_fallback",
+            disabled=method not in {MODE_AUTO, MODE_LLM},
+            help="默认关闭。批量开启前请评估文件数、页数和模型单价。",
+        )
+        scan_vision_fallback = st.toggle(
+            "图片型页面自动使用视觉大模型",
+            key="batch_scan_vision_fallback",
+            help=(
+                "仅对没有可检索文字的页面调用视觉模型；文字页仍走规则法。"
+                "这是批量处理扫描版 PDF 的必要兜底。"
+            ),
+        )
+        if scan_vision_fallback and not llm_credentials_ready():
+            st.warning(
+                "当前未配置完整 AI 接口；图片型页面将无法识别，并在提取日志中标记失败。",
+                icon=":material/warning:",
+            )
+        whole_page = st.toggle(
+            "整页全表提取",
+            key="batch_whole_page",
+        )
+        concurrency_columns = st.columns(2)
+        with concurrency_columns[0]:
+            document_workers = st.slider(
+                "公司级并发数",
+                min_value=1,
+                max_value=4,
+                key="batch_document_workers",
+                help="同时处理多少家公司的 PDF；建议 2–3，视觉模型接口限流时降低。",
+            )
+        with concurrency_columns[1]:
+            workers = st.slider(
+                "每份 PDF 的页级并发数",
+                min_value=1,
+                max_value=12,
+                key="batch_workers",
+                help="单份 PDF 内部同时处理多少页；规则法可提高，视觉模型接口限流时降低。",
+            )
+        if method != MODE_RULE:
+            st.warning(
+                "当前不是纯规则法。批量运行会逐页调用大模型，token 消耗可能显著增加。",
+                icon=":material/warning:",
+            )
+        method_explanation = {
+            MODE_RULE: (
+                "规则法：文字页用 pdfplumber 线框/文字对齐；"
+                + ("图片页自动转视觉大模型。" if scan_vision_fallback else "图片页不调用模型。")
+            ),
+            MODE_AUTO: (
+                "混合方法：文字版页面先用规则法，规则失败后"
+                + ("允许" if allow_llm_fallback else "不调用")
+                + "大模型兜底；扫描版页面走视觉模型。"
+            ),
+            MODE_LLM: "大模型文本优先，必要时图片重试，Token 消耗较高。",
+            MODE_VISION: "全部页面转图片交给视觉模型，Token 消耗最高。",
+        }[method]
+        st.info(
+            f"当前批量提取逻辑：**{method}**\n\n{method_explanation}"
+        )
+
+    confirmed = [
+        (company, document)
+        for company, document in documents.items()
+        if document.get("pages_confirmed")
+    ]
+    def run_extraction(target_documents: list[tuple[str, dict]]) -> None:
+        nonlocal documents
+        if method in {MODE_LLM, MODE_VISION} and not llm_credentials_ready():
+            st.error("当前提取方式需要 AI 配置；请改用默认规则法。")
+            return
+        method_label = method + (
+            " + 图片页视觉兜底" if scan_vision_fallback else ""
+        )
+        progress = st.progress(0, text="正在批量提取…")
+        updated_documents = dict(documents)
+        api_key = st.session_state.llm_api_key
+        base_url = st.session_state.llm_base_url
+        model_name = st.session_state.llm_model
+        def extract_document(company: str, document: dict):
+            outcome = extract_document_tables(
+                company=company,
+                pdf_bytes=document_pdf_bytes(document),
+                matches=document.get("matches") or [],
+                method=method,
+                allow_llm_fallback=allow_llm_fallback,
+                vision_for_scanned_pages=scan_vision_fallback,
+                whole_page=whole_page,
+                api_key=api_key,
+                base_url=base_url,
+                model=model_name,
+                max_workers=workers,
+            )
+            return company, document, outcome
+
+        with ThreadPoolExecutor(
+            max_workers=max(1, int(document_workers))
+        ) as pool:
+            futures = {
+                pool.submit(extract_document, company, document): company
+                for company, document in target_documents
+            }
+            for index, future in enumerate(as_completed(futures), 1):
+                company = futures[future]
+                try:
+                    company, document, outcome = future.result()
+                except Exception as exc:
+                    document = documents[company]
+                    outcome = SimpleNamespace(
+                        tables=[],
+                        logs=[],
+                        status="异常",
+                        note=str(exc)[:300],
+                    )
+                updated = dict(document)
+                updated.update(
+                    {
+                        "raw_tables": outcome.tables,
+                        "extraction_logs": outcome.logs,
+                        "extraction_status": outcome.status,
+                        "extraction_note": outcome.note,
+                        "extraction_method": method_label,
+                        "standard_data": pd.DataFrame(columns=STANDARD_COLUMNS),
+                        "standard_summary": pd.DataFrame(),
+                        "standard_diagnostics": pd.DataFrame(),
+                        "standard_workbook_bytes": b"",
+                        "standard_status": "",
+                        "standard_note": "",
+                    }
+                )
+                updated_documents[company] = updated
+                replace_document(active_profile, company, updated)
+                progress.progress(
+                    index / max(len(target_documents), 1),
+                    text=(
+                        f"已提取 {index}/{len(target_documents)}：{company}"
+                        f"｜{outcome.status}｜{method_label}"
+                    ),
+                )
+        st.session_state.batch_documents = updated_documents
+        success_count = sum(
+            bool(document.get("raw_tables"))
+            for document in updated_documents.values()
+        )
+        st.session_state.batch_last_operation = (
+            f"批量提取完成：{success_count}/{len(updated_documents)} 份，逻辑：{method_label}"
+        )
+        failed_names = [
+            company
+            for company in (name for name, _ in target_documents)
+            if not updated_documents.get(company, {}).get("raw_tables")
+        ]
+        if failed_names:
+            st.error(
+                f"提取失败（{len(failed_names)} 家）：" + "、".join(failed_names)
+            )
+        else:
+            st.success(
+                f"批量提取完成：{success_count}/{len(updated_documents)} 份 PDF 取得中间表。"
+            )
+        documents = batch_documents(active_profile)
+
+    if st.button(
+        f"批量提取全部已确认文件（{len(confirmed)} 份）",
+        type="primary",
+        key="batch_extract_all_documents",
+        disabled=not confirmed,
+    ):
+        run_extraction(confirmed)
+
+    failed_documents = [
+        company
+        for company in failed_batch_companies(documents, "extraction")
+        if company in documents
+    ]
+    retry_names = st.multiselect(
+        "指定公司重新处理",
+        list(documents),
+        default=[name for name in failed_documents if name in documents],
+        key=f"batch_retry_companies_{active_profile.profile_id}",
+        help="可只选择一家失败公司重跑，不必重新处理整个批次。",
+    )
+    if st.button(
+        f"重新处理选中公司（{len(retry_names)} 家）",
+        key="batch_retry_selected_documents",
+        disabled=not retry_names,
+    ):
+        run_extraction(
+            [
+                (company, documents[company])
+                for company in retry_names
+                if company in documents
+            ]
+        )
+
+    current = selected_batch_document(
+        active_profile,
+        documents,
+        key_prefix="extraction",
+    )
+    if current is None:
+        return
+    tables = current.get("raw_tables") or []
+    if not tables:
+        st.info(
+            f"{current['company']} 尚无提取结果。"
+            f"{current.get('extraction_note', '')}"
+        )
+        return
+    st.markdown(f"#### 中间表预览：{current['company']}")
+    selected_index = st.selectbox(
+        "选择目标表",
+        range(len(tables)),
+        format_func=lambda index: (
+            f"{tables[index].table_name}｜第"
+            f"{','.join(map(str, tables[index].source_pages or [tables[index].page]))}页"
+        ),
+        key=f"batch_table_preview_{active_profile.profile_id}_{current['company']}",
+    )
+    table = tables[selected_index]
+    st.caption(
+        f"提取方式：{table.strategy}｜单位：{getattr(table, 'unit', '未识别')}"
+    )
+    st.dataframe(
+        table.to_frame(),
+        width="stretch",
+        hide_index=True,
+    )
+    logs = current.get("extraction_logs") or []
+    if logs:
+        with st.expander(f"提取日志（{len(logs)} 页）", expanded=False):
+            st.dataframe(
+                pd.DataFrame(logs),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+def render_extraction_tab(active_profile: ReportProfile) -> None:
+    """STEP2: single-file editor and multi-file extraction workspace."""
+    single_tab, batch_tab = st.tabs(
+        ["📄 单份处理（当前 PDF）", "🗂️ 批量处理（多公司）"]
+    )
+    with single_tab:
+        _render_extraction_single_tab(active_profile)
+    with batch_tab:
+        _render_extraction_batch_tab(active_profile)
 
 
 def _render_number_quality_panel() -> None:

@@ -10,8 +10,6 @@ from .batch_extraction import (
     FlexibleTable,
     convert_table_rows_to_wan,
     detect_table_unit,
-    extract_single_page,
-    extract_single_page_vision,
     sanitize_tree,
     sniff_unit_from_text,
 )
@@ -23,6 +21,7 @@ from .solvency_hybrid_pipeline import locate_tables_hybrid
 from .solvency_metric_registry import extend_taxonomy
 from .solvency_normalizer import load_taxonomy
 from .solvency_pdf_locator import PageMatch, extract_report_metadata
+from .solvency_rule_table_extractor import MODE_RULE, extract_page_with_method
 from .solvency_step3_standardizer import (
     result_workbook_bytes,
     standardize_to_target,
@@ -108,11 +107,19 @@ def build_context_from_profile(
     company_type_map: dict | None = None,
 ) -> BatchContext:
     """从 ReportProfile 构造批处理上下文（只读，可多线程共享）。"""
-    taxonomy = (
-        profile.taxonomy_frame()
-        if profile.field_dictionary
-        else load_taxonomy(str(profile.resource_path("normalization", "taxonomy_file")))
-    )
+    if profile.profile_id == "NON_LIFE_SOLVENCY":
+        # Keep batch standardization aligned with the full local taxonomy used
+        # by the single-file STEP3 path. The embedded Profile dictionary is a
+        # small subset and uses older wording such as "比率".
+        taxonomy = load_taxonomy(
+            str(profile.project_root / "config" / "solvency_taxonomy.xlsx")
+        )
+    else:
+        taxonomy = (
+            profile.taxonomy_frame()
+            if profile.field_dictionary
+            else load_taxonomy(str(profile.resource_path("normalization", "taxonomy_file")))
+        )
     include_derived = profile.profile_id == "LIFE_SOLVENCY"
     if include_derived:
         taxonomy = extend_taxonomy(taxonomy)
@@ -262,6 +269,9 @@ def locate_one_pdf_bytes(
     company_name: str,
     pdf_bytes: bytes,
     ctx: BatchContext,
+    *,
+    mode: str = "hybrid",
+    llm_verify: bool = False,
 ) -> dict:
     """只跑定位（STEP1），不提取也不标准化，返回结果供人工确认。"""
     result = {
@@ -269,8 +279,10 @@ def locate_one_pdf_bytes(
         "状态": "",
         "matches": [],
         "说明": "",
+        "metadata": {},
     }
     try:
+        result["metadata"] = extract_report_metadata(pdf_bytes)
         matches, locator_message = locate_tables_hybrid(
             pdf_bytes,
             ctx.feature_config,
@@ -278,6 +290,8 @@ def locate_one_pdf_bytes(
             base_url=ctx.base_url,
             model=ctx.model,
             profile_context=ctx.profile.locator_context(),
+            mode=mode,
+            llm_verify=llm_verify,
         )
         result["matches"] = list(matches)
         result["状态"] = "成功"
@@ -294,6 +308,10 @@ def process_one_pdf_bytes(
     pdf_bytes: bytes,
     ctx: BatchContext,
     page_overrides: dict[str, list[int]] | None = None,
+    *,
+    extraction_method: str = MODE_RULE,
+    allow_llm_fallback: bool = False,
+    whole_page: bool = True,
 ) -> dict:
     """处理单份 PDF，返回结果字典（含 workbook_bytes）。"""
     result = {
@@ -355,18 +373,35 @@ def process_one_pdf_bytes(
         for m in located:
             page_dfs = []
             for page in m.pages:
-                if ctx.use_vision:
-                    df, log = extract_single_page_vision(
-                        pdf_bytes, page, m.table_name,
-                        ctx.api_key, ctx.base_url, ctx.model,
-                    )
-                else:
-                    df, log = extract_single_page(
-                        pdf_bytes, page, m.table_name,
-                        ctx.api_key, ctx.base_url, ctx.model,
-                    )
-                if df is not None and not df.empty:
-                    page_dfs.append((page, df, log))
+                page_outcome = extract_page_with_method(
+                    pdf_bytes=pdf_bytes,
+                    page_number=page,
+                    table_id=m.table_id,
+                    table_name=m.table_name,
+                    method=extraction_method,
+                    table_config=(
+                        m.table_config
+                        if isinstance(m.table_config, dict)
+                        else {}
+                    ),
+                    api_key=ctx.api_key,
+                    base_url=ctx.base_url,
+                    model=ctx.model,
+                    allow_llm_fallback=allow_llm_fallback,
+                    whole_page=whole_page,
+                )
+                if page_outcome.succeeded:
+                    frames = [
+                        frame
+                        for frame in (page_outcome.frames or (page_outcome.frame,))
+                        if frame is not None and not frame.empty
+                    ]
+                    if frames:
+                        df = pd.concat(
+                            [frame.fillna("").astype(str) for frame in frames],
+                            ignore_index=True,
+                        )
+                        page_dfs.append((page, df, page_outcome.note))
             table = _merge_pages_to_table(m, page_dfs, config_by_id.get(m.table_id))
             if table is not None:
                 raw_tables.append(table)
@@ -468,6 +503,7 @@ def process_one_pdf_bytes(
                 _new_summary = _target_summary(
                     std_result.target_catalog,
                     _patched_data,
+                    std_result.diagnostics,
                 )
                 if _dc.is_dataclass(std_result):
                     std_result = _dc.replace(std_result, target_summary=_new_summary)

@@ -349,6 +349,12 @@ def boundary_variants(
         exclude_items = _config_terms(table_config, "exclude_item_terms")
         if exclude_items:
             derived["exclude_items"] = exclude_items
+        end_mode = str(table_config.get("boundary_end_mode", "") or "").strip()
+        if end_mode:
+            derived["end_mode"] = end_mode
+        stop_terms = _config_terms(table_config, "stop_terms")
+        if stop_terms:
+            derived["stop_terms"] = stop_terms
         return (derived,)
     return ()
 
@@ -527,6 +533,17 @@ def _is_generic_header(row: Sequence[str]) -> bool:
     )
 
 
+def _first_data_row(rows: Sequence[Sequence[str]]) -> int | None:
+    """Find the first row that looks like a table row rather than a title."""
+    for index, row in enumerate(rows):
+        numeric_cells = sum(
+            1 for cell in row if re.search(r"\d", str(cell or ""))
+        )
+        if numeric_cells >= 2:
+            return index
+    return None
+
+
 def enforce_output_boundaries(
     table_id: str,
     rows: list[list[str]],
@@ -547,8 +564,25 @@ def enforce_output_boundaries(
     for boundary in variants:
         candidate_start_items = tuple(boundary.get("start_items", ()))
         candidate_start = _find_row(rows, candidate_start_items)
+        end_mode = str(boundary.get("end_mode", "") or "").strip()
+        if candidate_start is None and end_mode == "page_tail":
+            # Continuation page: the page starts mid-table, so the first
+            # numeric row is the effective start.
+            candidate_start = _first_data_row(rows)
         if candidate_start is None:
             continue
+        if end_mode == "page_tail":
+            selected_boundary = boundary
+            selected_start_items = candidate_start_items
+            start_index = candidate_start
+            end_index = len(rows) - 1
+            stop_terms = tuple(boundary.get("stop_terms", ()) or ())
+            if stop_terms:
+                stop_index = _find_row(rows, stop_terms, start=candidate_start + 1)
+                if stop_index is not None:
+                    end_index = stop_index - 1
+            matched_end_items = ()
+            break
         for candidate_items in end_item_groups(table_id, boundary):
             candidate_end = _find_row(
                 rows,
