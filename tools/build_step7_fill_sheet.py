@@ -143,10 +143,12 @@ def _missing_frame(
     *,
     scope: str,
     catalog: pd.DataFrame,
+    company_periods: list[dict] | None = None,
 ) -> tuple[pd.DataFrame, object]:
     report = build_step7_metric_gap(
         data,
         requirement_catalog=catalog,
+        company_periods=company_periods,
         require_expected_period=True,
     )
     missing = report.missing.copy()
@@ -353,7 +355,15 @@ def _help_frame(
         [
             ("源文件", source.name),
             ("源工作表", sheet_name),
-            ("补录范围", "核心必备指标" if scope == "core" else "全部 STEP7 基础指标"),
+            (
+                "补录范围",
+                "核心必备指标" if scope == "core" else "全部 STEP7 基础指标",
+            ),
+            (
+                "缺口口径",
+                "不区分公司是否披露：只要该“公司 × 报告期”在 STEP7 建议期间上"
+                "没有数值，就列入缺口；补录后可覆盖全部 STEP7 图表。",
+            ),
             ("报告期范围", periods),
             ("数据行数", f"{len(output):,} 行（仅缺失指标，不含已有数据）"),
             ("涉及公司", f"{output['公司'].nunique() if not output.empty else 0} 家 / 源表 {total_companies} 家"),
@@ -483,12 +493,39 @@ def build_fill_sheet(
     scope: str = "all",
     all_periods: bool = False,
     data_dir: Path | None = None,
+    full_report_periods: bool = False,
 ) -> Path:
     source_frame = _read_source(source, sheet_name)
     work = source_frame[source_frame["指标编码"].ne("")].copy()
     data = work if all_periods else _latest_subset(work)
     catalog = step7_metric_requirement_catalog()
-    missing, report = _missing_frame(data, scope=scope, catalog=catalog)
+    if full_report_periods:
+        # 全量缺口：所有公司在所有已有报告期上都要有 STEP7 需要的指标与期间口径，
+        # 某公司在某期完全没有数据时同样计入缺口（不做“是否披露”过滤）。
+        report_periods = sorted(
+            {
+                _text(value)
+                for value in work["报告期"].dropna().astype(str).unique()
+                if _text(value)
+            },
+            key=_period_sort,
+        )
+        company_list = sorted(
+            {_text(value) for value in work["公司"].dropna().astype(str) if _text(value)}
+        )
+        matrix = [
+            {"公司": company, "报告期": period}
+            for company in company_list
+            for period in report_periods
+        ]
+        missing, report = _missing_frame(
+            work,
+            scope=scope,
+            catalog=catalog,
+            company_periods=matrix,
+        )
+    else:
+        missing, report = _missing_frame(data, scope=scope, catalog=catalog)
     columns = list(source_frame.columns)
     # 内部辅助列不进入粘贴表
     columns = [column for column in columns if not column.startswith("_")]
@@ -572,6 +609,11 @@ def main() -> None:
         help="检查全部已有报告期；默认每家公司只取最后一个报告期",
     )
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="全量缺口：所有公司 × 所有已有报告期 × 全部 STEP7 指标与期间口径",
+    )
+    parser.add_argument(
         "--data-dir",
         type=Path,
         default=ROOT / "Data",
@@ -582,6 +624,8 @@ def main() -> None:
     output = args.output
     if output is None:
         suffix = "_核心" if args.scope == "core" else "_全部"
+        if args.full:
+            suffix += "_全量"
         output = args.source.with_name(
             f"{args.source.stem}_STEP7缺失指标_可粘贴补录表{suffix}.xlsx"
         )
@@ -593,6 +637,7 @@ def main() -> None:
         scope=args.scope,
         all_periods=args.all_periods,
         data_dir=args.data_dir,
+        full_report_periods=args.full,
     )
     print(f"Wrote {result}")
 
