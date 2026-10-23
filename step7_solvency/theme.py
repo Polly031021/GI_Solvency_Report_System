@@ -171,8 +171,19 @@ def render_report_style() -> None:
         }
         .solvency-chart-legend__symbol--dash {border-top-style:dashed;}
         [class*="st-key-"][class*="_industry_premium_chart"] [data-testid="stVegaLiteChart"] {
-            width:fit-content!important; max-width:100%!important;
+            width:100%!important; max-width:100%!important;
             margin-left:auto!important; margin-right:auto!important;
+        }
+        .s7-premium-panel-title {
+            color:#00338D; font-size:12.5px; font-weight:700;
+            line-height:1.3; margin:4px 0 1px;
+        }
+        .s7-premium-panel-sub {
+            color:#64748B; font-size:10.5px; line-height:1.4;
+            margin:0 0 4px; min-height:29px;
+        }
+        [class*="st-key-"][class*="_industry_premium_chart"] .solvency-chart-legend {
+            gap:6px 12px; min-height:52px; align-content:flex-start;
         }
         .solvency-analysis-ai {color:#D84315; font-size:12px; margin-top:5px;}
         .solvency-analysis-ai--error {color:#C00000;}

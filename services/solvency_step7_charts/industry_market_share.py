@@ -33,6 +33,7 @@ from ..report_style import (
 from .industry_premium import (
     ANNUAL_SCOPE_ALIASES,
     _annual_rows,
+    _canonical_company_name,
     _year_from_period,
 )
 
@@ -312,6 +313,7 @@ def prepare_market_share_data(
             work[column] = ""
     work["公司"] = work["公司"].fillna("").astype(str).str.strip()
     work = work[work["公司"].ne("") & ~work["公司"].eq("行业合计")].copy()
+    work["公司"] = work["公司"].map(_canonical_company_name)
     if work.empty:
         return None
 
@@ -425,11 +427,13 @@ def build_market_share_pies(
             float(value) / total if total > 0 else 0.0
             for value in plot["金额"]
         ]
-        labels = []
-        for category, share in zip(plot["公司类别"], shares):
-            labels.append(
-                f"{category}<br>{share:.1%}" if share >= 0.02 else ""
-            )
+        # Keep labels inside the slices and show only percentages; category
+        # names stay in the legend.  Outside labels with category names can
+        # overlap the subplot title when the figure is placed in a report.
+        labels = [
+            f"{share:.1%}" if share >= 0.03 else ""
+            for share in shares
+        ]
         top_share = max(shares) if shares else 0.0
         # Rotate a dominant slice so the small remainder sits in the
         # bottom-right quadrant instead of crowding the upper-left labels.
@@ -452,13 +456,14 @@ def build_market_share_pies(
                 ),
                 text=labels,
                 textinfo="text",
-                textposition="outside",
+                textposition="inside",
+                insidetextorientation="horizontal",
                 textfont=dict(
                     family=REPORT_FONT,
-                    size=10,
-                    color=REPORT_AXIS_COLOR,
+                    size=9,
+                    color="#FFFFFF",
                 ),
-                automargin=True,
+                automargin=False,
                 showlegend=showlegend and index == 0,
                 name=metric,
                 hovertemplate=(
@@ -471,10 +476,10 @@ def build_market_share_pies(
             col=index + 1,
         )
     fig.update_layout(
-        height=360,
+        height=420,
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
-        margin=dict(t=64, b=58, l=16, r=16),
+        margin=dict(t=64, b=64, l=16, r=16),
         legend=dict(
             orientation="h",
             y=-0.08,

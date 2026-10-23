@@ -56,6 +56,10 @@ from .config import (
 )
 from .helpers import parse_page_numbers
 from .session import llm_credentials_ready
+from .step7_metric_check import (
+    batch_company_periods,
+    render_step7_metric_check,
+)
 
 
 def _render_step3_focus_panel() -> None:
@@ -275,6 +279,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
         st.session_state.normalization_diagnostics = pd.DataFrame()
         st.session_state.standard_target_summary = pd.DataFrame()
         st.session_state.standardization_warnings = []
+        st.session_state.pop("step3_gap_merged_data", None)
         with st.status("正在进行目标表标准填报…", expanded=True) as status_box:
             try:
                 for table in st.session_state.raw_tables:
@@ -484,7 +489,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
         st.caption("记录号用于与 STEP4 勾稽检查的“STEP3记录号”逐行对应。")
         st.dataframe(step3_narrow_display, width="stretch", hide_index=True)
         st.download_button(
-            "下载已填报的标准窄表",
+            "下载已填报的标准窄表（含 STEP7 补录）",
             (
                 st.session_state.standard_workbook_bytes
                 or standard_workbook_bytes(st.session_state.standard_data)
@@ -492,6 +497,33 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
             f"{Path(st.session_state.pdf_name).stem}_STEP3标准窄表.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             icon=":material/download:",
+        )
+
+    if (
+        not st.session_state.standard_data.empty
+        or not st.session_state.standard_target_summary.empty
+    ):
+        _single_company = str(
+            st.session_state.metadata.get("公司", "")
+            or Path(st.session_state.pdf_name).stem
+        ).strip()
+        _single_period = str(
+            st.session_state.metadata.get("报告期", "")
+        ).strip()
+        _fallback_pairs = None
+        if st.session_state.standard_data.empty:
+            _fallback_pairs = [
+                {
+                    "公司": _single_company,
+                    "报告期": _single_period,
+                    "来源文件": st.session_state.pdf_name,
+                }
+            ]
+        render_step7_metric_check(
+            st.session_state.standard_data,
+            taxonomy=taxonomy,
+            key_prefix=f"single_{active_profile.profile_id}",
+            company_periods=_fallback_pairs,
         )
 
 
@@ -979,6 +1011,7 @@ def _render_step3_batch_tab(active_profile: ReportProfile, is_project_member: bo
 def _render_shared_batch_standardization(
     active_profile: ReportProfile,
     is_project_member: bool,
+    taxonomy: pd.DataFrame,
 ) -> None:
     """STEP3 batch standardizes every PDF already extracted in the shared pool."""
     st.subheader("批量标准化与合并下载")
@@ -1023,6 +1056,7 @@ def _render_shared_batch_standardization(
 
     def run_standardization(target_documents: list[tuple[str, dict]]) -> None:
         nonlocal documents
+        st.session_state.pop("step3_gap_merged_data", None)
         context = build_context_from_profile(
             active_profile,
             api_key=st.session_state.llm_api_key,
@@ -1204,13 +1238,19 @@ def _render_shared_batch_standardization(
             ]
         )
 
-    merged_current = merge_standard_frames(
-        document.get("standard_data")
-        for document in documents.values()
-    )
+    _merged_override = st.session_state.get("step3_gap_merged_data")
+    if isinstance(_merged_override, pd.DataFrame) and not _merged_override.empty:
+        merged_current = _merged_override.copy()
+    else:
+        merged_current = merge_standard_frames(
+            document.get("standard_data")
+            for document in documents.values()
+        )
     if merged_current.empty:
         st.info("尚无批量标准化结果。")
         return
+    # 让单份页面和补录合并共用同一份当前标准数据。
+    st.session_state.standard_data = merged_current
     st.markdown("#### 合并结果")
     metric_cols = st.columns(4)
     metric_cols[0].metric("公司数", merged_current["公司"].nunique(), border=True)
@@ -1323,8 +1363,15 @@ def _render_shared_batch_standardization(
                     hide_index=True,
                 )
 
+    render_step7_metric_check(
+        merged_current,
+        taxonomy=taxonomy,
+        key_prefix=f"batch_{active_profile.profile_id}",
+        company_periods=batch_company_periods(documents),
+    )
+
     st.download_button(
-        "下载全部公司标准数据（与单份流程同格式）",
+        "下载全部公司标准数据（与单份流程同格式，含 STEP7 补录）",
         lambda: batch_result_workbook_bytes(
             merged_current,
             summary_current,
@@ -1367,4 +1414,8 @@ def render_standardization_tab(
     with _step3_single_tab:
         _render_step3_single_tab(active_profile, taxonomy)
     with _step3_batch_tab:
-        _render_shared_batch_standardization(active_profile, is_project_member)
+        _render_shared_batch_standardization(
+            active_profile,
+            is_project_member,
+            taxonomy,
+        )

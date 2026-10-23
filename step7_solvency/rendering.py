@@ -22,6 +22,13 @@ from services.solvency_step7_charts import (
     report_period_color_map,
 )
 
+from services.report_i18n import (
+    is_english,
+    localize_chart,
+    t,
+    translate_text,
+)
+
 from .ai_analysis import ai_analysis_for_latest_period
 from .selection import company_color_map, metric_title, ordered_companies
 
@@ -32,10 +39,13 @@ def render_image_override_controls(
 ) -> dict[str, dict[str, object]]:
     overrides = st.session_state.setdefault("s7_image_overrides", {})
     st.caption(
-        "手动上传图片（PNG/JPG）；选择对应图表后，图片将替代系统生成图表进入网页和打印报告。"
+        t(
+            "手动上传图片（PNG/JPG）；选择对应图表后，图片将替代系统生成图表进入网页和打印报告。",
+            "Upload chart images (PNG/JPG). Once mapped to a chart, the image replaces the generated chart on screen and in the printed report.",
+        )
     )
     uploads = st.file_uploader(
-        "上传图表截图",
+        t("上传图表截图", "Upload chart image"),
         type=["png", "jpg", "jpeg"],
         accept_multiple_files=True,
         key="s7_image_uploads",
@@ -55,9 +65,14 @@ def render_image_override_controls(
         c1, c2 = st.columns([1, 1.4], vertical_alignment="center")
         with c1:
             target = st.selectbox(
-                f"{upload.name} 对应图表",
+                t(f"{upload.name} 对应图表", f"Chart for {upload.name}"),
                 ["不覆盖/跳过", *chart_names],
                 key=state_key,
+                format_func=lambda value: (
+                    t("不覆盖/跳过", "Do not override / skip")
+                    if value == "不覆盖/跳过"
+                    else translate_text(value)
+                ),
             )
         with c2:
             st.image(upload, width="stretch")
@@ -67,12 +82,19 @@ def render_image_override_controls(
                 "data": upload.getvalue(),
             }
     if overrides:
-        st.caption("当前已覆盖：" + "、".join(overrides))
+        st.caption(
+            t("当前已覆盖：", "Current overrides: ")
+            + t("、", ", ").join(translate_text(name) for name in overrides)
+        )
         disabled = st.multiselect(
-            "本次暂不使用的图片覆盖",
+            t("本次暂不使用的图片覆盖", "Image overrides to disable"),
             list(overrides),
             key="s7_disabled_image_overrides",
-            placeholder="如需恢复系统图表，可在此选择",
+            placeholder=t(
+                "如需恢复系统图表，可在此选择",
+                "Select to restore the generated chart",
+            ),
+            format_func=translate_text,
         )
         return {name: value for name, value in overrides.items() if name not in disabled}
     return {}
@@ -127,15 +149,25 @@ def render_report_metric(
 ) -> None:
     metric_frame = filter_analysis_frame(frame, metric_code=code, periods=periods)
     if metric_frame.empty:
-        st.caption(f"{metric_title(frame, code)}：当前筛选范围无数据。")
+        st.caption(
+            t(
+                f"{metric_title(frame, code)}：当前筛选范围无数据。",
+                f"{metric_title(frame, code)}: no data in the current selection.",
+            )
+        )
         return
     metric_frame = convert_unit(metric_frame, unit_mode)
     metric_frame = convert_multiple_units_to_percent(metric_frame)
     metric_name = str(metric_frame.iloc[0]["指标名称"])
     st.caption(
-        f"公司 {metric_frame['公司'].nunique()} 家　｜　"
-        f"报告期 {metric_frame['报告期'].nunique()} 个　｜　"
-        f"记录 {len(metric_frame):,} 条"
+        t(
+            f"公司 {metric_frame['公司'].nunique()} 家　｜　"
+            f"报告期 {metric_frame['报告期'].nunique()} 个　｜　"
+            f"记录 {len(metric_frame):,} 条",
+            f"{metric_frame['公司'].nunique()} companies  |  "
+            f"{metric_frame['报告期'].nunique()} periods  |  "
+            f"{len(metric_frame):,} records",
+        )
     )
     ordered_periods = sort_report_periods(metric_frame["报告期"])
     latest_period = ordered_periods[-1]
@@ -153,13 +185,26 @@ def render_report_metric(
                 if ai_failed
                 else "solvency-analysis-ai"
             )
-            ai_html = f"<div class='{ai_class}'><b>AI 分析：</b>{escape(ai_text)}</div>"
+            ai_html = (
+                f"<div class='{ai_class}'><b>"
+                + t("AI 分析：", "AI commentary: ")
+                + f"</b>{escape(ai_text)}</div>"
+            )
+        max_value = format_chart_value(
+            max_row['数值'], max_row.get('单位', ''), max_row.get('数据类型', ''), decimals
+        )
+        min_value = format_chart_value(
+            min_row['数值'], min_row.get('单位', ''), min_row.get('数据类型', ''), decimals
+        )
+        summary_text = t(
+            f"最新报告期 {latest_period}：最高为 {max_row['公司']} "
+            f"（{max_value}），最低为 {min_row['公司']}（{min_value}）。",
+            f"Latest reporting period {latest_period}: highest is {max_row['公司']} "
+            f"({max_value}); lowest is {min_row['公司']} ({min_value}).",
+        )
         st.markdown(
             "<div class='solvency-analysis-note'>"
-            f"最新报告期 {latest_period}：最高为 {max_row['公司']} "
-            f"（{format_chart_value(max_row['数值'], max_row.get('单位', ''), max_row.get('数据类型', ''), decimals)}），"
-            f"最低为 {min_row['公司']} "
-            f"（{format_chart_value(min_row['数值'], min_row.get('单位', ''), min_row.get('数据类型', ''), decimals)}）。"
+            f"{summary_text}"
             f"{ai_html}"
             "</div>",
             unsafe_allow_html=True,
@@ -173,13 +218,13 @@ def render_report_metric(
         disclosed_count = metric_frame.drop_duplicates(["公司", "报告期"]).shape[0]
         period_colors = report_period_color_map(ordered_periods)
         legend_items = [(period_colors[period], period, "square") for period in ordered_periods]
-        legend_items.append(("#0C233C", "趋势折线", "line"))
+        legend_items.append(("#0C233C", t("趋势折线", "Trend line"), "line"))
         if highlight_company in metric_frame["公司"].astype(str).unique():
-            legend_items.append(("#B8BDC7", "特定追踪公司", "outline"))
+            legend_items.append(("#B8BDC7", t("特定追踪公司", "Tracked company"), "outline"))
         if disclosed_count < expected_count:
-            legend_items.append(("#B8BDC7", "未披露", "square"))
+            legend_items.append(("#B8BDC7", t("未披露", "Not disclosed"), "square"))
         if code in {"CORE_SOLVENCY_RATIO", "COMBINED_SOLVENCY_RATIO"}:
-            legend_items.append(("#ED2124", "监管下限", "dash"))
+            legend_items.append(("#ED2124", t("监管下限", "Regulatory minimum"), "dash"))
         render_chart_legend(legend_items)
         chart = build_company_bar_trend_chart(
             metric_frame,
@@ -187,7 +232,7 @@ def render_report_metric(
             ordered_periods,
             highlight_company,
         )
-        st.altair_chart(
+        render_altair_chart(
             chart_without_internal_title(chart),
             width="stretch",
             key=f"{key_prefix}_{code}_company_panels",
@@ -197,9 +242,9 @@ def render_report_metric(
         disclosed_count = metric_frame.drop_duplicates(["公司", "报告期"]).shape[0]
         external_legend = []
         if disclosed_count < expected_count:
-            external_legend.append(("#B8BDC7", "未披露", "square"))
+            external_legend.append(("#B8BDC7", t("未披露", "Not disclosed"), "square"))
         if code in {"CORE_SOLVENCY_RATIO", "COMBINED_SOLVENCY_RATIO"}:
-            external_legend.append(("#ED2124", "监管下限", "dash"))
+            external_legend.append(("#ED2124", t("监管下限", "Regulatory minimum"), "dash"))
         if external_legend:
             render_chart_legend(external_legend)
         charts = build_single_metric_trend_charts(
@@ -216,7 +261,7 @@ def render_report_metric(
             )
         for group_index, chart in enumerate(charts, start=1):
             with st.container(key=f"s7_trend_group_{key_prefix}_{code}_{group_index}"):
-                st.altair_chart(
+                render_altair_chart(
                     chart_without_internal_title(chart),
                     width="stretch",
                     key=f"{key_prefix}_{code}_trend_{group_index}",
@@ -227,8 +272,11 @@ def render_report_metric(
             shared_y_domain = metric_bar_axis_domain(metric_frame, code, ordered_periods)
             period_colors = report_period_color_map(ordered_periods)
             st.caption(
-                "以下按公司展示各报告期柱状小图；所有公司统一使用同一纵轴范围，"
-                "不同报告期使用不同颜色。"
+                t(
+                    "以下按公司展示各报告期柱状小图；所有公司统一使用同一纵轴范围，"
+                    "不同报告期使用不同颜色。",
+                    "Small bar charts by company and reporting period. All companies share the same y-axis range; colours identify periods.",
+                )
             )
             render_chart_legend(
                 [(period_colors[period], period, "square") for period in ordered_periods]
@@ -268,7 +316,7 @@ def render_chart_legend(
         (
             f"<span class='solvency-chart-legend__item'>"
             f"<i class='solvency-chart-legend__symbol solvency-chart-legend__symbol--{shape}' "
-            f"style='--legend-color:{color}'></i>{escape(label)}</span>"
+            f"style='--legend-color:{color}'></i>{escape(translate_text(label))}</span>"
         )
         for color, label, shape in items
     )
@@ -290,7 +338,7 @@ def render_company_chart_grid(
     """Render equal company panels in one page-width row without scrolling."""
     companies = ordered_companies(frame)
     if not companies:
-        st.warning("当前筛选范围没有可绘制的公司数据。")
+        st.warning(t("当前筛选范围没有可绘制的公司数据。", "No company data to plot in the current selection."))
         return
     company_count = len(companies)
     title_font_size = (
@@ -327,13 +375,23 @@ def render_company_chart_grid(
                     try:
                         chart = chart_factory(company_frame)
                     except (ValueError, KeyError) as exc:
-                        st.warning(f"该公司的图表暂不可用：{exc}")
+                        st.warning(
+                            t(
+                                f"该公司的图表暂不可用：{exc}",
+                                f"Chart unavailable for this company: {exc}",
+                            )
+                        )
                         continue
-                    st.altair_chart(
+                    render_altair_chart(
                         chart_without_internal_title(chart),
                         width="stretch",
                         key=f"{key_prefix}_{index}",
                     )
+
+
+def render_altair_chart(chart: object, **kwargs) -> None:
+    """Render an Altair chart with English display labels when enabled."""
+    st.altair_chart(localize_chart(chart), **kwargs)
 
 
 def chart_without_internal_title(chart: object) -> object:

@@ -15,6 +15,8 @@ from services.solvency_navigation import (
     second_levels,
 )
 
+from services.report_i18n import chart_name, get_language, level_name, t, translate_text
+
 from .cache import load_step7_modules_cached, read_major_financing_upload
 from .config import ANALYSIS_TAB_LABELS, STEP7_CONFIG_FILE
 from .helpers import keep_valid_widget_state
@@ -28,7 +30,7 @@ def render_all_chart_navigation(chart_options: list[str]) -> None:
         (
             '<div class="kpmg-nav-all-item">'
             '<span class="kpmg-nav-all-dot" aria-hidden="true"></span>'
-            f"<span>{html.escape(str(name))}</span>"
+            f"<span>{html.escape(translate_text(str(name)))}</span>"
             "</div>"
         )
         for name in chart_options
@@ -36,7 +38,7 @@ def render_all_chart_navigation(chart_options: list[str]) -> None:
     st.markdown(
         (
             '<div class="kpmg-nav-all-charts">'
-            '<div class="kpmg-nav-all-label">具体图表（全部展示）</div>'
+            f'<div class="kpmg-nav-all-label">{translate_text("具体图表（全部展示）")}</div>'
             f"{rows}</div>"
         ),
         unsafe_allow_html=True,
@@ -113,13 +115,21 @@ def _reset_step7_config(profile_id: str) -> None:
 
 def render_step7_excel_navigation(profile_id: str) -> None:
     """用默认 Step7 配置构建导航，上传文件仅作为可选覆盖。"""
-    st.markdown("### 公司报告导航")
+    st.markdown(
+        "### " + t("公司报告导航", "Company report navigation")
+    )
 
     uploaded = st.file_uploader(
-        "STEP7 配置（默认使用内置模板，可上传覆盖）",
+        t(
+            "STEP7 配置（默认使用内置模板，可上传覆盖）",
+            "STEP7 configuration (built-in template by default; upload to override)",
+        ),
         type=["xlsx"],
         key=f"step7_notes_upload_{profile_id}",
-        help="默认读取 templates/Step7-偿付能力公司报告展示模块.xlsx；上传文件只在当前会话覆盖默认配置。",
+        help=t(
+            "默认读取 templates/Step7-偿付能力公司报告展示模块.xlsx；上传文件只在当前会话覆盖默认配置。",
+            "Reads templates/Step7-偿付能力公司报告展示模块.xlsx by default; an uploaded file overrides it for this session only.",
+        ),
     )
     bytes_key = f"step7_notes_bytes_{profile_id}"
     source_key = f"step7_config_source_{profile_id}"
@@ -160,14 +170,19 @@ def render_step7_excel_navigation(profile_id: str) -> None:
 
     st.session_state[source_key] = source
     if source == "default":
-        st.caption(f"默认配置：{STEP7_CONFIG_FILE.name}")
+        st.caption(t(f"默认配置：{STEP7_CONFIG_FILE.name}", f"Built-in configuration: {STEP7_CONFIG_FILE.name}"))
     elif source == "builtin":
-        st.info("未找到默认 STEP7 配置，Step7 将使用内置 COMPANY_NAVIGATION 配置。")
+        st.info(
+            t(
+                "未找到默认 STEP7 配置，Step7 将使用内置 COMPANY_NAVIGATION 配置。",
+                "No default STEP7 configuration was found; Step7 will use the built-in COMPANY_NAVIGATION configuration.",
+            )
+        )
         st.session_state["step7_modules"] = []
         return
     if source != "default" and STEP7_CONFIG_FILE.exists():
         st.button(
-            "恢复默认配置",
+            t("恢复默认配置", "Restore default configuration"),
             key=f"step7_reset_config_{profile_id}",
             on_click=_reset_step7_config,
             args=(profile_id,),
@@ -178,9 +193,17 @@ def render_step7_excel_navigation(profile_id: str) -> None:
     level_ones = list(dict.fromkeys(m.level_one for m in modules if m.level_one))
     first_options = [*level_ones, PRINT_ALL_LABEL]
     keep_valid_widget_state("company_nav_level_one", first_options)
-    main_nav = st.radio("📁 一级模块", first_options, key="company_nav_level_one")
+    main_nav = st.radio(
+        t("📁 一级模块", "📁 Level 1"),
+        first_options,
+        key="company_nav_level_one",
+        format_func=level_name,
+    )
     if main_nav == PRINT_ALL_LABEL:
-        render_print_control(key=f"company_report_print_{profile_id}")
+        render_print_control(
+            key=f"company_report_print_{profile_id}",
+            language=get_language(),
+        )
         return
 
     sub_modules = [m for m in modules if m.level_one == main_nav]
@@ -188,7 +211,12 @@ def render_step7_excel_navigation(profile_id: str) -> None:
     if level_twos:
         second_options = ["全部", *level_twos]
         keep_valid_widget_state("company_nav_level_two", second_options)
-        second_nav = st.radio("📂 二级模块", second_options, key="company_nav_level_two")
+        second_nav = st.radio(
+            t("📂 二级模块", "📂 Level 2"),
+            second_options,
+            key="company_nav_level_two",
+            format_func=level_name,
+        )
         if second_nav != "全部":
             sub_modules = [m for m in sub_modules if m.level_two == second_nav]
     else:
@@ -199,12 +227,15 @@ def render_step7_excel_navigation(profile_id: str) -> None:
 
 
 def render_major_financing_upload(profile_id: str) -> None:
-    st.markdown("### 补充数据")
+    st.markdown("### " + t("补充数据", "Supplementary data"))
     financing_upload = st.file_uploader(
-        "上传重大融资信息 Excel",
+        t("上传重大融资信息 Excel", "Upload major financing Excel"),
         type=["xlsx"],
         key=f"major_financing_upload_{profile_id}",
-        help="应包含季度、公司名称、增资/发债及综合充足率变动字段。",
+        help=t(
+            "应包含季度、公司名称、增资/发债及综合充足率变动字段。",
+            "Should contain quarter, company name, capital raising / bond issuance and combined solvency ratio change fields.",
+        ),
     )
     if financing_upload is None:
         return
@@ -213,6 +244,11 @@ def render_major_financing_upload(profile_id: str) -> None:
             financing_upload.getvalue(),
             financing_upload.name,
         )
-        st.caption(f"已读取 {len(st.session_state.major_financing_data):,} 条融资事件。")
+        st.caption(
+            t(
+                f"已读取 {len(st.session_state.major_financing_data):,} 条融资事件。",
+                f"Read {len(st.session_state.major_financing_data):,} financing events.",
+            )
+        )
     except Exception as exc:
-        st.error(f"重大融资信息读取失败：{exc}")
+        st.error(t(f"重大融资信息读取失败：{exc}", f"Failed to read major financing data: {exc}"))
