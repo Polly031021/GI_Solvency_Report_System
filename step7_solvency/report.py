@@ -39,6 +39,22 @@ from services.solvency_step7_chart_plans import (
 )
 from services.solvency_step7_charts import annual_period_order
 from services.solvency_report_notes import company_notes_template
+from services.report_i18n import (
+    LANG_ZH,
+    LANGUAGE_LABELS,
+    LANGUAGE_OPTIONS,
+    category_name,
+    chart_name as localized_chart_name,
+    get_language,
+    is_english,
+    level_name,
+    set_language,
+    t,
+    translate_dataframe,
+    translate_default_analysis,
+    translate_metric_frame,
+    unit_name,
+)
 
 from .plans import render_combination_analysis
 from .rendering import render_image_override_controls, render_report_metric
@@ -109,10 +125,28 @@ def show_step_7_solvency(
     """
     render_report_style()
     st.markdown(
-        "<div class='solvency-report-title'>公司级偿付能力对标报告</div>", unsafe_allow_html=True
+        "<div class='solvency-report-title'>"
+        + t("公司级偿付能力对标报告", "Company Solvency Benchmarking Report")
+        + "</div>",
+        unsafe_allow_html=True,
     )
+    current_label = "English" if is_english() else "中文"
+    selected_label = st.segmented_control(
+        "展示语言 / Display language",
+        list(LANGUAGE_OPTIONS),
+        default=current_label,
+        key="s7_language_display",
+        label_visibility="collapsed",
+    )
+    if selected_label:
+        set_language(LANGUAGE_LABELS.get(selected_label, LANG_ZH))
     if data is None or data.empty:
-        st.info("请先在 Step5 确认集成数据，或在 Step6 上传集成表。")
+        st.info(
+            t(
+                "请先在 Step5 确认集成数据，或在 Step6 上传集成表。",
+                "Confirm integrated data in Step 5, or upload an integrated workbook in Step 6.",
+            )
+        )
         return
 
     # ★ 从 session_state 兜底读取 Excel 模块列表
@@ -121,7 +155,7 @@ def show_step_7_solvency(
 
     frame = company_detail_rows(data).copy()
     if frame.empty:
-        st.info("当前数据没有公司明细记录。")
+        st.info(t("当前数据没有公司明细记录。", "No company detail records are available."))
         return
 
     # ★ 修复（新增）：公司名称归一化。
@@ -152,11 +186,13 @@ def show_step_7_solvency(
 
     all_periods = sort_report_periods(frame["报告期"])
     if not all_periods:
-        st.info("当前数据没有可用报告期。")
+        st.info(t("当前数据没有可用报告期。", "No reporting periods are available."))
         return
 
+    frame = translate_metric_frame(frame)
+
     notes = render_report_notes_editor(
-        title="公司内容分析与注释输入",
+        title=t("公司内容分析与注释输入", "Company analysis and note inputs"),
         key_prefix="step7",
         template=company_notes_template(),
     )
@@ -169,7 +205,11 @@ def show_step_7_solvency(
             dict.fromkeys(entry.chart_name for entry in COMPANY_NAVIGATION)
         )
     image_overrides: dict[str, dict[str, object]] = {}
-    with st.expander("公司级图表设置与图片覆盖", expanded=False, icon=":material/tune:"):
+    with st.expander(
+        t("公司级图表设置与图片覆盖", "Company chart settings and image overrides"),
+        expanded=False,
+        icon=":material/tune:",
+    ):
         c0, c1, c2, c3, c4 = st.columns([1, 2, 1, 1, 1])
         peer_groups = nonblank_values(frame, "同业分类")
         type_options = [ALL_COMPANY_TYPES, *peer_groups]
@@ -177,12 +217,16 @@ def show_step_7_solvency(
         valid_state("s7_company_types", type_options, multiple=True)
         with c0:
             selected_types_raw = st.multiselect(
-                "公司类型",
+                t("公司类型", "Company type"),
                 type_options,
                 key="s7_company_types",
                 on_change=reset_company_selection_for_types,
                 args=(frame,),
-                help="沿用偿付能力平台的‘同业分类’字段进行筛选。",
+                format_func=category_name,
+                help=t(
+                    "沿用偿付能力平台的‘同业分类’字段进行筛选。",
+                    "Filter using the peer-group field from the solvency platform.",
+                ),
             )
         company_source, all_companies = company_scope_for_types(
             frame,
@@ -194,43 +238,55 @@ def show_step_7_solvency(
         )
         with c1:
             selected_companies = st.multiselect(
-                "展示公司",
+                t("展示公司", "Companies"),
                 all_companies,
                 key=company_selection_key,
-                placeholder="选择一家或多家公司",
+                placeholder=t("选择一家或多家公司", "Select one or more companies"),
             )
         with c2:
             unit_options = ["十亿元", "亿元", "百万元", "十万元"]
             valid_state("s7_unit_mode", unit_options)
             unit_mode = st.selectbox(
-                "显示单位",
+                t("显示单位", "Display unit"),
                 unit_options,
                 key="s7_unit_mode",
+                format_func=unit_name,
             )
         with c3:
             highlight_options = ["无", *selected_companies]
             valid_state("s7_highlight_company", highlight_options)
             highlight_company = st.selectbox(
-                "特定追踪",
+                t("特定追踪", "Track company"),
                 highlight_options,
                 key="s7_highlight_company",
             )
         with c4:
             enable_ai = st.toggle(
-                "一键AI分析",
+                t("一键AI分析", "One-click AI commentary"),
                 value=False,
                 key="s7_enable_ai",
-                help="使用登录页配置的大模型接口，为当前图表生成一句同业对标点评。",
+                help=t(
+                    "使用登录页配置的大模型接口，为当前图表生成一句同业对标点评。",
+                    "Use the model configured on the sign-in page to generate a peer-benchmarking comment for the current chart.",
+                ),
             )
             ai_data_consent = False
             if enable_ai:
                 ai_data_consent = st.checkbox(
-                    "确认将当前图表中的公司名称和指标数据发送至已配置的大模型服务",
+                    t(
+                        "确认将当前图表中的公司名称和指标数据发送至已配置的大模型服务",
+                        "I confirm that company names and metric data in the current chart may be sent to the configured model service",
+                    ),
                     value=False,
                     key="s7_ai_data_consent",
                 )
                 if not ai_data_consent:
-                    st.caption("未确认前不会调用模型接口或发送数据。")
+                    st.caption(
+                        t(
+                            "未确认前不会调用模型接口或发送数据。",
+                            "No model call or data transfer occurs until you confirm.",
+                        )
+                    )
 
         st.divider()
         sort_options, sort_lookup = metric_sort_options(company_source)
@@ -238,19 +294,30 @@ def show_step_7_solvency(
         sc1, sc2, sc3 = st.columns([2, 2, 3])
         with sc1:
             sort_field = st.selectbox(
-                "图表展示顺序依据",
+                t("图表展示顺序依据", "Chart sort metric"),
                 sort_options,
                 key="s7_sort_field",
+                format_func=lambda value: t(value, "Default (original list order)") if value == "默认（按列表原始顺序）" else value,
             )
         with sc2:
             sort_order = st.radio(
-                "排序方向",
+                t("排序方向", "Sort direction"),
                 [SORT_DESCENDING, SORT_ASCENDING],
                 horizontal=True,
                 key="s7_sort_order",
+                format_func=lambda value: (
+                    t("降序（从大到小）", "Descending (high to low)")
+                    if value == SORT_DESCENDING
+                    else t("升序（从小到大）", "Ascending (low to high)")
+                ),
             )
         with sc3:
-            st.caption("图表类型：按指标特征自动匹配（系统内置）")
+            st.caption(
+                t(
+                    "图表类型：按指标特征自动匹配（系统内置）",
+                    "Chart type: automatically matched to metric characteristics (built in)",
+                )
+            )
         selected_companies = sort_companies_by_metric(
             company_source,
             selected_companies,
@@ -259,7 +326,7 @@ def show_step_7_solvency(
             descending=sort_order == SORT_DESCENDING,
         )
 
-        st.markdown("#### 手动上传图片（PNG/JPG）")
+        st.markdown("#### " + t("手动上传图片（PNG/JPG）", "Manual image upload (PNG/JPG)"))
         image_overrides = render_image_override_controls(available_chart_names, notes)
 
     selected_periods = all_periods
@@ -268,7 +335,12 @@ def show_step_7_solvency(
     transparent = True
     show_average = False
     if not selected_companies:
-        st.info("请在报告配置中至少选择一家展示公司。")
+        st.info(
+            t(
+                "请在报告配置中至少选择一家展示公司。",
+                "Select at least one company in the report settings.",
+            )
+        )
         return
     scoped = filter_analysis_frame(frame, companies=selected_companies, periods=selected_periods)
     scoped["_s7_company_order"] = pd.Categorical(
@@ -278,7 +350,12 @@ def show_step_7_solvency(
 
     chart_names = selected_chart_names(scoped, modules=step7_modules)
     if not chart_names:
-        st.info("请在侧边栏公司报告导航中选择具体图表。")
+        st.info(
+            t(
+                "请在侧边栏公司报告导航中选择具体图表。",
+                "Select a chart from the company report navigation in the sidebar.",
+            )
+        )
         return
     print_all = st.session_state.get("company_nav_level_one") == PRINT_ALL_LABEL
     if print_all:
@@ -289,15 +366,26 @@ def show_step_7_solvency(
             if len(selected_periods) == 1
             else f"{selected_periods[0]}–{selected_periods[-1]}"
         )
-        company_label = (
-            "、".join(selected_companies)
-            if len(selected_companies) <= 4
-            else f"{len(selected_companies)} 家公司"
-        )
+        if is_english():
+            company_label = (
+                ", ".join(selected_companies)
+                if len(selected_companies) <= 4
+                else f"{len(selected_companies)} companies"
+            )
+        else:
+            company_label = (
+                "、".join(selected_companies)
+                if len(selected_companies) <= 4
+                else f"{len(selected_companies)} 家公司"
+            )
         render_report_cover(
-            title="保险公司偿付能力公司对标报告",
+            title=t("保险公司偿付能力公司对标报告", "Insurance Company Solvency Benchmarking Report"),
             subtitle=f"{period_label} · {company_label}",
-            date_text=f"{today.year}年{today.month}月",
+            date_text=(
+                f"{today.year}-{today.month:02d}"
+                if is_english()
+                else f"{today.year}年{today.month}月"
+            ),
             picture_dir=PICTURE_DIR,
         )
 
@@ -338,7 +426,12 @@ def show_step_7_solvency(
 
         # 标题：Excel 有二级就拼上，没有就省掉；二级与图表同名时只保留一次。
         title_parts = []
-        for part in (level_one, level_two, chart_name):
+        display_parts = (
+            level_name(level_one),
+            level_name(level_two),
+            localized_chart_name(chart_name),
+        )
+        for part in display_parts:
             if part and (not title_parts or title_parts[-1] != part):
                 title_parts.append(part)
         title_text = " - ".join(title_parts)
@@ -349,15 +442,19 @@ def show_step_7_solvency(
                 unsafe_allow_html=True,
             )
 
-            # 分析/注释：优先用 Excel 的
-            chart_note = notes.get(chart_name, {})
+            # 分析/注释：优先用 Excel 的；英文模式只翻译默认分析内容，自定义内容保持原文。
+            chart_note = dict(notes.get(chart_name, {}) or {})
+            if is_english() and chart_note.get("分析内容-默认"):
+                chart_note["分析内容-默认"] = translate_default_analysis(
+                    chart_note["分析内容-默认"]
+                )
             render_report_analysis(chart_note)
 
             override = image_overrides.get(chart_name)
             if override:
                 st.image(
                     override["data"],
-                    caption=f"图片覆盖：{override['name']}",
+                    caption=t("图片覆盖：", "Image override: ") + str(override["name"]),
                     width="stretch",
                 )
             else:
@@ -382,9 +479,15 @@ def show_step_7_solvency(
 
                 if module_requires_all and missing_codes:
                     st.warning(
-                        f"“{chart_name}”缺少 {len(missing_codes)} 个必要指标，暂无法按 Excel 指定格式完整绘图。"
+                        t(
+                            f"“{localized_chart_name(chart_name)}”缺少 {len(missing_codes)} 个必要指标，暂无法按 Excel 指定格式完整绘图。",
+                            f"“{localized_chart_name(chart_name)}” is missing {len(missing_codes)} required metrics and cannot yet be drawn in the Excel-specified format.",
+                        )
                     )
-                    st.caption("缺失指标编码：" + "、".join(missing_codes))
+                    st.caption(
+                        t("缺失指标编码：", "Missing metric codes: ")
+                        + t("、", ", ").join(missing_codes)
+                    )
                 elif plan_kind in {SINGLE_METRIC_TREND, TREND_WITH_COMPANY_BARS, COMPANY_BAR_TREND}:
                     # 指标编码：Excel 优先
                     codes_for_this_chart = module_metric_codes or tuple(
@@ -425,11 +528,20 @@ def show_step_7_solvency(
                             industry_frame=frame,
                         )
                     except (ValueError, KeyError) as exc:
-                        st.warning(f"“{chart_name}”暂无法绘制：{exc}")
-            render_report_footnote(chart_note)
+                        st.warning(
+                            t(
+                                f"“{localized_chart_name(chart_name)}”暂无法绘制：{exc}",
+                                f"“{localized_chart_name(chart_name)}” cannot be drawn yet: {exc}",
+                            )
+                        )
+            render_report_footnote(chart_note, language=get_language())
 
     if print_all:
         render_report_back_cover(picture_dir=PICTURE_DIR)
 
-    with st.expander("查看报告底层数据"):
-        st.dataframe(scoped, width="stretch", hide_index=True)
+    with st.expander(t("查看报告底层数据", "View underlying report data")):
+        st.dataframe(
+            translate_dataframe(scoped),
+            width="stretch",
+            hide_index=True,
+        )

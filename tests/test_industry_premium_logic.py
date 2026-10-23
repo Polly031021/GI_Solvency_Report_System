@@ -15,7 +15,9 @@ from services.solvency_step7_charts import (  # noqa: E402
     HISTORICAL_INDUSTRY_PREMIUM,
     HISTORICAL_SOURCE,
     UPLOAD_SOURCE,
+    build_industry_premium_mix_chart,
     build_industry_premium_structure_chart,
+    build_industry_premium_total_chart,
     prepare_industry_premium_annual,
 )
 
@@ -65,48 +67,94 @@ def test_industry_premium_uses_q4_annual_cumulative() -> None:
     assert set(detail["状态"].astype(str)) <= {"", "nan"}
 
 
-def test_industry_premium_chart_renders_complete_2022_2025() -> None:
+def test_industry_premium_total_chart_has_bars_and_growth_line() -> None:
     annual, _, _ = prepare_industry_premium_annual(
         _complete_rows(),
         years=5,
         include_historical=False,
     )
-    chart = build_industry_premium_structure_chart(annual, unit_mode="亿元")
-    spec = chart.to_dict()
-    assert len(spec["layer"]) == 6
-    assert spec["resolve"]["scale"]["color"] == "independent"
+    spec = build_industry_premium_total_chart(annual, unit_mode="亿元").to_dict()
+    assert spec["width"] == "container"
     assert spec["resolve"]["scale"]["y"] == "independent"
-    assert spec["layer"][0]["encoding"]["color"]["scale"]["range"] == [
-        "#1E49E2",
-        "#00B8F5",
-        "#D9E2EC",
+    assert [layer["mark"]["type"] for layer in spec["layer"]] == [
+        "bar",
+        "text",
+        "rule",
+        "point",
+        "text",
+        "line",
     ]
-    # A 0% reference rule, a base-year marker and the YoY growth line are
-    # added on the secondary axis.
-    assert sum(layer["mark"]["type"] == "rule" for layer in spec["layer"]) == 1
+    bar_layer = spec["layer"][0]
+    assert bar_layer["encoding"]["y"]["field"] == "合计"
+    assert bar_layer["encoding"]["y"]["axis"]["orient"] == "left"
+    assert bar_layer["mark"]["size"] == 28
+    assert bar_layer["encoding"]["x"]["scale"]["paddingInner"] == 0.12
+    assert bar_layer["encoding"]["x"]["sort"] == ["2022", "2023", "2024", "2025"]
+    assert "color" not in bar_layer["encoding"]
     growth_line = next(
         layer for layer in spec["layer"] if layer["mark"]["type"] == "line"
     )
     assert growth_line["encoding"]["y"]["field"] == "增长率"
     assert growth_line["encoding"]["y"]["axis"]["orient"] == "right"
-    # 右侧只显示百分比刻度：增长率已按百分数存储，用 labelExpr 补上 %，
-    # 避免金额轴或原始数值刻度出现在同一侧造成叠加。
     assert growth_line["encoding"]["y"]["axis"]["format"] == ".0f"
     assert growth_line["encoding"]["y"]["axis"]["labelExpr"] == "datum.label + '%'"
-    assert spec["layer"][0]["encoding"]["y"]["axis"]["orient"] == "left"
-    assert spec["layer"][1]["encoding"]["y"]["axis"] is None
+    assert spec["config"]["axis"]["labelColor"] == "#475569"
+    assert spec["config"]["axis"]["gridColor"] == "#E5E7EB"
+
+
+def test_industry_premium_mix_chart_uses_100_percent_stack() -> None:
+    annual, _, _ = prepare_industry_premium_annual(
+        _complete_rows(),
+        years=5,
+        include_historical=False,
+    )
+    spec = build_industry_premium_mix_chart(annual, unit_mode="亿元").to_dict()
+    assert spec["width"] == "container"
+    assert spec["resolve"]["scale"]["y"] == "independent"
+    assert spec["resolve"]["scale"]["color"] == "independent"
+    assert [layer["mark"]["type"] for layer in spec["layer"]] == [
+        "bar",
+        "text",
+        "rule",
+        "point",
+        "text",
+        "line",
+    ]
+    share_bar = spec["layer"][0]
+    assert share_bar["encoding"]["y"]["field"] == "占比"
+    assert share_bar["encoding"]["y"]["axis"]["format"] == ".0%"
+    assert share_bar["encoding"]["y"]["axis"]["orient"] == "left"
+    assert share_bar["encoding"]["color"]["scale"]["range"] == [
+        "#1E49E2",
+        "#00B8F5",
+    ]
+    # Share labels sit inside the stacked segments.
+    share_label = spec["layer"][1]
+    assert share_label["mark"]["type"] == "text"
+    assert share_label["encoding"]["y"]["field"] == "标签位置"
+    growth_line = next(
+        layer for layer in spec["layer"] if layer["mark"]["type"] == "line"
+    )
+    assert growth_line["encoding"]["y"]["field"] == "增长率"
+    assert growth_line["encoding"]["y"]["axis"]["orient"] == "right"
+    assert growth_line["encoding"]["y"]["axis"]["labelExpr"] == "datum.label + '%'"
     assert growth_line["encoding"]["color"]["scale"]["range"] == [
         "#7213EA",
         "#FD349C",
-        "#00338D",
     ]
-    assert spec["layer"][0]["encoding"]["x"]["scale"]["paddingInner"] == 0.2
-    assert spec["layer"][0]["mark"]["size"] == 32
-    assert spec["width"] == 600
-    assert spec["config"]["axis"]["labelColor"] == "#475569"
-    assert spec["config"]["axis"]["gridColor"] == "#E5E7EB"
-    x_sort = spec["layer"][0]["encoding"]["x"]["sort"]
-    assert x_sort == ["2022", "2023", "2024", "2025"]
+    assert share_bar["encoding"]["x"]["sort"] == ["2022", "2023", "2024", "2025"]
+
+
+def test_combined_structure_chart_places_two_panels_side_by_side() -> None:
+    annual, _, _ = prepare_industry_premium_annual(
+        _complete_rows(),
+        years=5,
+        include_historical=False,
+    )
+    spec = build_industry_premium_structure_chart(annual, unit_mode="亿元").to_dict()
+    assert len(spec["hconcat"]) == 2
+    assert spec["hconcat"][0]["layer"][0]["encoding"]["y"]["field"] == "合计"
+    assert spec["hconcat"][1]["layer"][0]["encoding"]["y"]["field"] == "占比"
 
 
 def test_industry_premium_handles_2022_2026_window() -> None:
@@ -117,14 +165,11 @@ def test_industry_premium_handles_2022_2026_window() -> None:
     )
     assert annual["年度"].tolist() == ["2022", "2023", "2024", "2025", "2026"]
     assert annual["完整"].all()
-    chart = build_industry_premium_structure_chart(annual, unit_mode="亿元")
-    assert chart.to_dict()["layer"][0]["encoding"]["x"]["sort"] == [
-        "2022",
-        "2023",
-        "2024",
-        "2025",
-        "2026",
-    ]
+    total_spec = build_industry_premium_total_chart(annual, unit_mode="亿元").to_dict()
+    mix_spec = build_industry_premium_mix_chart(annual, unit_mode="亿元").to_dict()
+    expected = ["2022", "2023", "2024", "2025", "2026"]
+    assert total_spec["layer"][0]["encoding"]["x"]["sort"] == expected
+    assert mix_spec["layer"][0]["encoding"]["x"]["sort"] == expected
 
 
 def test_industry_premium_still_renders_partial_year() -> None:
@@ -142,15 +187,14 @@ def test_industry_premium_still_renders_partial_year() -> None:
         include_historical=False,
     )
     assert not annual.loc[annual["年度"].eq("2023"), "完整"].iloc[0]
-    chart = build_industry_premium_structure_chart(annual, unit_mode="亿元")
-    spec = chart.to_dict()
+    spec = build_industry_premium_mix_chart(annual, unit_mode="亿元").to_dict()
     assert len(spec["layer"]) == 6
     assert spec["layer"][0]["encoding"]["x"]["sort"] == ["2022", "2023", "2024", "2025"]
     assert spec["layer"][0]["encoding"]["color"]["scale"]["domain"] == [
         "车险",
         "非车险",
-        "未拆分",
     ]
+
 
 
 def test_historical_baseline_fills_missing_years_and_upload_wins() -> None:
@@ -193,6 +237,129 @@ def test_historical_baseline_fills_missing_years_and_upload_wins() -> None:
     assert [row[0] for row in HISTORICAL_INDUSTRY_PREMIUM] == list(range(2017, 2025))
 
 
+def _scale_error_rows() -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for year, total, motor in (
+        (2022, 500_000.0, 300_000.0),
+        (2023, 550_000.0, 330_000.0),
+        (2024, 600_000.0, 360_000.0),
+    ):
+        for code, value in (("SIGNED_PREMIUM", total), ("SIGNED_PREMIUM_MOTOR", motor)):
+            rows.append(
+                {
+                    "公司": "甲公司",
+                    "报告期": f"{year}Q4",
+                    "指标编码": code,
+                    "期间口径": "本年累计数",
+                    "数值": value,
+                    "单位": "万元",
+                }
+            )
+    # 2025 annual total was delivered in 元 but labelled 万元 (10,000x too large).
+    rows.append(
+        {
+            "公司": "甲公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本年累计数",
+            "数值": 6_050_000_000.0,
+            "单位": "万元",
+        }
+    )
+    rows.append(
+        {
+            "公司": "甲公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本季度数",
+            "数值": 150_000.0,
+            "单位": "万元",
+        }
+    )
+    # 乙公司 2025 annual total was delivered in 亿元 but labelled 万元
+    # (10,000x too small); the Q4 quarter value and its own history anchor it.
+    for year, total in ((2023, 700_000.0), (2024, 800_000.0)):
+        rows.append(
+            {
+                "公司": "乙公司",
+                "报告期": f"{year}Q4",
+                "指标编码": "SIGNED_PREMIUM",
+                "期间口径": "本年累计数",
+                "数值": total,
+                "单位": "万元",
+            }
+        )
+    rows.append(
+        {
+            "公司": "乙公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本年累计数",
+            "数值": 80.0,
+            "单位": "万元",
+        }
+    )
+    rows.append(
+        {
+            "公司": "乙公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本季度数",
+            "数值": 200_000.0,
+            "单位": "万元",
+        }
+    )
+    return pd.DataFrame(rows)
+
+
+def test_unit_scale_errors_are_repaired_before_aggregation() -> None:
+    annual, detail, _ = prepare_industry_premium_annual(
+        _scale_error_rows(),
+        years=None,
+        include_historical=False,
+    )
+    latest = annual[annual["年度"].eq("2025")].iloc[0]
+    # 甲 605,000 + 乙 800,000: neither the 10,000x-too-large nor the
+    # 10,000x-too-small record may leak into the industry total.
+    assert latest["合计"] == 1_405_000.0
+    assert latest["异常数"] == 2
+    assert set(
+        detail.loc[detail["年度"].eq("2025"), "状态"].astype(str)
+    ) == {"异常（量级异常，已自动校正）"}
+
+
+def test_company_disclosure_suffix_keeps_total_and_motor_split_together() -> None:
+    rows = [
+        {
+            "公司": "丙公司（偿付能力）",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本年累计数",
+            "数值": 900_000.0,
+            "单位": "万元",
+        },
+        {
+            "公司": "丙公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM_MOTOR",
+            "期间口径": "本年累计数",
+            "数值": 500_000.0,
+            "单位": "万元",
+        },
+    ]
+    annual, detail, _ = prepare_industry_premium_annual(
+        pd.DataFrame(rows),
+        years=None,
+        include_historical=False,
+    )
+    latest = annual[annual["年度"].eq("2025")].iloc[0]
+    assert latest["合计"] == 900_000.0
+    assert latest["车险"] == 500_000.0
+    assert latest["非车险"] == 400_000.0
+    assert detail.iloc[0]["公司"] == "丙公司"
+    assert detail.iloc[0]["状态"] == ""
+
+
 def test_display_range_switches_between_five_ten_and_all_years() -> None:
     frame = _complete_rows(end_year=2025)
     five, _, _ = prepare_industry_premium_annual(frame, years=5)
@@ -211,15 +378,24 @@ def test_display_range_switches_between_five_ten_and_all_years() -> None:
         "2024",
         "2025",
     ]
-    chart = build_industry_premium_structure_chart(every, unit_mode="亿元")
-    assert chart.to_dict()["width"] == 882
+    total_spec = build_industry_premium_total_chart(every, unit_mode="亿元").to_dict()
+    mix_spec = build_industry_premium_mix_chart(every, unit_mode="亿元").to_dict()
+    expected = [str(year) for year in range(2017, 2026)]
+    assert total_spec["width"] == "container"
+    assert mix_spec["width"] == "container"
+    assert total_spec["layer"][0]["encoding"]["x"]["sort"] == expected
+    assert mix_spec["layer"][0]["encoding"]["x"]["sort"] == expected
 
 
 if __name__ == "__main__":
     test_industry_premium_uses_q4_annual_cumulative()
-    test_industry_premium_chart_renders_complete_2022_2025()
+    test_industry_premium_total_chart_has_bars_and_growth_line()
+    test_industry_premium_mix_chart_uses_100_percent_stack()
+    test_combined_structure_chart_places_two_panels_side_by_side()
     test_industry_premium_handles_2022_2026_window()
     test_industry_premium_still_renders_partial_year()
     test_historical_baseline_fills_missing_years_and_upload_wins()
+    test_unit_scale_errors_are_repaired_before_aggregation()
+    test_company_disclosure_suffix_keeps_total_and_motor_split_together()
     test_display_range_switches_between_five_ten_and_all_years()
     print("PASS 行业保费结构：固定历史、上传覆盖、Q4 累计与 5/10/全部窗口")

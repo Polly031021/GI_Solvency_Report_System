@@ -1,7 +1,7 @@
-"""承保效益：近五年综合成本率与保费排名的年度散点图。
+"""承保效益：近五年综合成本率与签单保费排名的年度散点图。
 
 页面口径：
-- 每个年度一张图，横轴是当年保费收入排名，纵轴是综合成本率；
+- 每个年度一张图，横轴是当年签单保费排名，纵轴是综合成本率；
 - 纵轴以 100% 为中心对称展开，100% 虚线代表盈亏平衡；
 - 综合成本率低于 100% 计为盈利，高于 100% 计为亏损；
 - 五张年度图之后补一张盈利/亏损公司数折线图。
@@ -28,10 +28,16 @@ from services.report_style import (
     REPORT_GRID_COLOR,
 )
 
+from services.report_i18n import (
+    t,
+    translate_dataframe,
+    translate_text,
+)
 try:
     from .insight_cards import render_insight_card
 except ImportError:
     from step7_solvency.insight_cards import render_insight_card
+from .rendering import render_altair_chart
 
 
 DEFAULT_BREAKEVEN = 100.0
@@ -194,6 +200,7 @@ def prepare_underwriting_annual(
 
     The returned frame contains one row per company/year with:
     年度, 公司, 保费, 保费排名, 综合成本率, 盈亏, 综合成本率口径, 保费口径.
+    保费排名即签单保费排名（按当年签单保费降序，1 = 最高）。
     """
     empty_columns = [
         "年度",
@@ -432,7 +439,7 @@ def build_underwriting_year_chart(
     )
     tooltip = [
         alt.Tooltip("公司:N"),
-        alt.Tooltip("保费排名:Q", title="保费排名"),
+        alt.Tooltip("保费排名:Q", title="签单保费排名"),
         alt.Tooltip("综合成本率:Q", title="综合成本率", format=".2f"),
         alt.Tooltip("保费:Q", title="保费", format=",.0f"),
         alt.Tooltip("保费单位:N", title="保费单位"),
@@ -450,7 +457,7 @@ def build_underwriting_year_chart(
         .encode(
             x=alt.X(
                 "保费排名:Q",
-                title="保费收入排名（1 = 最高）",
+                title="签单保费排名（1 = 最高）",
                 scale=alt.Scale(domain=list(x_domain), nice=False),
                 axis=rank_axis,
             ),
@@ -656,15 +663,18 @@ def _counts_html(row: pd.Series) -> str:
     loss = int(row.get("亏损", 0) or 0)
     even = int(row.get("盈亏平衡", 0) or 0)
     valid = int(row.get("有效公司数", profit + loss + even) or 0)
+    unit = t("家", " companies")
     chips = [
-        f"<span class='s7-uw-chip s7-uw-chip--profit'>盈利&nbsp;<b>{profit}</b>&nbsp;家</span>",
-        f"<span class='s7-uw-chip s7-uw-chip--loss'>亏损&nbsp;<b>{loss}</b>&nbsp;家</span>",
+        f"<span class='s7-uw-chip s7-uw-chip--profit'>{t('盈利', 'Profit')}&nbsp;<b>{profit}</b>{unit}</span>",
+        f"<span class='s7-uw-chip s7-uw-chip--loss'>{t('亏损', 'Loss')}&nbsp;<b>{loss}</b>{unit}</span>",
     ]
     if even:
         chips.append(
-            f"<span class='s7-uw-chip s7-uw-chip--even'>盈亏平衡&nbsp;<b>{even}</b>&nbsp;家</span>"
+            f"<span class='s7-uw-chip s7-uw-chip--even'>{t('盈亏平衡', 'Break-even')}&nbsp;<b>{even}</b>{unit}</span>"
         )
-    chips.append(f"<span class='s7-uw-muted'>有效样本 {valid} 家</span>")
+    chips.append(
+        f"<span class='s7-uw-muted'>{t('有效样本 ', 'Valid sample: ')}{valid}{t(' 家', ' companies')}</span>"
+    )
     return "<div class='s7-uw-counts'>" + "".join(chips) + "</div>"
 
 
@@ -677,18 +687,25 @@ def _render_year_card(
     key_prefix: str,
 ) -> None:
     st.markdown(
-        f"<div class='s7-uw-year-title'>{int(year)} 年</div>"
-        "<div class='s7-uw-year-sub'>综合成本率与保费收入排名</div>",
+        t(
+            f"<div class='s7-uw-year-title'>{int(year)} 年</div>"
+            "<div class='s7-uw-year-sub'>综合成本率与签单保费排名</div>",
+            f"<div class='s7-uw-year-title'>{int(year)}</div>"
+            "<div class='s7-uw-year-sub'>Combined ratio and signed premium rank</div>",
+        ),
         unsafe_allow_html=True,
     )
     chart = build_underwriting_year_chart(annual, int(year), breakeven=breakeven)
     if chart is None:
         st.markdown(
-            "<div class='s7-uw-empty'>该年度没有同时具备综合成本率与保费数据的公司。</div>",
+            t(
+                "<div class='s7-uw-empty'>该年度没有同时具备综合成本率与保费数据的公司。</div>",
+                "<div class='s7-uw-empty'>No company has both combined-ratio and premium data for this year.</div>",
+            ),
             unsafe_allow_html=True,
         )
         return
-    st.altair_chart(
+    render_altair_chart(
         chart,
         width="stretch",
         key=f"{key_prefix}_underwriting_year_{int(year)}",
@@ -696,7 +713,10 @@ def _render_year_card(
     count_row = counts[counts["年度"].eq(int(year))]
     if count_row.empty:
         st.markdown(
-            "<div class='s7-uw-counts'><span class='s7-uw-muted'>暂无盈亏统计</span></div>",
+            t(
+                "<div class='s7-uw-counts'><span class='s7-uw-muted'>暂无盈亏统计</span></div>",
+                "<div class='s7-uw-counts'><span class='s7-uw-muted'>No profit / loss statistics</span></div>",
+            ),
             unsafe_allow_html=True,
         )
     else:
@@ -716,11 +736,20 @@ def _render_year_card(
         )
         if outlier_count:
             st.caption(
-                f"▲ {outlier_count} 家超出纵轴显示范围，已用边界三角标记；"
-                "实际值见悬停提示或下方明细。"
+                t(
+                    f"▲ {outlier_count} 家超出纵轴显示范围，已用边界三角标记；"
+                    "实际值见悬停提示或下方明细。",
+                    f"▲ {outlier_count} companies fall outside the y-axis range and are marked with boundary triangles; "
+                    "see the hover tooltip or detail below for actual values.",
+                )
             )
         if len(year_frame) < 5:
-            st.caption("该年度有效样本较少，请结合下方明细核对数据完整性。")
+            st.caption(
+                t(
+                    "该年度有效样本较少，请结合下方明细核对数据完整性。",
+                    "There are few valid observations for this year; review data completeness using the detail below.",
+                )
+            )
 
 
 def render_underwriting_efficiency_scatter(
@@ -756,8 +785,12 @@ def render_underwriting_efficiency_scatter(
     )
     if annual.empty:
         st.warning(
-            "当前数据缺少可配对的年度综合成本率（COMBINED_RATIO）与保费收入"
-            "（SIGNED_PREMIUM / PREMIUM_INCOME），无法绘制承保效益年度图。"
+            t(
+                "当前数据缺少可配对的年度综合成本率（COMBINED_RATIO）与保费收入"
+                "（SIGNED_PREMIUM / PREMIUM_INCOME），无法绘制承保效益年度图。",
+                "The data lacks pairable annual combined ratios (COMBINED_RATIO) and premium income "
+                "(SIGNED_PREMIUM / PREMIUM_INCOME), so the annual underwriting-efficiency chart cannot be drawn.",
+            )
         )
         return
 
@@ -801,19 +834,28 @@ def render_underwriting_efficiency_scatter(
             else None
         )
         profit_change = (
-            f"较 {latest_year - 1} 年 {profit_count - previous_profit:+d} 家"
+            t(
+                f"较 {latest_year - 1} 年 {profit_count - previous_profit:+d} 家",
+                f"{profit_count - previous_profit:+d} vs {latest_year - 1}",
+            )
             if previous_profit is not None
-            else "无上年可比数据"
+            else t("无上年可比数据", "No prior-year comparison")
         )
         render_insight_card(
-            title="承保效益",
-            headline=f"{latest_year} 年行业承保效益",
+            title=t("承保效益", "Underwriting efficiency"),
+            headline=t(f"{latest_year} 年行业承保效益", f"{latest_year} industry underwriting efficiency"),
             value=(
-                f"加权综合成本率 {weighted_ratio:.1f}%"
+                t(
+                    f"加权综合成本率 {weighted_ratio:.1f}%",
+                    f"Weighted combined ratio {weighted_ratio:.1f}%",
+                )
                 if weighted_ratio is not None
-                else "加权综合成本率 —"
+                else t("加权综合成本率 —", "Weighted combined ratio —")
             ),
-            delta=f"盈利 {profit_count} 家 / 亏损 {loss_count} 家",
+            delta=t(
+                f"盈利 {profit_count} 家 / 亏损 {loss_count} 家",
+                f"Profit {profit_count} / loss {loss_count}",
+            ),
             delta_tone=(
                 "up"
                 if weighted_ratio is not None and weighted_ratio < breakeven
@@ -822,36 +864,51 @@ def render_underwriting_efficiency_scatter(
                 else "neutral"
             ),
             bullets=[
-                f"盈利 {profit_count} 家，亏损 {loss_count} 家（{profit_change}）",
-                (
-                    f"综合成本率中位数 {median_ratio:.1f}%"
-                    if median_ratio is not None
-                    else "综合成本率中位数暂不可用"
+                t(
+                    f"盈利 {profit_count} 家，亏损 {loss_count} 家（{profit_change}）",
+                    f"{profit_count} profitable, {loss_count} loss-making ({profit_change})",
                 ),
                 (
-                    f"样本公司数 {int(latest_counts.iloc[0]['有效公司数'])} 家"
+                    t(
+                        f"综合成本率中位数 {median_ratio:.1f}%",
+                        f"Median combined ratio {median_ratio:.1f}%",
+                    )
+                    if median_ratio is not None
+                    else t("综合成本率中位数暂不可用", "Median combined ratio is not available")
+                ),
+                (
+                    t(
+                        f"样本公司数 {int(latest_counts.iloc[0]['有效公司数'])} 家",
+                        f"Sample companies: {int(latest_counts.iloc[0]['有效公司数'])}",
+                    )
                     if not latest_counts.empty
-                    else "样本公司数暂不可用"
+                    else t("样本公司数暂不可用", "Sample company count is not available")
                 ),
             ],
-            footnote=(
+            footnote=t(
                 "加权综合成本率 = Σ（公司综合成本率 × 公司保费）/ Σ公司保费；"
-                "低于 100% 表示承保盈利。"
+                "低于 100% 表示承保盈利。",
+                "Weighted combined ratio = Σ (company combined ratio × company premium) / Σ company premium; "
+                "below 100% indicates underwriting profit.",
             ),
         )
 
     year_label = f"{years[0]}–{years[-1]}" if years else "—"
     st.caption(
-        f"展示 {year_label} 共 {len(years)} 个年度 ｜ "
-        "横轴为当年保费收入排名（1 = 最高），纵轴为综合成本率；"
-        "纵轴以 100% 为中心对称展开。"
+        t(
+            f"展示 {year_label} 共 {len(years)} 个年度 ｜ "
+            "横轴为当年签单保费排名（1 = 最高），纵轴为综合成本率；"
+            "纵轴以 100% 为中心对称展开。",
+            f"Showing {year_label}, {len(years)} years | The x-axis is the signed-premium rank for the year (1 = highest) "
+            "and the y-axis is the combined ratio, symmetrically centred on 100%.",
+        )
     )
     st.markdown(
         "<div class='s7-uw-legend'>"
-        f"<span><i class='s7-uw-dot' style='background:{PROFIT_COLOR}'></i>盈利（综合成本率 &lt; 100%）</span>"
-        f"<span><i class='s7-uw-dot' style='background:{LOSS_COLOR}'></i>亏损（综合成本率 &gt; 100%）</span>"
-        f"<span><i class='s7-uw-dot' style='background:{BREAKEVEN_COLOR}'></i>盈亏平衡（= 100%）</span>"
-        "<span><i class='s7-uw-dash'></i>100% 盈亏平衡线</span>"
+        f"<span><i class='s7-uw-dot' style='background:{PROFIT_COLOR}'></i>{t('盈利（综合成本率 < 100%）', 'Profit (combined ratio < 100%)')}</span>"
+        f"<span><i class='s7-uw-dot' style='background:{LOSS_COLOR}'></i>{t('亏损（综合成本率 > 100%）', 'Loss (combined ratio > 100%)')}</span>"
+        f"<span><i class='s7-uw-dot' style='background:{BREAKEVEN_COLOR}'></i>{t('盈亏平衡（= 100%）', 'Break-even (= 100%)')}</span>"
+        f"<span><i class='s7-uw-dash'></i>{t('100% 盈亏平衡线', '100% break-even line')}</span>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -870,13 +927,21 @@ def render_underwriting_efficiency_scatter(
         )
     if outlier_total:
         st.caption(
-            "纵轴采用稳健显示范围（约 5%–95% 分位）；"
-            "超出范围的极端值用三角形标记在边界处，实际值见悬停提示或下方明细。"
+            t(
+                "纵轴采用稳健显示范围（约 5%–95% 分位）；"
+                "超出范围的极端值用三角形标记在边界处，实际值见悬停提示或下方明细。",
+                "The y-axis uses a robust range (approximately the 5th–95th percentile); "
+                "extreme values outside the range are marked with boundary triangles. See hover tooltips or detail below for actual values.",
+            )
         )
     if len(years) < year_window:
         st.caption(
-            f"当前数据仅覆盖 {len(years)} 个可用年度；"
-            f"系统已按现有年度展示，目标窗口为最近 {year_window} 年。"
+            t(
+                f"当前数据仅覆盖 {len(years)} 个可用年度；"
+                f"系统已按现有年度展示，目标窗口为最近 {year_window} 年。",
+                f"The data covers only {len(years)} usable years; the chart shows the available years, "
+                f"while the target window is the latest {year_window} years.",
+            )
         )
 
     year_slots: list[int | None] = [*years, *([None] * max(0, 5 - len(years)))]
@@ -907,37 +972,58 @@ def render_underwriting_efficiency_scatter(
                     elif kind == "year" and not missing_notice_rendered:
                         missing_notice_rendered = True
                         st.markdown(
-                            "<div class='s7-uw-empty'>"
-                            "当前数据未覆盖第 5 个年度。<br>"
-                            "可用的年度图已在上方展示；"
-                            "请检查 STEP5/STEP6 是否已集成完整的年度综合成本率与保费数据。"
-                            "</div>",
+                            t(
+                                "<div class='s7-uw-empty'>"
+                                "当前数据未覆盖第 5 个年度。<br>"
+                                "可用的年度图已在上方展示；"
+                                "请检查 STEP5/STEP6 是否已集成完整的年度综合成本率与保费数据。"
+                                "</div>",
+                                "<div class='s7-uw-empty'>"
+                                "The data does not cover the fifth year.<br>"
+                                "Available annual charts are shown above; "
+                                "check whether STEP5/STEP6 contains complete annual combined-ratio and premium data."
+                                "</div>",
+                            ),
                             unsafe_allow_html=True,
                         )
                     elif kind == "counts":
                         st.markdown(
-                            "<div class='s7-uw-year-title'>盈利 / 亏损公司数趋势</div>"
-                            "<div class='s7-uw-year-sub'>按年度统计（家）</div>",
+                            t(
+                                "<div class='s7-uw-year-title'>盈利 / 亏损公司数趋势</div>"
+                                "<div class='s7-uw-year-sub'>按年度统计（家）</div>",
+                                "<div class='s7-uw-year-title'>Profitable / loss-making company count</div>"
+                                "<div class='s7-uw-year-sub'>By year (companies)</div>",
+                            ),
                             unsafe_allow_html=True,
                         )
                         if count_chart is None:
                             st.markdown(
-                                "<div class='s7-uw-empty'>暂无可用于统计的年度数据。</div>",
+                                t(
+                                    "<div class='s7-uw-empty'>暂无可用于统计的年度数据。</div>",
+                                    "<div class='s7-uw-empty'>No annual data is available for this statistic.</div>",
+                                ),
                                 unsafe_allow_html=True,
                             )
                         else:
-                            st.altair_chart(
+                            render_altair_chart(
                                 count_chart,
                                 width="stretch",
                                 key=f"{key_prefix}_underwriting_count_trend",
                             )
                             st.caption(
-                                "盈利公司数 = 综合成本率低于 100% 的公司数；"
-                                "亏损公司数 = 综合成本率高于 100% 的公司数。"
+                                t(
+                                    "盈利公司数 = 综合成本率低于 100% 的公司数；"
+                                    "亏损公司数 = 综合成本率高于 100% 的公司数。",
+                                    "Profitable companies = those with a combined ratio below 100%; "
+                                    "loss-making companies = those with a combined ratio above 100%.",
+                                )
                             )
 
     fallback_premium = annual["保费口径"].ne("本年累计数").sum()
-    with st.expander("查看承保效益年度明细与口径", expanded=False):
+    with st.expander(
+        t("查看承保效益年度明细与口径", "View annual underwriting detail and basis"),
+        expanded=False,
+    ):
         detail = annual[
             [
                 "年度",
@@ -955,21 +1041,30 @@ def render_underwriting_efficiency_scatter(
         ].copy()
         detail = detail.rename(
             columns={
-                "保费": "保费（原始单位）",
-                "综合成本率": "综合成本率（%）",
+                "保费": t("保费（原始单位）", "Premium (source unit)"),
+                "保费排名": t("签单保费排名", "Signed premium rank"),
+                "综合成本率": t("综合成本率（%）", "Combined ratio (%)"),
             }
         )
         st.dataframe(
-            detail.sort_values(["年度", "保费排名"]),
+            translate_dataframe(detail.sort_values(["年度", "保费排名"])),
             width="stretch",
             hide_index=True,
         )
         st.caption(
-            "综合成本率优先取“本年累计数”，保费优先取“本年累计数”；"
-            "年度累计保费缺失时回退到“本季度数”用于排名。"
+            t(
+                "综合成本率优先取“本年累计数”，签单保费优先取“本年累计数”；"
+                "年度累计签单保费缺失时回退到“本季度数”用于排名。",
+                "The combined ratio and signed premium use year-to-date values first; when annual signed premium is missing, "
+                "quarterly signed premium is used for ranking.",
+            )
         )
         if fallback_premium:
             st.caption(
-                f"注：{int(fallback_premium)} 条公司年度记录缺少本年累计保费，"
-                "已使用本季度保费参与当年排名。"
+                t(
+                    f"注：{int(fallback_premium)} 条公司年度记录缺少本年累计保费，"
+                    "已使用本季度保费参与当年排名。",
+                    f"Note: {int(fallback_premium)} company-year records lack year-to-date premium; "
+                    "quarterly premium was used for the annual ranking.",
+                )
             )
