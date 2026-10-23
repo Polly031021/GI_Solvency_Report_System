@@ -139,6 +139,23 @@ def _report_parts(period: object) -> tuple[str, str]:
     return match.group(1), f"Q{match.group(2)}"
 
 
+def _period_group(value: object) -> str:
+    """Normalize period labels for strict coverage checks."""
+    text = _text(value)
+    base = re.split(r"[-—–]", text)[0].strip()
+    if not base:
+        return ""
+    if "预测" in base:
+        return "下季度末预测数"
+    if "本年" in base or "累计" in base:
+        return "本年累计数"
+    if "上季度" in base or "期初" in base or "上年" in base:
+        return "上季度末数"
+    if "本季度" in base or "期末" in base:
+        return "本季度末数"
+    return base
+
+
 @dataclass
 class Step7MetricGapReport:
     missing: pd.DataFrame
@@ -311,6 +328,7 @@ def build_step7_metric_gap(
     taxonomy: pd.DataFrame | None = None,
     company_periods: Sequence[dict] | None = None,
     requirement_catalog: pd.DataFrame | None = None,
+    require_expected_period: bool = False,
 ) -> Step7MetricGapReport:
     """Compare STEP3 standard data with the STEP7 requirement catalog."""
     catalog = (
@@ -349,6 +367,7 @@ def build_step7_metric_gap(
         )
 
     present: dict[tuple[str, str, str], pd.Series] = {}
+    present_scopes: dict[tuple[str, str, str], set[str]] = {}
     if not frame.empty:
         numeric = frame[frame["_数值"].notna()]
         for _, row in numeric.iterrows():
@@ -358,6 +377,7 @@ def build_step7_metric_gap(
                 str(row["指标编码"]),
             )
             present.setdefault(key, row)
+            present_scopes.setdefault(key, set()).add(_period_group(row["期间口径"]))
 
     base_codes = tuple(
         catalog.loc[catalog["补录方式"].eq("直接补录"), "指标编码"].tolist()
@@ -389,9 +409,21 @@ def build_step7_metric_gap(
 
         pair_missing_codes: list[str] = []
         for code in base_codes:
-            if code in present_codes:
-                continue
             meta = lookup.loc[code]
+            expected_period = _text(meta.get("建议期间口径")) or DEFAULT_AMOUNT_PERIOD
+            period_missing = False
+            if code in present_codes:
+                if require_expected_period and expected_period:
+                    scopes = present_scopes.get(
+                        (company_key, report_period, code),
+                        set(),
+                    )
+                    if _period_group(expected_period) not in scopes:
+                        period_missing = True
+                    else:
+                        continue
+                else:
+                    continue
             pair_missing_codes.append(code)
             missing_rows.append(
                 {
@@ -411,8 +443,7 @@ def build_step7_metric_gap(
                     "二级模块": _text(meta.get("二级模块")),
                     "数据类型": _text(meta.get("数据类型")),
                     "单位": _text(meta.get("标准单位")),
-                    "期间口径": _text(meta.get("建议期间口径"))
-                    or DEFAULT_AMOUNT_PERIOD,
+                    "期间口径": expected_period,
                     "数值": None,
                     "补录优先级": (
                         "高"
@@ -429,7 +460,10 @@ def build_step7_metric_gap(
                         else "中"
                     ),
                     "备注": (
-                        "STEP7 必需的基础指标未在 STEP3 标准数据中找到；"
+                        f"STEP7 需要“{expected_period}”口径，但现有数据只有其他期间口径；"
+                        "请补充该期间的数值。"
+                        if period_missing
+                        else "STEP7 必需的基础指标未在 STEP3 标准数据中找到；"
                         "请按“单位”列口径填写数值。"
                     ),
                 }
