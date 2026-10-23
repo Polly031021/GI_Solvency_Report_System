@@ -159,6 +159,22 @@ def test_missing_gap_includes_empty_batch_company() -> None:
     print("PASS 无提取结果的公司也会显示 STEP7 缺失指标")
 
 
+def test_period_aware_gap_flags_roe_annual() -> None:
+    """ROE 只有本季度数、没有本年累计数时，应被识别为期间缺口。"""
+    quarterly = _row("ROE", "净资产收益率", 1.5, unit="%", period="本季度数", data_type="百分比")
+    annual = _row("ROE", "净资产收益率", 2.5, unit="%", period="本年累计数", data_type="百分比")
+    quarterly["公司"] = quarterly["原始公司名称"] = quarterly["标准公司名称"] = "季度口径公司"
+    quarterly["公司统一编码"] = "C001"
+    annual["公司"] = annual["原始公司名称"] = annual["标准公司名称"] = "年度口径公司"
+    annual["公司统一编码"] = "C002"
+    data = pd.DataFrame([quarterly, annual], columns=STANDARD_COLUMNS)
+    report = build_step7_metric_gap(data, require_expected_period=True)
+    roe_missing = set(report.missing.loc[report.missing["指标编码"].eq("ROE"), "公司"])
+    assert "季度口径公司" in roe_missing
+    assert "年度口径公司" not in roe_missing
+    print("PASS ROE 按本年累计数口径识别期间缺口")
+
+
 def test_step3_defaults_missing_amount_unit_to_yuan() -> None:
     table = FlexibleTable(
         table_id="ACTUAL_CAPITAL",
@@ -195,5 +211,6 @@ if __name__ == "__main__":
     test_step7_catalog_covers_template_and_implicit_metrics()
     test_missing_gap_template_and_merge()
     test_missing_gap_includes_empty_batch_company()
+    test_period_aware_gap_flags_roe_annual()
     test_step3_defaults_missing_amount_unit_to_yuan()
     print("全部通过")

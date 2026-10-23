@@ -69,12 +69,12 @@ EXPECTED_PERIODS: dict[str, str] = {
     "SIGNED_PREMIUM": "本年累计数",
     "SIGNED_PREMIUM_MOTOR": "本年累计数",
     "NET_PROFIT": "本年累计数",
-    "TOTAL_ASSETS": "本季度末数",
+    "TOTAL_ASSETS": "本季度数",
     "COMBINED_RATIO": "本年累计数",
     "LOSS_RATIO": "本年累计数",
     "EXPENSE_RATIO": "本年累计数",
     "INVESTMENT_RETURN": "本年累计数",
-    "PREMIUM_GROWTH": "本年累计数",
+    "PREMIUM_GROWTH": "本季度数",
     "ROE": "本年累计数",
 }
 

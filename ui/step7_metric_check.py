@@ -93,6 +93,7 @@ def render_step7_metric_check(
             data,
             taxonomy=taxonomy,
             company_periods=company_periods,
+            require_expected_period=True,
         )
         if report.requirement_catalog.empty:
             st.error("STEP7 指标需求目录为空，请检查模板或指标字典。")

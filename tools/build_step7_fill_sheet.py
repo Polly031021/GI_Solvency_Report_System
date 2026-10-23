@@ -56,6 +56,7 @@ OUTPUT_SHEET = "标准数据"
 SUMMARY_SHEET = "缺失指标汇总"
 HELP_SHEET = "填写说明"
 CATALOG_SHEET = "STEP7指标目录"
+YEAR_SHEET = "年度公司数"
 
 _PERIOD_RE = re.compile(r"(20\d{2})\D*[Qq]?([1-4])")
 _COMPANY_SUFFIX_RE = re.compile(
@@ -142,7 +143,11 @@ def _missing_frame(
     scope: str,
     catalog: pd.DataFrame,
 ) -> tuple[pd.DataFrame, object]:
-    report = build_step7_metric_gap(data, requirement_catalog=catalog)
+    report = build_step7_metric_gap(
+        data,
+        requirement_catalog=catalog,
+        require_expected_period=True,
+    )
     missing = report.missing.copy()
     if scope == "core":
         missing = missing[missing["指标编码"].isin(CORE_CODES)].copy()
@@ -239,6 +244,43 @@ def _summary_frame(output: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _year_coverage(source: pd.DataFrame, data_dir: Path | None) -> pd.DataFrame:
+    columns = ["年度", "PDF文件数", "汇总数据公司数", "差异", "说明"]
+    if data_dir is None or not data_dir.exists():
+        return pd.DataFrame(columns=columns)
+    rows: list[dict] = []
+    for child in sorted(data_dir.iterdir()):
+        match = re.fullmatch(r"pdfs\((\d{4})\)", child.name)
+        if not match or not child.is_dir():
+            continue
+        year = match.group(1)
+        pdf_count = sum(
+            1
+            for item in child.iterdir()
+            if item.is_file() and item.suffix.lower() == ".pdf"
+        )
+        company_count = int(
+            source.loc[source["报告期"].eq(f"{year}Q4"), "公司"].nunique()
+        )
+        diff = company_count - pdf_count
+        if diff == 0:
+            note = "一致"
+        elif diff > 0:
+            note = "汇总数据公司数多于 PDF 文件数"
+        else:
+            note = "汇总数据公司数少于 PDF 文件数"
+        rows.append(
+            {
+                "年度": year,
+                "PDF文件数": pdf_count,
+                "汇总数据公司数": company_count,
+                "差异": diff,
+                "说明": note,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _help_frame(
     source: Path,
     output: pd.DataFrame,
@@ -273,6 +315,16 @@ def _help_frame(
                 "期间口径",
                 "默认按指标类型预填：存量指标本季度末数，流量指标本年累计数；"
                 "如实际披露口径不同，可直接在“期间口径”列修改。",
+            ),
+            (
+                "检查口径",
+                "按 STEP7 指标目录的建议期间核对；例如 ROE 需要“本年累计数”，"
+                "只有“本季度数”会被列为期间缺口。",
+            ),
+            (
+                "年度公司数",
+                "若根目录 Data/pdfs(YYYY) 存在，会附“年度公司数”对照页，"
+                "展示 PDF 文件数与汇总数据公司数的差异。",
             ),
             (
                 "注意",
@@ -366,6 +418,7 @@ def build_fill_sheet(
     sheet_name: str = "标准数据",
     scope: str = "all",
     all_periods: bool = False,
+    data_dir: Path | None = None,
 ) -> Path:
     source_frame = _read_source(source, sheet_name)
     work = source_frame[source_frame["指标编码"].ne("")].copy()
@@ -398,6 +451,7 @@ def build_fill_sheet(
         periods,
         int(work["公司"].nunique()),
     )
+    year_frame = _year_coverage(source_frame, data_dir)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -405,6 +459,8 @@ def build_fill_sheet(
         summary.to_excel(writer, sheet_name=SUMMARY_SHEET, index=False)
         help_frame.to_excel(writer, sheet_name=HELP_SHEET, index=False)
         catalog.to_excel(writer, sheet_name=CATALOG_SHEET, index=False)
+        if not year_frame.empty:
+            year_frame.to_excel(writer, sheet_name=YEAR_SHEET, index=False)
 
         paste_sheet = writer.book[OUTPUT_SHEET]
         value_column = columns.index("数值") + 1
@@ -418,7 +474,10 @@ def build_fill_sheet(
             unit_column=unit_column,
             period_column=period_column,
         )
-        for name in (SUMMARY_SHEET, HELP_SHEET, CATALOG_SHEET):
+        extra_sheets = [SUMMARY_SHEET, HELP_SHEET, CATALOG_SHEET]
+        if not year_frame.empty:
+            extra_sheets.append(YEAR_SHEET)
+        for name in extra_sheets:
             sheet = writer.book[name]
             _style_sheet(
                 sheet,
@@ -446,6 +505,12 @@ def main() -> None:
         action="store_true",
         help="检查全部已有报告期；默认每家公司只取最后一个报告期",
     )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=ROOT / "Data",
+        help="含 pdfs(YYYY) 目录的根目录，用于生成年度公司数对照；默认项目根目录 Data",
+    )
     args = parser.parse_args()
 
     output = args.output
@@ -461,6 +526,7 @@ def main() -> None:
         sheet_name=args.sheet,
         scope=args.scope,
         all_periods=args.all_periods,
+        data_dir=args.data_dir,
     )
     print(f"Wrote {result}")
 

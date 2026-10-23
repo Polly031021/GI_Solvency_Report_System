@@ -459,8 +459,14 @@ def build_report(source: Path, output: Path) -> Path:
     work = df[df["指标编码"].ne("")].copy()
     code_map = _company_code_map(source)
     latest_data, _ = _latest_data(work)
-    report_latest = build_step7_metric_gap(latest_data)
-    report_all = build_step7_metric_gap(work)
+    report_latest = build_step7_metric_gap(
+        latest_data,
+        require_expected_period=True,
+    )
+    report_all = build_step7_metric_gap(
+        work,
+        require_expected_period=True,
+    )
 
     total_companies = int(work["公司"].nunique())
     requirement = report_latest.requirement_catalog
