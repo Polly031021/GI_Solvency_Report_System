@@ -29,9 +29,11 @@ from services.table_number_repair import (  # noqa: E402
     repair_thousand_separators,
 )
 from services.solvency_table_extractor import (  # noqa: E402
+    _merge_number_fragment_columns,
     _merge_split_cjk_label,
     _merge_wrapped_table_rows,
     _reconstruct_logical_columns,
+    _repair_operating,
 )
 from ui.step2_extraction import (  # noqa: E402
     _add_column,
@@ -459,6 +461,238 @@ def test_interleaved_header_columns_are_reconstructed():
         ["净利润", "-17,940.38", "167,935.69"],
     ]
     print("PASS 众安式交错空列重建为真实三列")
+
+
+def test_split_period_header_columns_are_reconstructed():
+    """期间表头被列边界切碎时，按列位置重建，不能把本年累计数挪到本季度列。"""
+    rows = [
+        ["指标名称", "本季度", "数 本年", "累计数"],
+        ["保险业务收入", "", "98,336.16", "340,728.21"],
+        ["净利润", "", "4,700.15", "7,249.53"],
+        ["总资产", "", "", "597,221.63"],
+        ["净资产", "", "", "147,299.36"],
+        ["净资产收益率（%）", "", "3.24%", "5.05%"],
+    ]
+    repaired = _reconstruct_logical_columns(rows)
+    assert repaired == [
+        ["指标名称", "本季度数", "本年累计数"],
+        ["保险业务收入", "98,336.16", "340,728.21"],
+        ["净利润", "4,700.15", "7,249.53"],
+        ["总资产", "", "597,221.63"],
+        ["净资产", "", "147,299.36"],
+        ["净资产收益率（%）", "3.24%", "5.05%"],
+    ], repaired
+    print("PASS 切碎的期间表头重建，且空值保持原列位")
+
+
+def test_number_split_by_column_edge_is_stitched():
+    """右对齐长数值被列边界劈成 '9' + '84,390,606.64' 时必须拼回。"""
+    rows = [
+        ["", "", "", "", "", "本季度数", "", "本年度累计数"],
+        ["1", ".", "签单保费", "", "9", "84,390,606.64", "5,", "399,707,901.15"],
+        ["2", ".", "车险签单保费", "", "6", "48,063,745.92", "2,", "787,465,267.99"],
+        ["3", ".", "车险车均保费", "", "", "1117.54", "", "1079.12"],
+        ["", "", "排序", "险种", "", "本季度数", "", "本年度累计数"],
+        ["", "", "1", "健康险", "", "18,554,373.16", "", "1,198,540,778.27"],
+        ["", "5", ". 各渠道签单保", "费", "", "", "", ""],
+        ["", "", "1", "代理渠道", "", "652,817,423.73", "", "3,053,666,299.17"],
+    ]
+    merged = _merge_number_fragment_columns(rows)
+    assert merged[1][-2:] == ["984,390,606.64", "5,399,707,901.15"], merged[1]
+    assert merged[2][-2:] == ["648,063,745.92", "2,787,465,267.99"], merged[2]
+    assert merged[3][-2:] == ["1117.54", "1079.12"], merged[3]
+    rebuilt = _reconstruct_logical_columns(merged)
+    assert rebuilt[0] == ["指标名称", "本季度数", "本年度累计数"], rebuilt[0]
+    assert rebuilt[1] == ["签单保费", "984,390,606.64", "5,399,707,901.15"], rebuilt[1]
+    assert ["各渠道签单保费", "", ""] in rebuilt, rebuilt
+    assert ["代理渠道", "652,817,423.73", "3,053,666,299.17"] in rebuilt, rebuilt
+    print("PASS 被列边界劈开的数值与标签拼回", rebuilt[1])
+
+    # 两张真实的数值列（左列每行都有值）不能被误拼
+    two_columns = [
+        ["指标名称", "数量", "金额"],
+        ["甲", "123", "456.78"],
+        ["乙", "45", "678.90"],
+    ]
+    assert _merge_number_fragment_columns(two_columns) == two_columns
+
+
+def test_blank_metric_row_is_not_merged_into_previous_label():
+    """整行为空的独立指标（如基本每股收益）不能被当成上一行的换行标签。"""
+    rows = [
+        ["指标名称", "本季度数", "本年累计数"],
+        ["保险合同负债", "", "207,314.90"],
+        ["基本每股收益", "", ""],
+        ["车险车均保费", "", "0.09"],
+    ]
+    repaired, events = _merge_wrapped_table_rows(rows)
+    assert [row[0] for row in repaired] == [
+        "指标名称",
+        "保险合同负债",
+        "基本每股收益",
+        "车险车均保费",
+    ], repaired
+    assert not events, events
+
+    # 真正的换行标签仍要合并：短片段与补全未闭合括号两种形态
+    wrapped = [
+        ["行次", "项目", "本季度末数", "上季度末数"],
+        ["1", "量化风险最低资本（未考虑", "100", "90"],
+        ["", "特征系数前）", "", ""],
+        ["2", "核心一级资", "200", "180"],
+        ["", "本", "", ""],
+    ]
+    merged, wrap_events = _merge_wrapped_table_rows(wrapped)
+    assert merged[1][1] == "量化风险最低资本（未考虑特征系数前）", merged
+    assert merged[2][1] == "核心一级资本", merged
+    assert len(wrap_events) == 2, wrap_events
+    print("PASS 整行空白指标不被吞并，真实换行标签仍合并")
+
+
+def test_split_header_operating_table_end_to_end():
+    """端到端：无边框、表头按词散落的三列经营指标表应按期间正确重建。"""
+    font, size = "china-s", 9.0
+
+    def right_text(page, x_right, y, text):
+        width = fitz.get_text_length(text, fontname=font, fontsize=size)
+        page.insert_text((x_right - width, y), text, fontname=font, fontsize=size)
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((40, 50), "（三）主要经营指标", fontname=font, fontsize=12)
+    page.insert_text((40, 72), "指标名称", fontname=font, fontsize=size)
+    page.insert_text((250, 72), "本季度", fontname=font, fontsize=size)
+    page.insert_text((286, 72), "数", fontname=font, fontsize=size)
+    page.insert_text((350, 72), "本年", fontname=font, fontsize=size)
+    page.insert_text((374, 72), "累计数", fontname=font, fontsize=size)
+    rows = [
+        ("保险业务收入", "98,336.16", "340,728.21"),
+        ("净利润", "4,700.15", "7,249.53"),
+        ("总资产", "", "597,221.63"),
+        ("基本每股收益", "", ""),
+    ]
+    y = 92
+    for label, quarter, annual in rows:
+        page.insert_text((40, y), label, fontname=font, fontsize=size)
+        if quarter:
+            right_text(page, 330, y, quarter)
+        if annual:
+            right_text(page, 440, y, annual)
+        y += 18
+    pdf = doc.tobytes()
+    doc.close()
+
+    grids = build_pdf_grids(pdf, [1])
+    outcome = router.extract_page_with_method(
+        pdf_bytes=pdf,
+        page_number=1,
+        table_id="OPERATING_METRICS",
+        table_name="主要经营指标",
+        method=router.MODE_RULE,
+        grid=grids[0] if grids else None,
+        has_text=True,
+        table_config={
+            "start_item_terms": ["保险业务收入"],
+            "end_item_terms": ["基本每股收益"],
+            "boundary_end_mode": "page_tail",
+            "content_terms": ["保险业务收入", "基本每股收益"],
+        },
+    )
+    assert outcome.status == "成功", outcome.note
+    table = outcome.frame.fillna("").astype(str).values.tolist()
+    assert table == [
+        ["指标名称", "本季度数", "本年累计数"],
+        ["保险业务收入", "98,336.16", "340,728.21"],
+        ["净利润", "4,700.15", "7,249.53"],
+        ["总资产", "", "597,221.63"],
+        ["基本每股收益", "", ""],
+    ], table
+    print("PASS 端到端：散落表头重建为三列，空值行保留")
+
+
+def test_solvency_header_with_brackets_survives_region_crop():
+    """表头写成“本季度(末)数”时，页内区域裁切不能把表头行裁掉。"""
+    font, size = "china-s", 9.0
+
+    def right_text(page, x_right, y, text):
+        width = fitz.get_text_length(text, fontname=font, fontsize=size)
+        page.insert_text((x_right - width, y), text, fontname=font, fontsize=size)
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((60, 60), "（一）偿付能力充足率指标", fontname=font, fontsize=11)
+    page.insert_text((90, 90), "指标名称", fontname=font, fontsize=size)
+    right_text(page, 430, 90, "本季度(末)数")
+    right_text(page, 540, 90, "上季度(末)数")
+    rows = [
+        ("认可资产（万元）", "590,800.15", "605,113.10"),
+        ("认可负债（万元）", "431,301.57", "447,380.39"),
+        ("实际资本（万元）", "159,498.58", "157,732.71"),
+        ("核心一级资本（万元）", "159,498.58", "157,732.71"),
+        ("核心二级资本（万元）", "", ""),
+        ("最低资本（万元）", "54,394.66", "57,127.88"),
+        ("核心偿付能力充足率（%）", "293.22%", "276.10%"),
+        ("综合偿付能力充足率（%）", "293.22%", "276.10%"),
+    ]
+    y = 112
+    for label, current, previous in rows:
+        page.insert_text((60, y), label, fontname=font, fontsize=size)
+        if current:
+            right_text(page, 430, y, current)
+        if previous:
+            right_text(page, 540, y, previous)
+        y += 20
+    pdf = doc.tobytes()
+    doc.close()
+
+    grids = build_pdf_grids(pdf, [1])
+    config = {
+        "start_item_terms": ["认可资产"],
+        "end_item_terms": ["综合偿付能力充足率"],
+        "content_terms": ["认可资产", "最低资本"],
+    }
+    for whole_page in (True, False):
+        outcome = router.extract_page_with_method(
+            pdf_bytes=pdf,
+            page_number=1,
+            table_id="SOLVENCY_MAIN",
+            table_name="偿付能力充足率指标",
+            method=router.MODE_RULE,
+            grid=grids[0] if grids else None,
+            has_text=True,
+            table_config=config,
+            whole_page=whole_page,
+        )
+        assert outcome.status == "成功", outcome.note
+        table = outcome.frame.fillna("").astype(str).values.tolist()
+        assert table[0] == ["指标名称", "本季度(末)数", "上季度(末)数"], table[0]
+        assert ["核心二级资本（万元）", "", ""] in table, table
+        assert "含表头" in outcome.note, outcome.note
+    print("PASS 括号写法表头在区域裁切后仍然保留")
+
+
+def test_operating_repair_keeps_annual_only_rows():
+    """主要经营指标的三列已经是标准布局时不能被重排，空的本季度列要保留。"""
+    standard = [
+        ["指标名称", "本季度数", "本年累计数"],
+        ["保险业务收入", "98,336.16", "340,728.21"],
+        ["总资产", "", "597,221.63"],
+        ["基本每股收益", "", ""],
+    ]
+    assert _repair_operating(standard) == standard
+
+    # 只有 pdfplumber 把数值劈成两段（四列）时才重建
+    split = [
+        ["指标名称", "本季度数", "本年累计数", ""],
+        ["保险业务收入", "98,336", ".16", "340,728.21"],
+        ["总资产", "", "", "597,221.63"],
+    ]
+    assert _repair_operating(split) == [
+        ["指标名称", "本季度（末）数", "本年累计数"],
+        ["保险业务收入", "98,336.16", "340,728.21"],
+        ["总资产", "", "597,221.63"],
+    ]
+    print("PASS 主要经营指标三列放行，四列劈裂才重建")
 
 
 def test_editor_column_operations():
@@ -907,6 +1141,12 @@ if __name__ == "__main__":
     test_step2_unit_detected_but_not_converted()
     test_table_unit_ignores_row_level_unit_labels()
     test_interleaved_header_columns_are_reconstructed()
+    test_split_period_header_columns_are_reconstructed()
+    test_number_split_by_column_edge_is_stitched()
+    test_blank_metric_row_is_not_merged_into_previous_label()
+    test_split_header_operating_table_end_to_end()
+    test_solvency_header_with_brackets_survives_region_crop()
+    test_operating_repair_keeps_annual_only_rows()
     test_editor_column_operations()
     test_editor_frame_roundtrip_keeps_header_editable()
     test_vision_crop_uses_region_then_falls_back()

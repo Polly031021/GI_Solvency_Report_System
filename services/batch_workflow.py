@@ -40,7 +40,7 @@ from .solvency_step3_standardizer import (
     result_workbook_bytes,
     standardize_to_target,
 )
-from .solvency_table_extractor import TABLE_SIGNATURES
+from .solvency_table_extractor import TABLE_SIGNATURES, header_compare_text
 
 
 @dataclass
@@ -166,8 +166,8 @@ def _rows_have_metric_header(rows: Sequence[Sequence[str]]) -> bool:
         "上季度末数",
     )
     for row in rows[:3]:
-        text = "".join(str(cell) for cell in row)
-        if sum(term in text for term in terms) >= 2:
+        text = header_compare_text("".join(str(cell) for cell in row))
+        if sum(1 for term in terms if header_compare_text(term) in text) >= 2:
             return True
     return False
 

@@ -38,6 +38,15 @@ TABLE_EXCLUSIONS = {
     "MINIMUM_CAPITAL": ("认可资产表", "认可负债表"),
 }
 
+def header_compare_text(text: object) -> str:
+    """表头比对用的归一文本：去掉空白与括号。
+
+    同一张表，表头可能写成“本季度(末)数”“本季度（末）数”或“本季度末数”，
+    直接做子串匹配会漏掉前两种，导致表头行被当成无表头裁掉。
+    """
+    return re.sub(r"[\s\u3000（）()\[\]【】]+", "", str(text or ""))
+
+
 TABLE_HEADERS = {
     "SOLVENCY_MAIN": (
         "项目", "指标名称", "本季度数", "本季度末数",
@@ -304,6 +313,44 @@ def _row_number_index(row: list[str]) -> int | None:
     return None
 
 
+_LABEL_JOIN_STOP_TOKENS = (
+    "本季度",
+    "上季度",
+    "本年",
+    "累计数",
+    "期末数",
+    "期初数",
+    "排序",
+    "序号",
+    "行次",
+    "单位：",
+    "单位:",
+)
+
+
+def _join_label_cells(row: list[str], label_index: int) -> tuple[str, int]:
+    """把被列边界切开的标签片段拼回一个指标名，返回 (标签, 数值起始列)。
+
+    例如 [". 各渠道签单保", "费", "652,817,423.73"] → ("各渠道签单保费", 2)。
+    遇到期间/序号等表头词时停止，避免把子表的表头行拼成一长串。
+    """
+    parts: list[str] = []
+    index = label_index
+    while index < len(row):
+        text = str(row[index] or "").strip()
+        if not text or _is_numeric_cell(text):
+            break
+        if any(token in text for token in _LABEL_JOIN_STOP_TOKENS):
+            if not parts:
+                parts.append(text)
+                index += 1
+            break
+        parts.append(text)
+        index += 1
+    label = re.sub(r"^[.．、,，:：;；\s]+", "", "".join(parts))
+    return label, index
+
+
 def _row_label_index(row: list[str], *, after: int = -1) -> int | None:
     for index in range(after + 1, len(row)):
         text = str(row[index] or "").strip()
@@ -312,6 +359,22 @@ def _row_label_index(row: list[str], *, after: int = -1) -> int | None:
         if any("\u4e00" <= char <= "\u9fff" for char in text):
             return index
     return None
+
+
+def _has_unclosed_bracket(text: str) -> bool:
+    depth = 0
+    for char in str(text or ""):
+        if char in "（(":
+            depth += 1
+        elif char in "）)":
+            depth = max(0, depth - 1)
+    return depth > 0
+
+
+# 换行标签的溢出片段通常很短（“本”“资本”“充足率”）；超过这个长度且
+# 不是补全上一行未闭合括号的纯文字行，更像一个独立指标行（例如
+# “基本每股收益”），不能并进上一条指标名称。
+_WRAP_FRAGMENT_MAX_CHARS = 4
 
 
 def _is_wrapped_continuation(row: list[str], previous: list[str] | None) -> bool:
@@ -338,7 +401,20 @@ def _is_wrapped_continuation(row: list[str], previous: list[str] | None) -> bool
         for token in ("指标名称", "项目", "行次", "本季度", "上季度", "期末", "期初")
     ):
         return False
-    return any("\u4e00" <= char <= "\u9fff" for char in text)
+    if not any("\u4e00" <= char <= "\u9fff" for char in text):
+        return False
+    previous_index = _row_label_index(previous)
+    previous_label = (
+        str(previous[previous_index] or "").strip()
+        if previous_index is not None
+        else ""
+    )
+    completes_bracket = _has_unclosed_bracket(previous_label) and any(
+        char in "）)" for char in text
+    )
+    if not completes_bracket and len(text) > _WRAP_FRAGMENT_MAX_CHARS:
+        return False
+    return True
 
 
 def _merge_wrapped_table_rows(
@@ -398,6 +474,73 @@ def _merge_wrapped_table_rows(
     return _compact_grid(merged), repairs
 
 
+# pdfplumber 的文字对齐策略按字符落列，右对齐的长数值会被列边界劈开：
+# 984,390,606.64 → "9" + "84,390,606.64"，5,399,707,901.15 → "5," + "399,707,901.15"。
+# 这类碎片列只在少数行有值，且与其他列拼接后才是合法数值。
+_NUMBER_FRAGMENT_RE = re.compile(r"^-?\d{1,3}[,.]?$")
+_FORMATTED_NUMBER_RE = re.compile(r"^-?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$")
+
+
+def _is_number_fragment_pair(
+    rows: list[list[str]],
+    left: int,
+    right: int,
+) -> bool:
+    """判断相邻两列是否是同一个数值被劈开的两段。"""
+    both = left_only = right_only = 0
+    for row in rows:
+        left_text = str(row[left] or "").strip()
+        right_text = str(row[right] or "").strip()
+        if left_text and right_text:
+            both += 1
+            if not _NUMBER_FRAGMENT_RE.fullmatch(left_text):
+                return False
+            if not _FORMATTED_NUMBER_RE.fullmatch(left_text + right_text):
+                return False
+        elif left_text:
+            left_only += 1
+        elif right_text:
+            right_only += 1
+    # 碎片列只能是“多数行没有、少数行溢出”的形态：
+    # 若它总与右列同时出现（或会单独出现），它就是一张独立的列。
+    return both > 0 and left_only == 0 and right_only > 0
+
+
+def _merge_number_fragment_columns(rows: list[list[str]]) -> list[list[str]]:
+    """把被列边界劈开的数值碎片并回同一列。
+
+    只处理“左侧短碎片 + 右侧完整数值”的相邻列，且合并结果必须是合法数值，
+    因此不会把两列真实数值错误地拼在一起。
+    """
+    if len(rows) < 2:
+        return rows
+    width = max((len(row) for row in rows), default=0)
+    if width < 2:
+        return rows
+    padded = [list(row) + [""] * (width - len(row)) for row in rows]
+    merge_next = [
+        _is_number_fragment_pair(padded, index, index + 1)
+        for index in range(width - 1)
+    ]
+    if not any(merge_next):
+        return rows
+    groups: list[list[int]] = []
+    current = [0]
+    for index in range(width - 1):
+        if merge_next[index]:
+            current.append(index + 1)
+        else:
+            groups.append(current)
+            current = [index + 1]
+    groups.append(current)
+    return _compact_grid(
+        [
+            ["".join(row[column] for column in group) for group in groups]
+            for row in padded
+        ]
+    )
+
+
 _PERIOD_HEADER_TOKENS = (
     "本季度",
     "本季末",
@@ -452,7 +595,10 @@ def _period_header_cells(row: list[str]) -> list[str]:
         else:
             cells.append(text)
         index += 1
-    return cells
+    if len(cells) >= 2:
+        return cells
+    # 逐格只认出一个期间时，可能整行都被列边界切碎了；尝试整行重拼。
+    return _period_headers_from_fragments(row) or cells
 
 
 _PERIOD_SUBHEADER_RE = re.compile(r"非认可价值|认可价值|账面价值")
@@ -467,6 +613,66 @@ _PERIOD_CELL_TOKENS = (
     "期末数",
     "期初数",
 )
+
+# 文字对齐识别会把期间表头按列边界切成碎片，例如
+# ["指标名称", "本季度", "数 本年", "累计数"]。把整行表头拼回去后，
+# 只有能被下面的期间词完整解释时，才认为可以按期间重建表头。
+_PERIOD_HEADER_TOKENS = tuple(
+    sorted(
+        {
+            *_PERIOD_CELL_TOKENS,
+            "本年度累计数",
+            "上年度累计数",
+            "上季度可比数",
+            "本季度可比数",
+            "上年同期数",
+            "上年同期",
+            "本季度末",
+            "上季度末",
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_PERIOD_HEADER_RE = re.compile("|".join(re.escape(item) for item in _PERIOD_HEADER_TOKENS))
+_HEADER_LABEL_WORDS = (
+    "指标名称",
+    "指标",
+    "项目",
+    "行次",
+    "序号",
+    "单位：万元",
+    "单位:万元",
+    "单位：元",
+    "单位:元",
+    "（万元）",
+    "(万元)",
+)
+
+
+def _period_headers_from_fragments(header_row: list[str]) -> list[str]:
+    """把被列边界切碎的期间表头拼回去并重新切分。
+
+    pdfplumber 的文字对齐策略按字符落列，期间标题可能被切成
+    “本季度 / 数 本年 / 累计数”这样的碎片。整行拼接后若能完全由已知
+    期间词解释，就返回规范期间名；否则返回空列表，交回逐格识别。
+    """
+    cells = [str(cell or "").strip() for cell in header_row]
+    text = re.sub(r"[\s\u3000]+", "", "".join(cells))
+    for word in _HEADER_LABEL_WORDS:
+        text = text.replace(word, "")
+    if not text:
+        return []
+    tokens: list[str] = []
+    position = 0
+    for match in _PERIOD_HEADER_RE.finditer(text):
+        if match.start() != position:
+            return []
+        tokens.append(match.group())
+        position = match.end()
+    if position != len(text) or len(tokens) < 2:
+        return []
+    return tokens
 
 
 def _period_cells_in_header(header_row: list[str]) -> list[tuple[int, str]]:
@@ -599,9 +805,12 @@ def _reconstruct_logical_columns(
         (
             index
             for index, row in enumerate(rows[:12])
-            if any(
+            # 章节标题（“（三）主要经营指标”）也含“指标”，但只有一格有字；
+            # 表头行至少有两格内容，据此排除标题行。
+            if sum(1 for cell in row if str(cell or "").strip()) >= 2
+            and any(
                 token in "".join(str(cell) for cell in row)
-                for token in ("指标名称", "项目", "指标")
+                for token in ("指标名称", "项目", "指标", "行次", "序号")
             )
         ),
         0,
@@ -619,6 +828,60 @@ def _reconstruct_logical_columns(
     if len(period_headers) < 2:
         return rows
 
+    # ---- 优先按“列位置”重建 ----
+    # 期间表头被列边界切碎时，数据行里会多出只承载表头文字的“幽灵列”
+    # （例如第 1 列全空，本季度数值落在第 2 列）。此时不能按每行数值个数
+    # 左对齐（否则“总资产”这类只有本年累计数的行会把数值塞进本季度列），
+    # 而应保留原始列位置：数值出现在哪一列，就归到对应的期间。
+    width = max((len(row) for row in rows), default=0)
+    data_slice = rows[header_index + 1:]
+    numeric_columns = [
+        index
+        for index in range(width)
+        if any(
+            index < len(row) and _is_numeric_cell(row[index])
+            for row in data_slice
+        )
+    ]
+    label_columns = [
+        index
+        for index in range(width)
+        if index not in numeric_columns
+        and any(index < len(row) and str(row[index] or "").strip() for row in data_slice)
+    ]
+    if (
+        numeric_columns
+        and len(numeric_columns) == len(period_headers)
+        and len(label_columns) <= 1
+    ):
+        header_label = next(
+            (
+                str(cell or "").strip()
+                for cell in header_row
+                if str(cell or "").strip()
+            ),
+            "指标名称",
+        )
+        if "指标" not in header_label and "项目" not in header_label:
+            header_label = "指标名称"
+        label_column = label_columns[0] if label_columns else 0
+        position_rebuilt: list[list[str]] = [[header_label, *period_headers]]
+        for row in data_slice:
+            label = (
+                str(row[label_column] or "").strip()
+                if label_column < len(row)
+                else ""
+            )
+            values = [
+                str(row[column] or "").strip() if column < len(row) else ""
+                for column in numeric_columns
+            ]
+            if not label and not any(values):
+                continue
+            position_rebuilt.append([label, *values])
+        if len(position_rebuilt) >= 3:
+            return position_rebuilt
+
     data_rows: list[tuple[list[str], list[str]]] = []
     matched = 0
     for source in rows[header_index + 1:]:
@@ -627,12 +890,13 @@ def _reconstruct_logical_columns(
         if label_index is None:
             data_rows.append(([], []))
             continue
+        label, value_start = _join_label_cells(row, label_index)
         values = [
             str(cell or "").strip()
-            for cell in row[label_index + 1:]
+            for cell in row[value_start:]
             if _is_numeric_cell(cell)
         ]
-        labels = [str(row[label_index] or "").strip()]
+        labels = [label]
         if len(values) == len(period_headers) and labels[0]:
             data_rows.append((labels, values))
             matched += 1
@@ -692,19 +956,30 @@ def _repair_solvency_main(rows: list[list[str]]) -> list[list[str]]:
 
 
 def _repair_operating(rows: list[list[str]]) -> list[list[str]]:
+    """把“主要经营指标”还原为 指标名称 / 本季度数 / 本年累计数 三列。
+
+    只在 pdfplumber 把三列切成四列（数值被列边界劈成两段）时重建；
+    已经标准的三列直接放行，避免把只有本年累计数的行（总资产、净资产、
+    保险合同负债、基本每股收益等）当成空行丢掉。
+    """
     header_index = next(
         (index for index, row in enumerate(rows) if row and "指标名称" in row[0]),
         None,
     )
     if header_index is None:
         return rows
+    width = max((len(row) for row in rows), default=0)
+    if width != 4:
+        return rows
     repaired = [["指标名称", "本季度（末）数", "本年累计数"]]
     for row in rows[header_index + 1:]:
-        cells = [cell for cell in row if cell]
-        if len(cells) >= 4:
-            repaired.append([cells[0], cells[1] + cells[2], cells[3]])
-        elif len(cells) >= 3:
-            repaired.append(cells[:3])
+        cells = [str(cell or "").strip() for cell in row]
+        cells = [*cells, *[""] * max(0, 4 - len(cells))][:4]
+        label = cells[0]
+        if not label:
+            continue
+        # 第 2、3 列是同一个本季度数值被列边界劈开的两段（如 98,336 / .16）
+        repaired.append([label, cells[1] + cells[2], cells[3]])
     return repaired
 
 
@@ -749,7 +1024,11 @@ def _slice_target_rows(
             (
                 index
                 for index, text in enumerate(row_texts)
-                if "指标名称" in text and ("本季度末数" in text or "期末数" in text)
+                if "指标名称" in text
+                and (
+                    "本季度末数" in header_compare_text(text)
+                    or "期末数" in header_compare_text(text)
+                )
             ),
             None,
         )
@@ -916,6 +1195,7 @@ def page_table_candidates(
             cleaned_rows, wrap_repairs = _merge_wrapped_table_rows(
                 _clean_rows(rows)
             )
+            cleaned_rows = _merge_number_fragment_columns(cleaned_rows)
             cleaned_rows = _reconstruct_logical_columns(cleaned_rows)
             cleaned = _slice_target_rows(table_id, cleaned_rows, config)
             if len(cleaned) < 2:
@@ -997,6 +1277,7 @@ def extract_page_all_tables(page) -> tuple[list[list[list[str]]], str]:
             if strategy == "文字对齐识别":
                 rows = _merge_split_cjk_label(rows)
             rows, wrap_repairs = _merge_wrapped_table_rows(rows)
+            rows = _merge_number_fragment_columns(rows)
             rows = _reconstruct_logical_columns(rows)
             wrap_repair_count += len(wrap_repairs)
             if len(rows) < 2:
