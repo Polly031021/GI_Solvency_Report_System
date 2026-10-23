@@ -13,6 +13,8 @@ from services.solvency_step7_charts import (
     risk_ratio_scatter_default_domain,
 )
 
+from services.report_i18n import chart_name as chart_display_name, t, translate_text
+from .rendering import render_altair_chart
 from .selection import bubble_company_color_map
 from .specs import (
     BUBBLE_FULL_PANEL_WIDTH,
@@ -50,7 +52,7 @@ def render_capital_efficiency_bubble_fragment(
             tracked_company,
         )
     except ValueError as exc:
-        st.warning(str(exc))
+        st.warning(translate_text(str(exc)))
         return
     sample_signature = (
         latest_period,
@@ -73,7 +75,7 @@ def render_capital_efficiency_bubble_fragment(
             periods,
             company_colors,
             tracked_company,
-            panel_label="全样本图",
+            panel_label=t("全样本图", "Full sample"),
             chart_width=BUBBLE_FULL_PANEL_WIDTH,
             chart_height=bubble_panel_height,
             show_company_legend=True,
@@ -90,15 +92,21 @@ def render_capital_efficiency_bubble_fragment(
         key=f"capital_bubble_print_controls_{key_prefix}",
     ):
         if st.button(
-            "定位追踪公司" if tracked_company else "恢复默认范围",
+            t("定位追踪公司", "Locate tracked company")
+            if tracked_company
+            else t("恢复默认范围", "Reset default range"),
             icon=":material/my_location:",
             key=f"{state_prefix}_reset",
         ):
             st.session_state[revision_key] += 1
             st.rerun(scope="fragment")
         st.caption(
-            "拖动主图灰色选区可移动观察范围，滚轮可缩放；"
-            "当前局部视图会直接用于打印，打印时自动隐藏选区框。"
+            t(
+                "拖动主图灰色选区可移动观察范围，滚轮可缩放；"
+                "当前局部视图会直接用于打印，打印时自动隐藏选区框。",
+                "Drag the grey selection on the main chart to move the view or scroll to zoom. "
+                "The current zoomed view is used directly for printing, where the selection box is hidden.",
+            )
         )
 
     overlap_chart = None
@@ -110,7 +118,7 @@ def render_capital_efficiency_bubble_fragment(
             company_colors,
             tracked_company,
             zoom_to_overlap_region=True,
-            panel_label="局部样本放大",
+            panel_label=t("局部样本放大", "Zoomed sample"),
             chart_width=BUBBLE_ZOOM_PANEL_WIDTH,
             chart_height=bubble_panel_height,
             show_company_legend=True,
@@ -122,8 +130,13 @@ def render_capital_efficiency_bubble_fragment(
     except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
         overlap_error = str(exc)
     st.caption(
-        f"展示 {latest_period}：横轴为实际资本/注册资本，纵轴为核心资本/注册资本，"
-        "气泡面积代表认可资产规模；浅灰虚线为全样本横纵指标中位数。"
+        t(
+            f"展示 {latest_period}：横轴为实际资本/注册资本，纵轴为核心资本/注册资本，"
+            "气泡面积代表认可资产规模；浅灰虚线为全样本横纵指标中位数。",
+            f"Showing {latest_period}: the x-axis is actual capital / registered capital and the y-axis is "
+            "core capital / registered capital; bubble size represents recognised assets. "
+            "The light-grey dashed line is the full-sample median of both axes.",
+        )
     )
     if overlap_chart is not None:
         bubble_pair = combine_capital_efficiency_bubble_charts(
@@ -132,19 +145,30 @@ def render_capital_efficiency_bubble_fragment(
             selection_name=selection_name,
             selection_domain=default_domain,
         )
-        st.altair_chart(
+        render_altair_chart(
             bubble_pair,
             width="content",
         )
     else:
-        st.altair_chart(
+        render_altair_chart(
             full_chart,
             width="content",
             key=f"{key_prefix}_capital_efficiency_bubble_full_v8",
         )
     if overlap_error:
-        st.caption(f"局部放大图暂不可用：{overlap_error}")
-    st.caption("局部图横纵轴与主图选区实时联动；设置追踪公司后，默认选区会围绕该公司及其邻近公司。")
+        st.caption(
+            t(
+                f"局部放大图暂不可用：{overlap_error}",
+                f"Zoomed chart is not available: {overlap_error}",
+            )
+        )
+    st.caption(
+        t(
+            "局部图横纵轴与主图选区实时联动；设置追踪公司后，默认选区会围绕该公司及其邻近公司。",
+            "The zoomed chart’s axes follow the main chart selection in real time. "
+            "With a tracked company, the default selection centres on that company and its peers.",
+        )
+    )
 
 
 @st.fragment
@@ -189,7 +213,7 @@ def render_risk_ratio_scatter_fragment(
             x_code,
             y_code,
             periods,
-            chart_name,
+            chart_display_name(chart_name),
             tracked_company,
             company_colors,
             bubble_size_code=bubble_size_code,
@@ -200,11 +224,11 @@ def render_risk_ratio_scatter_fragment(
             x_code,
             y_code,
             periods,
-            chart_name,
+            chart_display_name(chart_name),
             tracked_company,
             company_colors=company_colors,
             percentage_axes=True,
-            panel_label="全样本图",
+            panel_label=t("全样本图", "Full sample"),
             chart_width=RISK_SCATTER_FULL_PANEL_WIDTH,
             chart_height=panel_height,
             linked_selection_name=selection_name,
@@ -213,7 +237,7 @@ def render_risk_ratio_scatter_fragment(
             bubble_size_label=denominator_label,
         )
     except ValueError as exc:
-        st.warning(str(exc))
+        st.warning(translate_text(str(exc)))
         return
 
     with st.container(
@@ -222,15 +246,21 @@ def render_risk_ratio_scatter_fragment(
         key=f"risk_scatter_print_controls_{x_code.lower()}",
     ):
         if st.button(
-            "定位追踪公司" if tracked_company else "恢复默认范围",
+            t("定位追踪公司", "Locate tracked company")
+            if tracked_company
+            else t("恢复默认范围", "Reset default range"),
             icon=":material/my_location:",
             key=f"{state_prefix}_reset",
         ):
             st.session_state[revision_key] += 1
             st.rerun(scope="fragment")
         st.caption(
-            "拖动全样本图灰色选区可移动观察范围，滚轮可缩放；"
-            "当前局部视图会直接用于打印，打印时自动隐藏选区框。"
+            t(
+                "拖动全样本图灰色选区可移动观察范围，滚轮可缩放；"
+                "当前局部视图会直接用于打印，打印时自动隐藏选区框。",
+                "Drag the grey selection on the full-sample chart to move the view or scroll to zoom. "
+                "The current zoomed view is used directly for printing, where the selection box is hidden.",
+            )
         )
 
     local_chart = None
@@ -241,12 +271,12 @@ def render_risk_ratio_scatter_fragment(
             x_code,
             y_code,
             periods,
-            chart_name,
+            chart_display_name(chart_name),
             tracked_company,
             company_colors=company_colors,
             percentage_axes=True,
             zoom_to_overlap_region=True,
-            panel_label="局部样本放大",
+            panel_label=t("局部样本放大", "Zoomed sample"),
             chart_width=RISK_SCATTER_ZOOM_PANEL_WIDTH,
             chart_height=panel_height,
             show_axis_titles=False,
@@ -261,10 +291,16 @@ def render_risk_ratio_scatter_fragment(
         local_error = str(exc)
 
     st.caption(
-        f"展示 {latest_period}；每个气泡代表一家公司，横纵轴均为占{denominator_label}的比例，"
-        f"气泡面积代表{denominator_label}规模；"
-        "横纵轴根据各指标量级自动采用%、‰或基点（bp），具体单位见坐标轴标题；"
-        "浅灰虚线为全样本横纵指标中位数。"
+        t(
+            f"展示 {latest_period}；每个气泡代表一家公司，横纵轴均为占{denominator_label}的比例，"
+            f"气泡面积代表{denominator_label}规模；"
+            "横纵轴根据各指标量级自动采用%、‰或基点（bp），具体单位见坐标轴标题；"
+            "浅灰虚线为全样本横纵指标中位数。",
+            f"Showing {latest_period}; each bubble is one company. Both axes are shown as a share of "
+            f"{translate_text(denominator_label)}; bubble size represents {translate_text(denominator_label)} scale. "
+            "Axes automatically use %, ‰ or basis points (bp) according to the metric scale; see the axis titles. "
+            "The light-grey dashed line is the full-sample median of both axes.",
+        )
     )
     if local_chart is not None:
         linked_chart = combine_linked_matrix_charts(
@@ -273,15 +309,24 @@ def render_risk_ratio_scatter_fragment(
             selection_name=selection_name,
             selection_domain=default_domain,
         )
-        st.altair_chart(linked_chart, width="content")
+        render_altair_chart(linked_chart, width="content")
     else:
-        st.altair_chart(
+        render_altair_chart(
             full_chart,
             width="content",
             key=f"{key_prefix}_{x_code}_risk_scatter_full_v2",
         )
     if local_error:
-        st.caption(f"局部放大图暂不可用：{local_error}")
+        st.caption(
+            t(
+                f"局部放大图暂不可用：{local_error}",
+                f"Zoomed chart is not available: {local_error}",
+            )
+        )
     st.caption(
-        "局部图横纵轴与全样本图选区实时联动；设置追踪公司后，默认选区会围绕该公司及其邻近公司。"
+        t(
+            "局部图横纵轴与全样本图选区实时联动；设置追踪公司后，默认选区会围绕该公司及其邻近公司。",
+            "The zoomed chart’s axes follow the full-sample selection in real time. "
+            "With a tracked company, the default selection centres on that company and its peers.",
+        )
     )

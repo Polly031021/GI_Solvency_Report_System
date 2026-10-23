@@ -7,6 +7,7 @@ import requests
 import streamlit as st
 from services.llm_config import model_request_parameters, normalize_model_id
 from services.llm_http import post_json_with_retry
+from services.report_i18n import get_language, is_english
 from services.solvency_step6_analysis import format_chart_value
 
 
@@ -25,13 +26,23 @@ def _call_ai_analysis_cached(
     api_key: str,
     base_url: str,
     model: str,
+    language: str = "zh",
 ) -> str:
-    prompt = (
-        "你是资深四大保险精算顾问。请根据以下偿付能力同业对标数据，"
-        "用一句中文给出专业点评，指出最高、最低、均值及值得关注的差异；"
-        "不要编造数据，不超过80字。\n"
-        f"报告期：{latest_period}\n指标：{metric_name}\n数据：{data_text}"
-    )
+    if is_english(language):
+        prompt = (
+            "You are a senior insurance actuarial consultant at a Big Four firm. "
+            "Based on the peer solvency benchmarking data below, provide one concise professional "
+            "comment in English covering the highest, lowest and average values and any notable "
+            "differences. Do not invent data; keep it under 80 words.\n"
+            f"Reporting period: {latest_period}\nMetric: {metric_name}\nData: {data_text}"
+        )
+    else:
+        prompt = (
+            "你是资深四大保险精算顾问。请根据以下偿付能力同业对标数据，"
+            "用一句中文给出专业点评，指出最高、最低、均值及值得关注的差异；"
+            "不要编造数据，不超过80字。\n"
+            f"报告期：{latest_period}\n指标：{metric_name}\n数据：{data_text}"
+        )
     payload = {
         "model": normalize_model_id(base_url, model),
         "messages": [{"role": "user", "content": prompt}],
@@ -76,10 +87,13 @@ def ai_analysis_for_latest_period(
     }
     if not all(settings.values()):
         return (
-            "当前登录会话的 AI 配置不完整。请退出登录，在登录页填写 "
+            "The AI configuration for this session is incomplete. Sign out, enter the Base URL, "
+            "model name and API Key on the sign-in page, then sign in again."
+            if is_english()
+            else "当前登录会话的 AI 配置不完整。请退出登录，在登录页填写 "
             "Base URL、模型名称和 API Key 后重新进入。"
         ), True
-    company_values = "、".join(
+    company_values = (", " if is_english() else "、").join(
         f"{row['公司']}={format_chart_value(row['数值'], row.get('单位', ''), row.get('数据类型', ''))}"
         for _, row in latest.sort_values("数值", ascending=False).iterrows()
     )
@@ -89,7 +103,11 @@ def ai_analysis_for_latest_period(
         sample.get("单位", ""),
         sample.get("数据类型", ""),
     )
-    data_text = f"{company_values}；样本均值={average_text}"
+    data_text = (
+        f"{company_values}; sample average={average_text}"
+        if is_english()
+        else f"{company_values}；样本均值={average_text}"
+    )
     try:
         return (
             _call_ai_analysis_cached(
@@ -99,8 +117,9 @@ def ai_analysis_for_latest_period(
                 settings["api_key"],
                 settings["base_url"],
                 settings["model"],
+                get_language(),
             ),
             False,
         )
     except Exception as exc:
-        return f"AI 分析失败：{exc}", True
+        return ("AI commentary failed: " if is_english() else "AI 分析失败：") + str(exc), True

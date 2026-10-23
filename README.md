@@ -34,11 +34,11 @@ streamlit run app.py
 | STEP0 报告监控 | 读取本地财险公司清单，单家或并发检查披露页面是否已更新目标报告期 | `ui/step0_monitor.py`、`services/solvency_pdf_locator.py` |
 | STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览 | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
 | STEP2 表格提取 | 按确认页码逐页并发提取，默认“智能模式”：文字版页面优先规则法（离线零 token），规则未通过或扫描版页面自动转大模型；默认开启“整页全表提取”，一页多表时合并为同一张中间表展示（内部保留独立表块），不做目标表首尾边界裁切，避免指标被截断；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
-| STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；批量：定位→核对页码→提取三阶段处理多家公司 | `ui/step3_standardization.py`、`services/solvency_step3_standardizer.py`、`services/batch_processor.py` |
+| STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；标准化后按 STEP7 指标需求清单检查缺口，可导出缺失指标补录表并回填合并；批量：定位→核对页码→提取三阶段处理多家公司，同样执行 STEP7 缺口检查 | `ui/step3_standardization.py`、`ui/step7_metric_check.py`、`services/solvency_step3_standardizer.py`、`services/step3_metric_gap.py`、`services/batch_processor.py` |
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
 | STEP6 自定义分析 | 任选指标/公司/报告期，生成簇状柱、折线、散点、横向条形等对比图，图例与配色可自定义 | `ui/step6_analysis.py`、`services/solvency_step6_analysis.py` |
-| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益五年年度散点图、行业五年保费结构、公司类别市场份额等，支持图片覆盖、AI 点评与打印导出 PDF | `step7_solvency/`、`services/solvency_step7_charts/` |
+| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益五年年度散点图、行业五年保费结构、公司类别市场份额等，支持图片覆盖、AI 点评与打印导出 PDF；页面顶部可一键切换中英文展示。STEP7 所需指标统一维护在 `config/Step7_指标需求清单.xlsx` | `step7_solvency/`、`services/solvency_step7_charts/`、`services/solvency_step7_metric_catalog.py`、`services/report_i18n.py` |
 | STEP8 行业分析 | 行业整体概览、同业分类分布趋势与排名、重大融资统计，支持整本报告打印 | `step8_solvency.py`、`dashboard_components.py` |
 
 STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.xlsx`，无需每次在侧边栏上传；上传文件仅覆盖当前会话，可点击“恢复默认配置”切回内置模板。侧边栏只保留一级/二级分类，二级分类即图表入口。
@@ -123,6 +123,8 @@ tests/                    回归测试
 | `table_strategy_registry.py` / `table_strategy_handlers.py` | 各目标表的专用提取策略 |
 | `solvency_normalizer.py` | 指标匹配、期间口径归一、单位换算、标准窄表 schema |
 | `solvency_step3_standardizer.py` | 目标指标清单填报与派生指标计算 |
+| `solvency_step7_metric_catalog.py` | STEP7 指标需求目录、图表-指标映射与维护用 Excel 生成 |
+| `step3_metric_gap.py` | STEP3 标准化后的 STEP7 指标缺口检查、缺失补录表导出与回填合并 |
 | `solvency_validator.py` | STEP4 勾稽规则引擎 |
 | `solvency_dataset_adapter.py` | 集成层：外部宽表映射、派生指标补全、行业合计生成、工作簿读写 |
 | `solvency_company_identity.py` | 公司名称归一化、历史名称别名、同业分类解析 |
@@ -147,15 +149,16 @@ tests/                    回归测试
   provenance（来源文件/工作表/页码）与计算逻辑；对外的 STEP3/STEP5 交换格式是它的
   精简版 `NARROW_TABLE_COLUMNS`（14 列）。
 - **单位为万元**：金额类指标统一换算为万元；比率类统一为百分数（`%`），倍数为 `倍`。
+- **无单位金额默认按元**：源表、表头、行标签都没有声明金额单位时，按“元”作为原始单位再换算为万元（不再默认万元）；备注列会写“未识别原始单位，按默认单位元换算”，并在 STEP3 警告中汇总条数，便于核对。
 - **期间口径**：所有期间叫法（本期/上期/年末等）归一为 `本季度末数`、`本年累计数` 等标准口径。
 - **公司名称归一**：去掉「（偿付能力）」「（合并）」等披露口径后缀，避免同一家公司被算作两家。
 - **人工确认优先**：定位置信度低于阈值或证据冲突时会标记需人工核对，提取按人工确认的页码执行。
-- **行业概览口径**：`行业概览 > 规模与发展` 使用上传数据中的全部公司，不受 STEP7 展示公司/公司类型筛选影响；年度值取每年 Q4 的 `本年累计数`，车险取 `SIGNED_PREMIUM_MOTOR`，非车险为总签单保费减车险；拆分缺失时以灰色“未拆分”段保留已有合计。图表内置 2017–2024 行业历史签单保费与车险占比，上传数据覆盖同年度固定值并保留其新增年度；显示范围默认全部，也可切换近 5 年或近 10 年，并保留车险、非车险与合计三条趋势线。
+- **行业概览口径**：`行业概览 > 规模与发展` 使用上传数据中的全部公司，不受 STEP7 展示公司/公司类型筛选影响；年度值取每年 Q4 的 `本年累计数`，车险取 `SIGNED_PREMIUM_MOTOR`，非车险为总签单保费减车险；拆分缺失时以灰色“未拆分”段保留已有合计。图表内置 2017–2024 行业历史签单保费与车险占比，上传数据覆盖同年度固定值并保留其新增年度；显示范围默认全部，也可切换近 5 年或近 10 年，并保留车险、非车险与合计三条趋势线。聚合前会按记录自身单位换算为万元，并按公司历史年度与 Q4 单季值校正元/亿元误标为万元的量级异常；公司名称中的「（偿付能力）」等披露后缀会先归并，避免合计保费与车险拆分被拆成两行。
 - **保费增速结构口径**：`经营与偿付能力联动分析 > 保费增速` 每家展示公司单独一张五年小图，并按 `同业分类`（界面中的公司类型）分组展示；分类缺失时回退到 `公司类型`。100% 堆叠柱按 `SIGNED_PREMIUM_MOTOR / SIGNED_PREMIUM` 计算车险占比，非车险为总签单保费减车险；折线为总保费 `(本年 - 上年) / 上年` 的同比增速，使用右轴。展示区间首年若缺少上一年度基数则不画折线点，车险拆分缺失或异常时以灰色“未拆分”段保留总保费。
 - **经营表现口径**：`公司业绩展示` 按利润排名轨迹模式分组，每组默认每行 4 家公司（可在图表配置中用 `grid_cols` 调整为 5）；每张小图的横轴为签单保费排名、纵轴为净利润排名，数值越小排名越靠前，第 1 名位于右上角。
 - **资本充足率组合图口径**：`综合充足率变化` 与 `核心充足率变化` 按年度展示，每年优先取 Q4（无 Q4 时取该年最后可得期），横轴统一显示年份，不再显示 `Q1–Q4` 标签。
 - **行业市场份额口径**：`行业概览 > 市场份额` 使用最新一个覆盖达标的完整年度，按根目录 `财险公司列表.xlsx` 的 `公司类别` 聚合；饼图展示保费、净利润、承保利润的正值占比，柱状图展示三类指标的具体金额，承保利润缺失时按 `签单保费 ×（1 - 综合成本率）` 测算。
-- **承保效益口径**：`行业概览 > 承保效益` 取最近 5 个有数据的年度（Q4/年末），每年按当年保费收入降序排名；每家公司一个点，横轴为保费排名、纵轴为综合成本率，纵轴以 100% 为中心对称展开并用虚线标示盈亏平衡。综合成本率低于 100% 计为盈利、高于 100% 计为亏损；图下展示当年盈利/亏损公司数，第三行第二张图汇总五年盈亏公司数趋势。年度累计保费缺失时回退到本季度数参与排名。
+- **承保效益口径**：`行业概览 > 承保效益` 取最近 5 个有数据的年度（Q4/年末），每年按当年签单保费降序排名；每家公司一个点，横轴为签单保费排名、纵轴为综合成本率，纵轴以 100% 为中心对称展开并用虚线标示盈亏平衡。综合成本率低于 100% 计为盈利、高于 100% 计为亏损；图下展示当年盈利/亏损公司数，第三行第二张图汇总五年盈亏公司数趋势。年度累计签单保费缺失时回退到本季度数参与排名。
 
 ---
 
@@ -165,6 +168,7 @@ tests/                    回归测试
 | --- | --- |
 | `config/report_profiles/*_profile.xlsx` | 报告 Profile 工作簿（目标表、定位关键词、字段字典、完整性规则、公司来源） |
 | `config/solvency_taxonomy.xlsx` | 财险指标字典（正式口径，财险强制使用） |
+| `config/Step7_指标需求清单.xlsx` | STEP7 指标需求清单（指标、图表映射、派生依赖、单位与期间口径），由 `python tools/generate_step7_metric_catalog.py` 生成 |
 | `config/solvency_validation_rules.xlsx` | STEP4 勾稽规则 |
 | `config/solvency_peer_groups.json` | 公司 → 同业分类映射 |
 | `config/non_life_solvency_company_urls.xlsx` | Profile 内嵌的公司网址来源 |
@@ -201,6 +205,7 @@ python test_step2_extraction_modes.py # STEP2 提取：千分位修复、规则�
 python test_step4_validation.py       # STEP4 勾稽：失败原因、STEP3 依据、跨表比对与页面下钻
 python test_app_smoke.py              # 登录后首页渲染
 python test_workflow_smoke.py         # 注入合成数据，逐页渲染 STEP0–STEP8（含全部内置图表）
+python test_step7_metric_gap.py       # STEP7 指标目录、STEP3 缺失检查/补录合并、无单位默认按元
 python test_underwriting_yearly.py    # 承保效益：五年年度散点图、100% 中轴与盈亏汇总
 python test_step7_excel_modules.py    # Excel 配置驱动的 31 种 STEP7 图表类型
 python test_industry_premium_logic.py # 行业保费结构：固定历史、上传覆盖、Q4 全年累计与 5/10/全部窗口

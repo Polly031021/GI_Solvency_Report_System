@@ -22,6 +22,7 @@ from services.solvency_report_notes import (
     overlay_notes,
     read_notes_workbook,
 )
+from services.report_i18n import is_english, t, translate_dataframe
 from services.solvency_step6_analysis import sort_report_periods
 
 
@@ -241,11 +242,16 @@ def render_report_analysis(note: dict[str, str] | None) -> None:
     )
 
 
-def render_report_footnote(note: dict[str, str] | None) -> None:
+def render_report_footnote(
+    note: dict[str, str] | None,
+    *,
+    language: str = "zh",
+) -> None:
     text = str((note or {}).get("注释内容", "") or "").strip()
     if text:
+        prefix = t("注：", "Note: ", language)
         st.markdown(
-            f'<p class="solvency-report-footnote">注：{html.escape(text)}</p>',
+            f'<p class="solvency-report-footnote">{prefix}{html.escape(text)}</p>',
             unsafe_allow_html=True,
         )
 
@@ -504,7 +510,7 @@ def build_key_solvency_overview_html(
         parts.append("<tr>")
         for column_index, value in enumerate(row.tolist()):
             text = html.escape(str(value))
-            is_missing = text == "未披露"
+            is_missing = text in {"未披露", "Not disclosed"}
             background = "#CDCDCD" if is_missing else row_background
             color = (
                 "white"
@@ -561,15 +567,33 @@ def render_key_solvency_overview(
     data: pd.DataFrame | None,
     *,
     highlight_company: str = "无",
+    language: str = "zh",
 ) -> pd.DataFrame:
     table, latest_period, prior_period = build_key_solvency_overview_table(data)
-    st.markdown("### :material/table_chart: 关键偿付数据概览")
+    st.markdown(
+        "### :material/table_chart: "
+        + t("关键偿付数据概览", "Key solvency data overview", language)
+    )
     if table.empty:
-        st.info("当前数据没有可生成关键偿付数据概览的公司记录。")
+        st.info(
+            t(
+                "当前数据没有可生成关键偿付数据概览的公司记录。",
+                "No company records are available to build the key solvency data overview.",
+                language,
+            )
+        )
         return table
     if not prior_period:
-        st.warning("当前缺少本期对应的上年同期报告期；所有同期变化列暂时留空。")
+        st.warning(
+            t(
+                "当前缺少本期对应的上年同期报告期；所有同期变化列暂时留空。",
+                "The prior-year comparable period is missing; all period-change columns are left blank.",
+                language,
+            )
+        )
     display = _format_key_solvency_overview_display(table)
+    if is_english(language):
+        display = translate_dataframe(display, language)
     st.markdown(
         build_key_solvency_overview_html(
             display,
@@ -580,8 +604,13 @@ def render_key_solvency_overview(
         unsafe_allow_html=True,
     )
     st.caption(
-        f"比较期间：{prior_period or '缺少上期'} → {latest_period or '缺少本期'}；"
-        "灰色“未披露”表示原始披露或派生指标不足，未以 0 替代。"
+        t(
+            f"比较期间：{prior_period or '缺少上期'} → {latest_period or '缺少本期'}；"
+            "灰色“未披露”表示原始披露或派生指标不足，未以 0 替代。",
+            f"Comparison periods: {prior_period or 'prior period missing'} → {latest_period or 'current period missing'}; "
+            "grey “Not disclosed” means the source or derived metric is insufficient and has not been replaced with 0.",
+            language,
+        )
     )
     return table
 
@@ -639,44 +668,94 @@ def render_major_financing(
     data: pd.DataFrame | None,
     *,
     print_mode: bool = False,
+    language: str = "zh",
 ) -> None:
     summary = summarize_financing(data)
-    st.markdown("### :material/assignment: 重大融资信息统计")
+    st.markdown(
+        "### :material/assignment: "
+        + t("重大融资信息统计", "Major financing summary", language)
+    )
     st.info(
-        "本页统计各公司在各季度的增资或发债事项，以及综合偿付能力充足率的变动情况。"
+        t(
+            "本页统计各公司在各季度的增资或发债事项，以及综合偿付能力充足率的变动情况。",
+            "This page summarises each company’s capital raising or bond issuance by quarter, "
+            "together with changes in the combined solvency ratio.",
+            language,
+        )
     )
     metrics = st.columns(3)
-    metrics[0].metric("融资事件总数", f"{summary.event_count:,}", border=True)
-    metrics[1].metric("涉及公司数", f"{summary.company_count:,}", border=True)
-    metrics[2].metric("最新季度", summary.latest_period or "-", border=True)
+    metrics[0].metric(
+        t("融资事件总数", "Financing events", language),
+        f"{summary.event_count:,}",
+        border=True,
+    )
+    metrics[1].metric(
+        t("涉及公司数", "Companies involved", language),
+        f"{summary.company_count:,}",
+        border=True,
+    )
+    metrics[2].metric(
+        t("最新季度", "Latest quarter", language),
+        summary.latest_period or "-",
+        border=True,
+    )
 
     st.divider()
-    st.markdown("#### :material/bar_chart: 重大融资信息明细")
+    st.markdown(
+        "#### :material/bar_chart: "
+        + t("重大融资信息明细", "Major financing detail", language)
+    )
     if not isinstance(data, pd.DataFrame) or data.empty:
-        st.info("请在左侧边栏上传重大融资信息 Excel。")
+        st.info(
+            t(
+                "请在左侧边栏上传重大融资信息 Excel。",
+                "Upload the major financing Excel file from the left sidebar.",
+                language,
+            )
+        )
         return
 
     periods = list(reversed(sort_report_periods(data["季度"].tolist())))
+
     def render_period_table(period: str, period_frame: pd.DataFrame) -> None:
         display = period_frame[
             ["公司名称", "增资/发债", "季度总变动", "增资/发债的影响"]
         ].reset_index(drop=True)
+        column_config = {
+            "公司名称": st.column_config.TextColumn("公司名称", pinned=True, width="small"),
+            "增资/发债": st.column_config.TextColumn("增资/发债", width="large"),
+            "季度总变动": st.column_config.TextColumn("季度总变动", width="medium"),
+            "增资/发债的影响": st.column_config.TextColumn("增资/发债的影响", width="medium"),
+        }
+        if is_english(language):
+            display = translate_dataframe(display, language)
+            column_config = {
+                "Company": st.column_config.TextColumn("Company", pinned=True, width="small"),
+                "Capital raising / bond issuance": st.column_config.TextColumn(
+                    "Capital raising / bond issuance", width="large"
+                ),
+                "Quarterly change": st.column_config.TextColumn(
+                    "Quarterly change", width="medium"
+                ),
+                "Impact of capital raising / bond issuance": st.column_config.TextColumn(
+                    "Impact of capital raising / bond issuance", width="medium"
+                ),
+            }
         st.dataframe(
             display,
             width="stretch",
             hide_index=True,
-            column_config={
-                "公司名称": st.column_config.TextColumn("公司名称", pinned=True, width="small"),
-                "增资/发债": st.column_config.TextColumn("增资/发债", width="large"),
-                "季度总变动": st.column_config.TextColumn("季度总变动", width="medium"),
-                "增资/发债的影响": st.column_config.TextColumn("增资/发债的影响", width="medium"),
-            },
+            column_config=column_config,
         )
 
     for period in periods:
         period_frame = data[data["季度"] == period].copy()
         company_count = int(period_frame["公司名称"].nunique())
-        label = f"{period}（{company_count} 家公司）"
+        label = t(
+            f"{period}（{company_count} 家公司）",
+            f"{period} ({company_count} companies)",
+            language,
+        )
         if print_mode:
             st.markdown(f"#### {label}")
             render_period_table(period, period_frame)
@@ -688,11 +767,23 @@ def render_major_financing(
                 render_period_table(period, period_frame)
 
 
-def render_print_control(*, key: str = "solvency_dashboard_print") -> None:
-    st.markdown("### :material/print: 打印/导出 PDF")
+def render_print_control(
+    *,
+    key: str = "solvency_dashboard_print",
+    language: str = "zh",
+) -> None:
+    st.markdown(
+        "### :material/print: "
+        + t("打印/导出 PDF", "Print / export PDF", language)
+    )
     st.info(
-        "竖版 A4 与横版 16:9 均导出封面、正文和封底。"
-        "打印时请勾选“背景图形”以保留颜色。"
+        t(
+            "竖版 A4 与横版 16:9 均导出封面、正文和封底。"
+            "打印时请勾选“背景图形”以保留颜色。",
+            "Both portrait A4 and widescreen 16:9 export the cover, body and back cover. "
+            "Enable “Background graphics” when printing to preserve colours.",
+            language,
+        )
     )
 
     html_code = """
@@ -734,6 +825,10 @@ def render_print_control(*, key: str = "solvency_dashboard_print") -> None:
     }
     </script>
     """
+    if is_english(language):
+        html_code = html_code.replace("导出竖版 A4 PDF", "Export portrait A4 PDF").replace(
+            "导出横版 16:9 PDF", "Export widescreen 16:9 PDF"
+        )
     st.components.v1.html(html_code, height=80)
 
 

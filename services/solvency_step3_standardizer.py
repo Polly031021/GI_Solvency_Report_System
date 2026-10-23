@@ -28,6 +28,7 @@ from .solvency_company_identity import (
 from .solvency_normalizer import (
     CAPITAL_COMPONENT_ZERO_CODES,
     CAPITAL_COMPONENT_ZERO_TABLE_IDS,
+    DEFAULT_AMOUNT_SOURCE_UNIT,
     NARROW_TABLE_COLUMNS,
     STANDARD_COLUMNS,
     _EXACT_LABEL_LOCKS,
@@ -385,8 +386,9 @@ def convert_amount_to_target_unit(
     将原始数值转换为目标单位。
     返回 (转换后的值, 备注信息)
 
-    注意：不再根据数值量级猜测原始单位。原始单位缺失或无法识别时，
-    原样返回并写入备注，避免把“万元”误当“元”除以 10000。
+    注意：不再根据数值量级猜测原始单位。原始单位缺失时由调用方决定默认口径；
+    STEP3 在调用前会按 DEFAULT_AMOUNT_SOURCE_UNIT（元）补齐，再换算为目标单位。
+    本函数直接收到无法识别单位时仍原样返回并写入备注。
     """
     if raw_value is None or pd.isna(raw_value):
         return None, ""
@@ -1616,15 +1618,11 @@ def standardize_to_target(
             if current_unit and current_unit == target_unit:
                 continue
 
-            # 单位为空：不猜量级，直接跳过并留痕
+            # ★ 单位为空：按默认原始单位“元”换算，不再静默当成目标单位万元。
+            default_amount_unit = False
             if not current_unit:
-                old_note = (
-                    str(data.at[idx, "备注"])
-                    if pd.notna(data.at[idx, "备注"]) else ""
-                )
-                note = "原始单位缺失，未换算"
-                data.at[idx, "备注"] = f"{old_note}；{note}" if old_note else note
-                continue
+                current_unit = DEFAULT_AMOUNT_SOURCE_UNIT
+                default_amount_unit = True
 
             converted, note = convert_amount_to_target_unit(
                 raw_value,
@@ -1632,6 +1630,11 @@ def standardize_to_target(
                 target_unit,
                 metric_code=code,
             )
+            if default_amount_unit:
+                note = (
+                    f"未识别原始单位，按默认单位{current_unit}换算为{target_unit}"
+                    + (f"；{note}" if note else "")
+                )
             if converted is not None and isinstance(converted, (int, float)):
                 data.at[idx, "数值"] = converted
                 data.at[idx, "单位"] = target_unit
@@ -1684,6 +1687,17 @@ def standardize_to_target(
         if _blank_zero_count:
             warnings.append(
                 f"已将 {_blank_zero_count} 条资本明细空白值按0处理，请核对源表是否为空白。"
+            )
+        _default_unit_count = int(
+            data["备注"]
+            .astype(str)
+            .str.contains("按默认单位元换算", regex=False)
+            .sum()
+        )
+        if _default_unit_count:
+            warnings.append(
+                f"有 {_default_unit_count} 条金额记录未识别到原始单位，"
+                "已按默认单位“元”换算为万元，请重点核对源表是否确实以元列示。"
             )
     _missing_diag_count = 0
     if not diagnostic_frame.empty and "状态" in diagnostic_frame.columns:

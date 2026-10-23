@@ -116,7 +116,9 @@ from .industry_premium import (
     MOTOR_PREMIUM_CODE,
     TOTAL_PREMIUM_CODE,
     UPLOAD_SOURCE,
+    build_industry_premium_mix_chart,
     build_industry_premium_structure_chart,
+    build_industry_premium_total_chart,
     prepare_industry_premium_annual,
 )
 
@@ -228,7 +230,9 @@ __all__ = [
     "MOTOR_PREMIUM_CODE",
     "TOTAL_PREMIUM_CODE",
     "UPLOAD_SOURCE",
+    "build_industry_premium_mix_chart",
     "build_industry_premium_structure_chart",
+    "build_industry_premium_total_chart",
     "prepare_industry_premium_annual",
     "MarketShareData",
     "build_market_share_amount_bars",
