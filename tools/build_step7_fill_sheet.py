@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from services.solvency_step7_metric_catalog import (  # noqa: E402
     step7_metric_requirement_catalog,
 )
-from services.step3_metric_gap import build_step7_metric_gap  # noqa: E402
+from services.step3_metric_gap import _period_group, build_step7_metric_gap  # noqa: E402
 
 
 CORE_CODES = {
@@ -57,6 +57,7 @@ SUMMARY_SHEET = "缺失指标汇总"
 HELP_SHEET = "填写说明"
 CATALOG_SHEET = "STEP7指标目录"
 YEAR_SHEET = "年度公司数"
+AUDIT_SHEET = "期间口径核对"
 
 _PERIOD_RE = re.compile(r"(20\d{2})\D*[Qq]?([1-4])")
 _COMPANY_SUFFIX_RE = re.compile(
@@ -244,6 +245,64 @@ def _summary_frame(output: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _period_audit_frame(data: pd.DataFrame, catalog: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "指标编码", "指标名称", "指标类别", "建议期间", "有数据公司数",
+        "建议期间公司数", "期间缺口公司数", "完全缺失公司数",
+        "期间分布", "期间缺口公司", "完全缺失公司", "使用图表", "问题类型",
+    ]
+    work = data.copy()
+    work["_数值"] = pd.to_numeric(work["数值"], errors="coerce")
+    work = work[work["_数值"].notna()]
+    companies = set(work["公司"].astype(str))
+    base = catalog[catalog["补录方式"].eq("直接补录")].copy()
+    rows: list[dict] = []
+    for _, meta in base.iterrows():
+        code = str(meta["指标编码"]).strip()
+        expected = str(meta.get("建议期间口径", "") or "").strip()
+        sub = work[work["指标编码"].eq(code)]
+        any_companies = set(sub["公司"].astype(str))
+        expected_companies = set(
+            sub[sub["期间口径"].map(_period_group).eq(_period_group(expected))]["公司"].astype(str)
+        )
+        gap = sorted(any_companies - expected_companies)
+        absent = sorted(companies - any_companies)
+        scopes = (
+            sub.assign(_期间=sub["期间口径"].map(_period_group))
+            .groupby("_期间")["公司"].nunique()
+            .sort_values(ascending=False)
+        )
+        if gap and absent:
+            issue = "期间口径 + 完全缺失"
+        elif gap:
+            issue = "期间口径"
+        elif absent:
+            issue = "完全缺失"
+        else:
+            issue = ""
+        rows.append(
+            {
+                "指标编码": code,
+                "指标名称": meta.get("指标名称", ""),
+                "指标类别": "核心" if code in CORE_CODES else "其他",
+                "建议期间": expected,
+                "有数据公司数": len(any_companies),
+                "建议期间公司数": len(expected_companies),
+                "期间缺口公司数": len(gap),
+                "完全缺失公司数": len(absent),
+                "期间分布": "；".join(f"{key} {value} 家" for key, value in scopes.items()),
+                "期间缺口公司": "、".join(gap),
+                "完全缺失公司": "、".join(absent),
+                "使用图表": meta.get("Step7使用图表", ""),
+                "问题类型": issue,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["期间缺口公司数", "完全缺失公司数", "指标编码"],
+        ascending=[False, False, True],
+    )
+
+
 def _year_coverage(source: pd.DataFrame, data_dir: Path | None) -> pd.DataFrame:
     columns = ["年度", "PDF文件数", "汇总数据公司数", "差异", "说明"]
     if data_dir is None or not data_dir.exists():
@@ -325,6 +384,11 @@ def _help_frame(
                 "年度公司数",
                 "若根目录 Data/pdfs(YYYY) 存在，会附“年度公司数”对照页，"
                 "展示 PDF 文件数与汇总数据公司数的差异。",
+            ),
+            (
+                "期间口径核对",
+                "“期间口径核对”页逐项列出每个指标的建议期间、实际期间分布、"
+                "期间缺口公司和完全缺失公司。",
             ),
             (
                 "注意",
@@ -452,6 +516,7 @@ def build_fill_sheet(
         int(work["公司"].nunique()),
     )
     year_frame = _year_coverage(source_frame, data_dir)
+    audit_frame = _period_audit_frame(data, catalog)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -459,6 +524,7 @@ def build_fill_sheet(
         summary.to_excel(writer, sheet_name=SUMMARY_SHEET, index=False)
         help_frame.to_excel(writer, sheet_name=HELP_SHEET, index=False)
         catalog.to_excel(writer, sheet_name=CATALOG_SHEET, index=False)
+        audit_frame.to_excel(writer, sheet_name=AUDIT_SHEET, index=False)
         if not year_frame.empty:
             year_frame.to_excel(writer, sheet_name=YEAR_SHEET, index=False)
 
@@ -474,7 +540,7 @@ def build_fill_sheet(
             unit_column=unit_column,
             period_column=period_column,
         )
-        extra_sheets = [SUMMARY_SHEET, HELP_SHEET, CATALOG_SHEET]
+        extra_sheets = [SUMMARY_SHEET, AUDIT_SHEET, HELP_SHEET, CATALOG_SHEET]
         if not year_frame.empty:
             extra_sheets.append(YEAR_SHEET)
         for name in extra_sheets:
