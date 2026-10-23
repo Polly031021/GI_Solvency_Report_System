@@ -67,6 +67,10 @@ _CURRENCY_UNIT_IN_YUAN = {
     "亿元": 100_000_000.0,
 }
 
+# 源表没有声明金额单位时的默认原始单位。
+# 监管报告绝大多数以“元”列示金额；若默认成万元，会把 1 亿元当成 1 万元。
+DEFAULT_AMOUNT_SOURCE_UNIT = "元"
+
 _INLINE_UNIT_PATTERN = re.compile(
     r"[（(]\s*(亿元|万元|千元|元|%|％|百分比|百分点|人|户|件|次|级)\s*[）)]"
 )
@@ -1355,15 +1359,24 @@ def normalize_tables(
                             headers[column_index],
                             target_unit,
                         )
+                        # ★ 默认单位：源表/表头/行标签都没有声明金额单位时，
+                        #   按“元”作为原始单位，再统一换算为标准单位（通常为万元）。
+                        default_amount_unit = False
                         if target_unit in _CURRENCY_UNIT_IN_YUAN and not source_unit:
-                            note = "未识别原始单位，数值未换算"
-                        else:
-                            value, conversion_note = _convert_unit(
-                                value,
-                                source_unit,
-                                target_unit,
+                            source_unit = DEFAULT_AMOUNT_SOURCE_UNIT
+                            default_amount_unit = True
+                        value, conversion_note = _convert_unit(
+                            value,
+                            source_unit,
+                            target_unit,
+                        )
+                        note = conversion_note
+                        if default_amount_unit:
+                            note = (
+                                "未识别原始单位，按默认单位元换算为"
+                                f"{target_unit}"
+                                + (f"；{conversion_note}" if conversion_note else "")
                             )
-                            note = conversion_note
 
                     # ★ 新增：百分比类指标的合理性兜底校验
                     # 某些 PDF 表格（如"流动性风险监测指标"）里，"占比/增速"

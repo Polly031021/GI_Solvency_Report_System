@@ -6,6 +6,8 @@ import html
 
 import streamlit as st
 
+from services.report_i18n import t
+
 
 def render_insight_card(
     *,
@@ -17,7 +19,7 @@ def render_insight_card(
     bullets: tuple[str, ...] | list[str] = (),
     footnote: str = "",
     accent: str = "#00338D",
-    eyebrow: str = "模块解读",
+    eyebrow: str = "",
 ) -> None:
     """Render a compact, print-safe summary card for one chart module.
 
@@ -25,6 +27,7 @@ def render_insight_card(
     delta and interpretation bullets stay on one visual surface in both the
     screen report and the browser print output.
     """
+    eyebrow = eyebrow or t("模块解读", "Module insight")
     tone = delta_tone if delta_tone in {"up", "down", "neutral"} else "neutral"
     bullet_html = "".join(
         f"<li>{html.escape(str(item))}</li>"

@@ -254,6 +254,8 @@ def test_industry_premium_template_module() -> None:
     default_markdown = "\n".join(item.value for item in at.markdown)
     assert "历年保费规模与同比增速" in default_markdown
     assert "justify-content:flex-start" in default_markdown
+    assert "签单保费规模与同比增速" in default_markdown
+    assert "车险 / 非车险占比与同比增速" in default_markdown
 
     range_widget.set_value("近5年").run()
     assert not at.exception, [e.value for e in at.exception]
