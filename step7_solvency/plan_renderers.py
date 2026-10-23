@@ -242,7 +242,7 @@ def render_plan_premium_growth_structure(
             )
         )
 
-    columns_per_row = 2
+    columns_per_row = 4
     for group_index, (group_name, group_panels) in enumerate(
         group_premium_growth_panels(panels)
     ):

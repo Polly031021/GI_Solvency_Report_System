@@ -90,7 +90,16 @@ def _annual_metric_values(
     scopes = work["期间口径"].fillna("").astype(str).str.strip()
     requested_scope = str(annual_scope or "").strip()
     if requested_scope:
+        # 优先精确匹配配置的口径；如果匹配不到，回退到年度累计口径的模糊匹配
         scope_mask = scopes.eq(requested_scope)
+        if not scope_mask.any():
+            scope_mask = scopes.str.contains(
+                "|".join(ANNUAL_SCOPE_KEYWORDS),
+                regex=True,
+                na=False,
+            )
+        if not scope_mask.any():
+            scope_mask = pd.Series(True, index=work.index)
     else:
         scope_mask = scopes.str.contains(
             "|".join(ANNUAL_SCOPE_KEYWORDS),
@@ -296,17 +305,17 @@ def build_premium_growth_structure_chart(
     share_scale = alt.Scale(domain=[0, 100], zero=True, nice=False)
     growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=True)
     x_axis = alt.Axis(
-        title="年份",
-        titleFontSize=9,
-        titlePadding=4,
+        title=None,
         labelAngle=0,
-        labelFontSize=8,
-        labelPadding=5,
+        labelFontSize=9,
+        labelPadding=7,
     )
     x = alt.X("年度:N", sort=years, axis=x_axis)
 
-    bar_base = alt.Chart(panel.bar_frame)
-    bars = bar_base.mark_bar(size=48).encode(
+    bar_base = alt.Chart(panel.bar_frame).transform_calculate(
+        占比标签 = "datum['占比'] != null && !isNaN(datum['占比']) ? format(datum['占比'], '.0f') + '%' : ''"
+    )
+    bars = bar_base.mark_bar(size=46).encode(
         x=x,
         y=alt.Y(
             "占比起点:Q",
@@ -339,7 +348,7 @@ def build_premium_growth_structure_chart(
         ],
     )
     bar_labels = bar_base.mark_text(
-        fontSize=8,
+        fontSize=9,
         fontWeight="bold",
         baseline="middle",
     ).encode(
@@ -347,7 +356,7 @@ def build_premium_growth_structure_chart(
         y=alt.Y("占比中点:Q", stack=None, scale=share_scale, axis=None),
         text=alt.condition(
             alt.datum["占比"] >= 4,
-            alt.Text("占比:Q", format=".0f"),
+            "占比标签:N",
             alt.value(""),
         ),
         color=alt.Color(
@@ -461,8 +470,8 @@ def build_premium_growth_structure_chart(
                 color="#00338D",
                 offset=8,
             ),
-            width=280,
-            height=260,
+            width=260,
+            height=255,
         )
     )
     return apply_report_theme(chart)
