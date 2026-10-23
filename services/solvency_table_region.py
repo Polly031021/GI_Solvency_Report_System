@@ -25,7 +25,7 @@ from .solvency_table_boundaries import (
     end_item_groups,
     line_has_item,
 )
-from .solvency_table_extractor import TABLE_HEADERS
+from .solvency_table_extractor import TABLE_HEADERS, header_compare_text
 
 
 # 行内单词聚合成一行的纵向容差，与文字网格保持一致
@@ -119,7 +119,14 @@ def _find_header_line(
         if index < 0:
             break
         text = lines[index]["text"]
-        header_hits = sum(1 for term in terms if term and term in text)
+        # 表头常写成“本季度(末)数/上季度（末）数”，去掉括号后再比对，
+        # 否则只命中“指标名称”一个词，整行表头会被裁切掉。
+        compare_text = header_compare_text(text)
+        header_hits = sum(
+            1
+            for term in terms
+            if term and header_compare_text(term) in compare_text
+        )
         title_hit = any(term in text for term in title_terms)
         if header_hits >= _HEADER_HIT_MINIMUM or title_hit:
             best = index
