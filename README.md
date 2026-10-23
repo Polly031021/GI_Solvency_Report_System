@@ -43,6 +43,21 @@ streamlit run app.py
 
 STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.xlsx`，无需每次在侧边栏上传；上传文件仅覆盖当前会话，可点击“恢复默认配置”切回内置模板。侧边栏只保留一级/二级分类，二级分类即图表入口。
 
+### STEP7 缺失指标补录脚本
+
+汇总数据（至少包含 `标准数据` 页）可直接运行：
+
+```bash
+python tools/build_step7_fill_sheet.py "偿付能力行业集成数据_公司名称与分类规范化.xlsx"
+```
+
+- 默认每家公司取最后一个报告期，检查全部 STEP7 基础指标；
+- 输出工作簿的 `标准数据` 页与源表列名、列顺序完全一致，只包含缺失指标行，`数值` 列留空；
+- 填完数值后，选中数据行复制，粘贴到已有汇总表最后一行之后即可；
+- 只补核心指标：加 `--scope core`；检查全部报告期：加 `--all-periods`；
+- 可用 `--sheet` 指定源工作表，默认 `标准数据`；
+- 输出文件默认在源文件旁：`*_STEP7缺失指标_可粘贴补录表_全部.xlsx`。
+
 ### 大文件读取性能
 
 - 标准窄表按文件 SHA256 缓存到系统临时目录，同一文件首次解析后再次读取不再重新打开 Excel。
@@ -207,7 +222,7 @@ python test_app_smoke.py              # 登录后首页渲染
 python test_workflow_smoke.py         # 注入合成数据，逐页渲染 STEP0–STEP8（含全部内置图表）
 python test_step7_metric_gap.py       # STEP7 指标目录、STEP3 缺失检查/补录合并、无单位默认按元
 python test_underwriting_yearly.py    # 承保效益：五年年度散点图、100% 中轴与盈亏汇总
-python test_step7_excel_modules.py    # Excel 配置驱动的 31 种 STEP7 图表类型
+python test_step7_excel_modules.py    # Excel 配置驱动的 37 种 STEP7 图表类型
 python test_industry_premium_logic.py # 行业保费结构：固定历史、上传覆盖、Q4 全年累计与 5/10/全部窗口
 python test_industry_market_share_logic.py # 行业市场份额：最新完整年度、公司类别与图表结构
 python -m pyflakes ..                 # 静态检查：未定义名字/未使用导入（当前零告警）
