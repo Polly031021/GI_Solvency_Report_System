@@ -205,6 +205,20 @@ def prepare_metric_trend(
     return metric, periods, name, trend_y_domain(metric, code)
 
 
+def _scope_priority(scope: pd.Series) -> pd.Series:
+    """Prefer current-quarter period-end values over prior-quarter values."""
+    text = scope.fillna("").astype(str).str.strip()
+    priority = pd.Series(9, index=text.index, dtype=int)
+    priority[text.str.contains("本年累计|年度累计|全年累计", na=False)] = 0
+    priority[
+        text.str.contains("本季度末数|本季末|期末数|期末$|当期|时点", na=False)
+    ] = 0
+    priority[text.str.contains("本季度数", na=False)] = 1
+    priority[text.str.contains("上季度", na=False)] = 20
+    priority[text.str.contains("下季度|预测", na=False)] = 99
+    return priority
+
+
 def insurance_risk_liability_pressure_sentence(
     frame: pd.DataFrame,
     code: str,
@@ -227,11 +241,14 @@ def insurance_risk_liability_pressure_sentence(
     rows = rows.dropna(subset=["公司", "数值"]).copy()
     if rows.empty:
         return ""
+    # 源表单位为“倍”（0–1 之间），部分调用方会先统一换算成百分数；
+    # 这里按数量级兜底，确保结论中的数值始终以“%”口径展示。
+    magnitude = float(rows["数值"].abs().median())
+    if 0.0 < magnitude <= 1.5:
+        rows["数值"] = rows["数值"] * 100.0
     if "期间口径" in rows.columns:
         scope = rows["期间口径"].fillna("").astype(str).str.strip()
-        rows["_口径优先级"] = scope.str.contains("本年累计|期末|本季末|当期", na=False).map(
-            {True: 0, False: 1}
-        )
+        rows["_口径优先级"] = _scope_priority(scope)
         rows = rows.sort_values(["公司", "_口径优先级"], kind="stable")
     rows = rows.drop_duplicates("公司", keep="first")
     group_map: dict[str, str] = {}
@@ -255,6 +272,25 @@ def insurance_risk_liability_pressure_sentence(
     group_means = rows.groupby("公司分类")["数值"].mean().sort_values()
     if group_means.empty:
         return ""
+    # 外资系是本次分析重点关注的分组：即使个别小型/自保公司均值更低，
+    # 只要外资系明显低于“非外资系”整体，就单独给出这条结论。
+    foreign_values = rows[
+        rows["公司分类"].astype(str).eq("外资系")
+    ]["数值"]
+    non_foreign_values = rows[
+        ~rows["公司分类"].astype(str).eq("外资系")
+    ]["数值"]
+    if not foreign_values.empty and not non_foreign_values.empty:
+        foreign_mean = float(foreign_values.mean())
+        non_foreign_mean = float(non_foreign_values.mean())
+        overall_mean = float(rows["数值"].mean())
+        foreign_gap = non_foreign_mean - foreign_mean
+        if foreign_gap >= max(0.25, abs(overall_mean) * 0.10):
+            return (
+                f"外资系公司的非寿险保险风险压力因子平均值为{foreign_mean:.2f}%，"
+                f"明显低于其他类型公司的平均水平{non_foreign_mean:.2f}%，"
+                "体现了外资系公司在控制业务风险方面的严格程度。"
+            )
     lowest_group = str(group_means.index[0])
     lowest_mean = float(group_means.iloc[0])
     others = rows[rows["公司分类"].ne(lowest_group)]["数值"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 import altair as alt
@@ -22,6 +22,8 @@ PREMIUM_CATEGORY_COLORS = {
 }
 PREMIUM_CATEGORY_ORDER = {"车险": 0, "非车险": 1, "未拆分": 2}
 GROWTH_LINE_COLOR = "#E36C0A"
+SOLVENCY_RATIO_CODE = "COMBINED_SOLVENCY_RATIO"
+SOLVENCY_LINE_COLOR = "#FD349C"
 ANNUAL_SCOPE_KEYWORDS = ("本年累计", "年度累计", "全年累计")
 PREMIUM_GROWTH_GROUP_ORDER = (
     "前三大",
@@ -45,6 +47,7 @@ class PremiumGrowthPanel:
     line_frame: pd.DataFrame
     years: tuple[str, ...]
     company_group: str = "未分类"
+    solvency_frame: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _period_parts(value: object) -> tuple[int | None, int]:
@@ -124,6 +127,39 @@ def _annual_metric_values(
     }
 
 
+def _year_end_metric_values(
+    company_frame: pd.DataFrame,
+    code: str,
+) -> dict[int, float]:
+    """Pick one year-end value per year for a stock metric such as solvency."""
+    if company_frame.empty or code not in set(company_frame["指标编码"].astype(str)):
+        return {}
+    work = company_frame[company_frame["指标编码"].astype(str).eq(code)].copy()
+    work["数值"] = pd.to_numeric(work["数值"], errors="coerce")
+    parts = work["报告期"].map(_period_parts)
+    work["年度"] = parts.map(lambda item: item[0])
+    work["季度"] = parts.map(lambda item: item[1])
+    work = work.dropna(subset=["年度", "数值"]).copy()
+    if work.empty:
+        return {}
+    work["年度"] = work["年度"].astype(int)
+    work = work[work["季度"].isin((0, 4))].copy()
+    if work.empty:
+        return {}
+    scopes = work["期间口径"].fillna("").astype(str).str.strip()
+    end_mask = scopes.str.contains("本季度末|期末|本季末|当期", regex=True, na=False)
+    if end_mask.any():
+        work = work[end_mask].copy()
+    work = work.sort_values(["年度"], kind="stable").drop_duplicates(
+        "年度", keep="last"
+    )
+    return {
+        int(row.年度): float(row.数值)
+        for row in work.itertuples(index=False)
+        if pd.notna(row.数值)
+    }
+
+
 def _company_group(company_frame: pd.DataFrame, group_column: str) -> str:
     """Resolve one company's group, preferring the configured category field."""
     candidates = list(
@@ -183,6 +219,7 @@ def prepare_premium_growth_panel(
 
     total_values = _annual_metric_values(work, total_code, annual_scope)
     motor_values = _annual_metric_values(work, motor_code, annual_scope)
+    solvency_values = _year_end_metric_values(work, SOLVENCY_RATIO_CODE)
     total_years = sorted(total_values)
     if not total_years:
         return PremiumGrowthPanel(company, empty_bars, empty_lines, (), company_group)
@@ -190,6 +227,7 @@ def prepare_premium_growth_panel(
     display_years = total_years[-max(1, int(years or DEFAULT_YEARS)) :]
     bar_rows: list[dict[str, object]] = []
     line_rows: list[dict[str, object]] = []
+    solvency_rows: list[dict[str, object]] = []
     line_group = 0
     previous_line_year: int | None = None
 
@@ -228,6 +266,15 @@ def prepare_premium_growth_panel(
             )
             start = end
 
+        solvency_value = solvency_values.get(year)
+        if solvency_value is not None:
+            solvency_rows.append(
+                {
+                    "年度": str(year),
+                    "综合偿付能力充足率": float(solvency_value),
+                }
+            )
+
         previous_total = total_values.get(year - 1)
         if previous_total is not None and previous_total > 0:
             growth = (float(total) - float(previous_total)) / float(previous_total) * 100.0
@@ -251,6 +298,10 @@ def prepare_premium_growth_panel(
         pd.DataFrame(line_rows),
         tuple(str(year) for year in display_years),
         company_group,
+        pd.DataFrame(
+            solvency_rows,
+            columns=["年度", "综合偿付能力充足率"],
+        ),
     )
 
 
@@ -282,12 +333,13 @@ def premium_growth_axis_domain(
         numeric = pd.to_numeric(panel.line_frame["同比增速"], errors="coerce").dropna()
         values.extend(float(value) for value in numeric if abs(float(value)) < 1_000)
     if not values:
-        return -10.0, 35.0
-    low = min(0.0, min(values) * 1.15)
-    high = max(0.0, max(values) * 1.15)
+        return -10.0, 40.0
+    # 给折线标签留出足够的上下空间，避免标签顶到公司标题或右轴标题。
+    low = min(0.0, min(values) * 1.35)
+    high = max(0.0, max(values) * 1.35)
     if high - low < 10.0:
-        high += 5.0
-        low -= 5.0
+        high += 6.0
+        low -= 6.0
     return low, high
 
 
@@ -303,7 +355,7 @@ def build_premium_growth_structure_chart(
 
     years = list(panel.years)
     share_scale = alt.Scale(domain=[0, 100], zero=True, nice=False)
-    growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=True)
+    growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=False)
     x_axis = alt.Axis(
         title=None,
         labelAngle=0,
@@ -380,10 +432,10 @@ def build_premium_growth_structure_chart(
                 orient="right",
                 format=".0f",
                 title="增速（%）",
-                titlePadding=3,
+                titlePadding=6,
                 titleFontSize=8,
                 labelFontSize=8,
-                tickCount=5,
+                tickCount=4,
                 grid=False,
             ),
         )
@@ -432,8 +484,8 @@ def build_premium_growth_structure_chart(
                 fontWeight="bold",
                 color=GROWTH_LINE_COLOR,
                 baseline="middle",
-                dy=-10,
-                dx=8,
+                dy=-11,
+                dx=0,
             )
             .encode(
                 x=line_x,
@@ -449,7 +501,7 @@ def build_premium_growth_structure_chart(
                 color=GROWTH_LINE_COLOR,
                 baseline="middle",
                 dy=12,
-                dx=8,
+                dx=0,
             )
             .encode(
                 x=line_x,
@@ -459,8 +511,68 @@ def build_premium_growth_structure_chart(
         )
         growth_layers = [zero_axis, line, points, positive_labels, negative_labels]
 
+    solvency_layers: list[alt.Chart] = []
+    if not panel.solvency_frame.empty:
+        solvency_base = alt.Chart(panel.solvency_frame)
+        solvency_scale = alt.Scale(zero=False, nice=False)
+        solvency_y = alt.Y(
+            "综合偿付能力充足率:Q",
+            scale=solvency_scale,
+            axis=alt.Axis(
+                orient="right",
+                offset=50,
+                format=".0f",
+                title="偿付能力（%）",
+                titlePadding=6,
+                titleFontSize=8,
+                labelFontSize=8,
+                tickCount=4,
+                grid=False,
+            ),
+        )
+        solvency_y_axisless = alt.Y(
+            "综合偿付能力充足率:Q",
+            scale=solvency_scale,
+            axis=None,
+        )
+        solvency_line = solvency_base.mark_line(
+            color=SOLVENCY_LINE_COLOR,
+            strokeWidth=2.0,
+            strokeDash=[5, 3],
+        ).encode(
+            x=x,
+            y=solvency_y,
+            tooltip=[
+                alt.Tooltip("年度:N", title="年度"),
+                alt.Tooltip(
+                    "综合偿付能力充足率:Q",
+                    title="综合偿付能力充足率（%）",
+                    format=".1f",
+                ),
+            ],
+        )
+        solvency_points = solvency_base.mark_point(
+            size=55,
+            filled=True,
+            color=SOLVENCY_LINE_COLOR,
+            stroke="#FFFFFF",
+            strokeWidth=1.2,
+        ).encode(
+            x=x,
+            y=solvency_y_axisless,
+            tooltip=[
+                alt.Tooltip("年度:N", title="年度"),
+                alt.Tooltip(
+                    "综合偿付能力充足率:Q",
+                    title="综合偿付能力充足率（%）",
+                    format=".1f",
+                ),
+            ],
+        )
+        solvency_layers = [solvency_line, solvency_points]
+
     chart = (
-        alt.layer(bars, bar_labels, *growth_layers)
+        alt.layer(bars, bar_labels, *growth_layers, *solvency_layers)
         .resolve_scale(y="independent", color="independent")
         .properties(
             title=alt.TitleParams(
@@ -468,10 +580,10 @@ def build_premium_growth_structure_chart(
                 anchor="middle",
                 fontSize=12,
                 color="#00338D",
-                offset=8,
+                offset=10,
             ),
-            width=260,
-            height=255,
+            width=310,
+            height=270,
         )
     )
     return apply_report_theme(chart)

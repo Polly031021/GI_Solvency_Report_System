@@ -101,15 +101,20 @@ def build_performance_pattern_trajectory(
     *,
     revenue_code: str = "SIGNED_PREMIUM",
     profit_code: str = "NET_PROFIT",
-    line_color: str = "#C8102E",
-    panel_width: int = 190,
-    panel_height: int = 190,
+    line_color: str = "#00338D",
+    accent_color: str = "#D94330",
+    panel_width: int = 220,
+    panel_height: int = 200,
     x_title: str = "签单保费排名",
     y_title: str = "净利润排名",
+    x_value_title: str = "",
+    y_value_title: str = "",
 ) -> alt.Chart:
     """构建单家公司的收入—利润排名轨迹图（分列展示版）。
 
     横轴为收入排名、纵轴为利润排名；坐标轴反向，第 1 名位于右上角。
+    每家公司的小图自适应自身排名区间，但刻度仍显示真实名次；最新一期
+    用强调色大点标出，便于快速识别当前站位。
     """
     df = frame.copy()
     df["数值"] = pd.to_numeric(df["数值"], errors="coerce")
@@ -127,7 +132,15 @@ def build_performance_pattern_trajectory(
     #   同一报告期同一指标可能有多个"期间口径"（本季度数 / 本年度累计数 / 期末数等），
     #   直接 drop_duplicates(keep="last") 可能选到不想要的那条，导致某些年份"丢失"。
     #   这里显式按优先级选：季度口径优先，其次累计口径，最后才按原始顺序取第一条。
-    _PREFERRED_SCOPE_KEYWORDS = ("本季度", "期末", "本季末", "当期")
+    _PREFERRED_SCOPE_KEYWORDS = (
+        "本年累计",
+        "年度累计",
+        "全年累计",
+        "本季度",
+        "期末",
+        "本季末",
+        "当期",
+    )
 
     def _pick_company_value(sub_df: pd.DataFrame) -> pd.DataFrame:
         """从同一 (公司, 报告期) 的多条记录中，选一条最能代表当期水平的值。"""
@@ -138,11 +151,12 @@ def build_performance_pattern_trajectory(
 
         def _scope_priority(scope: object) -> int:
             text = str(scope or "").strip()
-            # 优先级：本季度类 = 0，其他 = 1（越小越优先）
-            for keyword in _PREFERRED_SCOPE_KEYWORDS:
+            # 优先级：全年累计数优先（业绩排名按全年口径），
+            # 其次是季度/期末口径，最后是其他（越小越优先）。
+            for index, keyword in enumerate(_PREFERRED_SCOPE_KEYWORDS):
                 if keyword in text:
-                    return 0
-            return 1
+                    return index
+            return len(_PREFERRED_SCOPE_KEYWORDS)
 
         work = sub_df.dropna(subset=["数值"]).copy()
         work["_scope_priority"] = work["期间口径"].map(_scope_priority)
@@ -175,9 +189,11 @@ def build_performance_pattern_trajectory(
             continue
         revenue["收入排名"] = revenue["数值"].rank(ascending=False, method="min")
         profit["利润排名"] = profit["数值"].rank(ascending=False, method="min")
+        revenue = revenue.rename(columns={"数值": "收入数值"})
+        profit = profit.rename(columns={"数值": "利润数值"})
         # ★ 改为 how="outer"，让"只有收入没利润"或反之的年份也能保留（后续在绘图里区分）
-        merged = revenue[["公司", "收入排名"]].merge(
-            profit[["公司", "利润排名"]], on="公司", how="outer"
+        merged = revenue[["公司", "收入排名", "收入数值"]].merge(
+            profit[["公司", "利润排名", "利润数值"]], on="公司", how="outer"
         )
         merged["报告期"] = str(period)
         merged["显示年"] = merged["报告期"].map(display_period_label)
@@ -220,59 +236,105 @@ def build_performance_pattern_trajectory(
     # 反向坐标：排名 1 在右上角；domain 左/下为大值
     x_domain = [rev_hi + 0.5, rev_lo - 0.5]
     y_domain = [prof_hi + 0.5, prof_lo - 0.5]
-    x_ticks = max(2, int(rev_hi - rev_lo + 1))
-    y_ticks = max(2, int(prof_hi - prof_lo + 1))
+    # 刻度数量随排名跨度自适应，同时限制在 2–6 个，避免小图刻度过密。
+    x_ticks = max(2, min(6, int(round(rev_hi - rev_lo)) + 1))
+    y_ticks = max(2, min(6, int(round(prof_hi - prof_lo)) + 1))
 
+    grid_color = "#E6EDF7"
+    axis_title_color = "#475569"
     x_axis = alt.Axis(
         title=x_title,
-        titleFontSize=8,
-        titlePadding=5,
-        labelFontSize=7,
+        titleFontSize=9,
+        titleFontWeight=600,
+        titleColor=axis_title_color,
+        titlePadding=7,
+        labelFontSize=8,
+        labelColor=axis_title_color,
+        labelOverlap="greedy",
         tickCount=x_ticks,
         tickMinStep=1,
-        grid=False,
+        format="d",
+        grid=True,
+        gridColor=grid_color,
+        gridOpacity=1,
+        gridWidth=1,
         domain=False,
         ticks=False,
+        labels=True,
     )
     y_axis = alt.Axis(
-        title=None,
-        labelFontSize=7,
+        title=y_title,
+        titleFontSize=9,
+        titleFontWeight=600,
+        titleColor=axis_title_color,
+        titlePadding=7,
+        labelFontSize=8,
+        labelColor=axis_title_color,
+        labelOverlap="greedy",
         tickCount=y_ticks,
         tickMinStep=1,
-        grid=False,
+        format="d",
+        grid=True,
+        gridColor=grid_color,
+        gridOpacity=1,
+        gridWidth=1,
         domain=False,
         ticks=False,
+        labels=True,
     )
 
+    x_encoding = alt.X(
+        "收入排名:Q",
+        scale=alt.Scale(domain=x_domain, zero=False, nice=False),
+        axis=x_axis,
+    )
+    y_encoding = alt.Y(
+        "利润排名:Q",
+        scale=alt.Scale(domain=y_domain, zero=False, nice=False),
+        axis=y_axis,
+    )
+    value_x_title = x_value_title or x_title
+    value_y_title = y_value_title or y_title
     base = alt.Chart(company_df)
 
     line = base.mark_line(
         color=line_color,
-        strokeWidth=1.4,
-        opacity=0.9,
+        strokeWidth=1.7,
+        opacity=0.95,
     ).encode(
-        x=alt.X(
-            "收入排名:Q", scale=alt.Scale(domain=x_domain, zero=False, nice=False), axis=x_axis
-        ),
-        y=alt.Y(
-            "利润排名:Q", scale=alt.Scale(domain=y_domain, zero=False, nice=False), axis=y_axis
-        ),
+        x=x_encoding,
+        y=y_encoding,
         order=alt.Order("报告期:N"),
     )
 
-    points = base.mark_circle(
-        size=40,
-        color=line_color,
-        opacity=0.95,
-    ).encode(
-        x="收入排名:Q",
-        y="利润排名:Q",
-        tooltip=[
-            "公司:N",
-            "报告期:N",
-            alt.Tooltip("收入排名:Q", title=x_title, format=".0f"),
-            alt.Tooltip("利润排名:Q", title=y_title, format=".0f"),
-        ],
+    # 最新一期：先画柔光底，再用白色描边强调，第一眼就能看到当前站位。
+    latest_df = company_df.sort_values("报告期").tail(1)
+    latest_halo = (
+        alt.Chart(latest_df)
+        .mark_circle(size=260, color=accent_color, opacity=0.14)
+        .encode(x=x_encoding, y=y_encoding)
+    )
+    latest_point = (
+        alt.Chart(latest_df)
+        .mark_circle(
+            size=80,
+            color=accent_color,
+            stroke="#FFFFFF",
+            strokeWidth=2,
+            opacity=1,
+        )
+        .encode(
+            x=x_encoding,
+            y=y_encoding,
+            tooltip=[
+                "公司:N",
+                "报告期:N",
+                alt.Tooltip("收入排名:Q", title=x_title, format=".0f"),
+                alt.Tooltip("利润排名:Q", title=y_title, format=".0f"),
+                alt.Tooltip("收入数值:Q", title=value_x_title, format=",.0f"),
+                alt.Tooltip("利润数值:Q", title=value_y_title, format=",.0f"),
+            ],
+        )
     )
 
     # ---------- 3. 标签：把同坐标的年份合并成一个文本，避免重叠 ----------
@@ -292,25 +354,28 @@ def build_performance_pattern_trajectory(
         )
     )
 
+    # 白色描边先垫一层，避免年份标签和网格线/轨迹线糊在一起。
+    label_halo = (
+        alt.Chart(_label_df)
+        .mark_text(
+            dy=-9,
+            fontSize=8,
+            color="#FFFFFF",
+            stroke="#FFFFFF",
+            strokeWidth=3,
+            fontWeight="bold",
+        )
+        .encode(x=x_encoding, y=y_encoding, text=alt.Text("显示年:N"))
+    )
     labels = (
         alt.Chart(_label_df)
         .mark_text(
-            dy=-8,
-            fontSize=7,
-            color="#333333",
+            dy=-9,
+            fontSize=8,
+            color="#1E293B",
             fontWeight="bold",
         )
-        .encode(
-            x=alt.X(
-                "收入排名:Q",
-                scale=alt.Scale(domain=x_domain, zero=False, nice=False),
-            ),
-            y=alt.Y(
-                "利润排名:Q",
-                scale=alt.Scale(domain=y_domain, zero=False, nice=False),
-            ),
-            text=alt.Text("显示年:N"),
-        )
+        .encode(x=x_encoding, y=y_encoding, text=alt.Text("显示年:N"))
     )
 
     # ★ 点大小按"该坐标有几个年份"微调：重合越多，点画得越大，
@@ -327,16 +392,12 @@ def build_performance_pattern_trajectory(
         .mark_circle(
             color=line_color,
             opacity=0.95,
+            stroke="#FFFFFF",
+            strokeWidth=0.8,
         )
         .encode(
-            x=alt.X(
-                "收入排名:Q",
-                scale=alt.Scale(domain=x_domain, zero=False, nice=False),
-            ),
-            y=alt.Y(
-                "利润排名:Q",
-                scale=alt.Scale(domain=y_domain, zero=False, nice=False),
-            ),
+            x=x_encoding,
+            y=y_encoding,
             size=alt.Size(
                 "点大小:Q",
                 scale=None,
@@ -347,14 +408,25 @@ def build_performance_pattern_trajectory(
                 "报告期:N",
                 alt.Tooltip("收入排名:Q", title=x_title, format=".0f"),
                 alt.Tooltip("利润排名:Q", title=y_title, format=".0f"),
+                alt.Tooltip("收入数值:Q", title=value_x_title, format=",.0f"),
+                alt.Tooltip("利润数值:Q", title=value_y_title, format=",.0f"),
                 alt.Tooltip("同坐标年份数:Q", title="同坐标年份数", format=".0f"),
             ],
         )
     )
 
-    return apply_report_theme(
-        (line + points + labels).properties(
+    chart = apply_report_theme(
+        (line + latest_halo + points + latest_point + label_halo + labels).properties(
             width=panel_width,
             height=panel_height,
+            background="#FFFFFF",
+            padding={"left": 2, "top": 4, "right": 6, "bottom": 2},
         )
+    )
+    return chart.configure_view(
+        fill="#FFFFFF",
+        stroke="#DCE6F5",
+        strokeWidth=1,
+        strokeOpacity=1,
+        cornerRadius=8,
     )

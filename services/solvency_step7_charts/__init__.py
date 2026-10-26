@@ -62,6 +62,7 @@ from .capital import (
     capital_structure_industry_ratios,
     quant_risk_industry_sentence,
     insurance_risk_industry_sentence,
+    insurance_risk_composition_metrics,
     solvency_ratio_axis_domain,
     build_solvency_ratio_combo_chart,
     build_capital_ratio_combo_chart,
@@ -95,6 +96,7 @@ from .matrix import (
 
 from .radar import (
     build_capability_radar_chart,
+    build_capability_radar_grid,
 )
 
 from .structure import (
@@ -201,6 +203,7 @@ __all__ = [
     "capital_structure_industry_ratios",
     "quant_risk_industry_sentence",
     "insurance_risk_industry_sentence",
+    "insurance_risk_composition_metrics",
     "build_metric_trend_group",
     "prepare_metric_trend",
     "build_single_metric_trend_chart",
@@ -234,6 +237,7 @@ __all__ = [
     "risk_ratio_scatter_default_domain",
     "combine_linked_matrix_charts",
     "build_capability_radar_chart",
+    "build_capability_radar_grid",
     "display_period_label",
     "build_structure_change_chart",
     "PREMIUM_GROWTH_GROUP_ORDER",

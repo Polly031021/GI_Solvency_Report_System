@@ -437,6 +437,7 @@ DISCLOSURE_NAMES_EN: dict[str, str] = {
 }
 
 UNIT_NAMES_EN: dict[str, str] = {
+    "百亿元": "RMB 10bn",
     "十亿元": "RMB bn",
     "亿元": "RMB 100 mn",
     "百万元": "RMB mn",
@@ -667,6 +668,9 @@ PHRASE_EN: dict[str, str] = {
     "有效样本": "Valid sample",
     "样本公司数": "Sample companies",
     "盈利能力": "Profitability",
+    "资本实力": "Capital strength",
+    "承保风控能力": "Underwriting risk control",
+    "业务拓展": "Business expansion",
     "基期": "Base period",
     "同比基期（无上年数据）": "YoY base period (no prior-year data)",
     "同比类别": "YoY category",
