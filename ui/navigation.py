@@ -207,7 +207,19 @@ def render_step7_excel_navigation(profile_id: str) -> None:
         return
 
     sub_modules = [m for m in modules if m.level_one == main_nav]
-    level_twos = list(dict.fromkeys(m.level_two for m in sub_modules if m.level_two))
+
+    def _level_two(module) -> str:
+        """Give modules without a configured second level their own entry.
+
+        Older uploaded workbooks may leave 二级分类 blank.  Such a module used
+        to be reachable only through “全部”; falling back to its chart name
+        makes it a first-class navigation item.
+        """
+        return module.level_two or module.chart_name
+
+    level_twos = list(
+        dict.fromkeys(_level_two(module) for module in sub_modules if _level_two(module))
+    )
     if level_twos:
         second_options = ["全部", *level_twos]
         keep_valid_widget_state("company_nav_level_two", second_options)
@@ -218,7 +230,9 @@ def render_step7_excel_navigation(profile_id: str) -> None:
             format_func=level_name,
         )
         if second_nav != "全部":
-            sub_modules = [m for m in sub_modules if m.level_two == second_nav]
+            sub_modules = [
+                m for m in sub_modules if _level_two(m) == second_nav
+            ]
     else:
         st.session_state["company_nav_level_two"] = "全部"
 

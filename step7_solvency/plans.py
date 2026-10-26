@@ -188,11 +188,14 @@ def render_combination_analysis(
     )
     converted = convert_unit(chart_frame, unit_mode)
     company_colors = company_color_map(converted["公司"], highlight_company)
-    company_panel_count = converted["公司"].nunique()
-    dense_company_panels = company_panel_count >= 10
+    company_panel_count = int(converted["公司"].nunique())
+    # 公司小图已改为固定宽度横向滚动；字号与柱宽按一屏约 4 家的可视密度
+    # 计算，避免 80+ 家公司把每张小图压成 6px 字号。
+    chart_panel_count = min(company_panel_count, 4)
+    dense_company_panels = False
     if plan.kind == SOLVENCY_RATIO_COMBO:
         render_plan_solvency_ratio_combo(
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,
@@ -202,7 +205,7 @@ def render_combination_analysis(
     elif plan.kind == COMPANY_PERIOD_BAR:
         render_plan_company_period_bar(
             chart_name,
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,
@@ -214,7 +217,7 @@ def render_combination_analysis(
     elif plan.kind == CAPITAL_RATIO_COMBO:
         render_plan_capital_ratio_combo(
             chart_name,
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,
@@ -224,7 +227,7 @@ def render_combination_analysis(
         )
     elif plan.kind == CAPITAL_STRUCTURE_COMBO:
         render_plan_capital_structure_combo(
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,
@@ -235,7 +238,7 @@ def render_combination_analysis(
     elif plan.kind == COMPONENT_STACK:
         render_plan_component_stack(
             chart_name,
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,
@@ -246,7 +249,7 @@ def render_combination_analysis(
 
     elif plan.kind == CAPITAL_AMOUNT_COMBO:
         render_plan_capital_amount_combo(
-            company_panel_count,
+            chart_panel_count,
             converted,
             dense_company_panels,
             highlight_company,

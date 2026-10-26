@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import altair as alt
 import pandas as pd
@@ -11,175 +11,217 @@ import pandas as pd
 from .primitives import apply_report_theme
 
 
-def build_capability_radar_chart(
+def _angles(count: int) -> list[float]:
+    # θ=0 在 12 点方向：x=r·sin(θ)，y=r·cos(θ)
+    return [2.0 * math.pi * index / count for index in range(count)]
+
+
+def _to_xy(score: float, angle: float, max_score: float) -> tuple[float, float]:
+    radius = max(0.0, min(float(max_score), float(score)))
+    return radius * math.sin(angle), radius * math.cos(angle)
+
+
+def _reference_values(
+    reference_scores: Sequence[float] | None,
+    axis_count: int,
+    max_score: float,
+) -> list[float]:
+    if reference_scores is not None and len(reference_scores) == axis_count:
+        return [
+            max_score * 0.5
+            if value is None or pd.isna(value)
+            else float(value)
+            for value in reference_scores
+        ]
+    return [max_score * 0.5] * axis_count
+
+
+def _radar_data(
     score_frame: pd.DataFrame,
     axis_labels: list[str],
-    company_colors: Mapping[str, str],
     *,
-    max_score: float = 100.0,
-    panel_width: int = 560,
-    panel_height: int = 560,
-    show_legend: bool = True,  # ★ 单公司小图时关掉
-    label_font_size: int = 13,  # ★ 小图用 9
-    ring_color: str = "#CBD5E1",  # ★ 网格颜色可调
-    median_color: str = "#64748B",  # ★ 中位线颜色可调
-) -> alt.Chart:
-    """能力五边形雷达图（Altair 手绘极坐标→笛卡尔）。
+    max_score: float,
+    reference_scores: Sequence[float] | None,
+    facet_titles: Mapping[str, str] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Build all geometry for one or more companies in a single pass."""
+    axis_count = len(axis_labels)
+    angles = _angles(axis_count)
+    reference_values = _reference_values(reference_scores, axis_count, max_score)
+    facet_titles = facet_titles or {}
 
-    参数
-    ----
-    score_frame: 列 = 公司 + "<label>_得分"，每行一家公司
-    axis_labels: 5 个顶点名称。**顺序决定顶点顺序**：
-                 第 0 个在 12 点方向，之后顺时针每 72° 一个。
-    company_colors: 公司 → 颜色（16 进制）
-    max_score:     分数上限（默认 100）
-    """
-    if score_frame.empty or not axis_labels:
-        raise ValueError("能力雷达图缺少输入数据。")
-
-    n = len(axis_labels)
-    # θ=0 在 12 点方向：x=r·sin(θ)，y=r·cos(θ)
-    angles = [2.0 * math.pi * i / n for i in range(n)]
-
-    def _to_xy(score: float, angle: float) -> tuple[float, float]:
-        r = max(0.0, min(float(max_score), float(score)))
-        return r * math.sin(angle), r * math.cos(angle)
-
-    # ---------- 1. 背景同心五边形（20/40/60/80/100） ----------
     ring_rows: list[dict] = []
-    for tick in (20.0, 40.0, 60.0, 80.0, 100.0):
-        if tick > max_score:
-            continue
-        coords = [_to_xy(tick, a) for a in angles]
-        coords.append(coords[0])  # 首尾相接
-        for idx, (x, y) in enumerate(coords):
-            ring_rows.append(
+    axis_rows: list[dict] = []
+    median_rows: list[dict] = []
+    poly_rows: list[dict] = []
+    vertex_rows: list[dict] = []
+    label_rows: list[dict] = []
+
+    for _, row in score_frame.iterrows():
+        company = str(row["公司"])
+        facet_label = str(facet_titles.get(company, company))
+
+        for tick in (20.0, 40.0, 60.0, 80.0, 100.0):
+            if tick > max_score:
+                continue
+            coords = [_to_xy(tick, angle, max_score) for angle in angles]
+            coords.append(coords[0])
+            for order, (x, y) in enumerate(coords):
+                ring_rows.append(
+                    {
+                        "公司": company,
+                        "facet": facet_label,
+                        "tick": str(int(tick)),
+                        "order": order,
+                        "x": x,
+                        "y": y,
+                    }
+                )
+
+        for angle in angles:
+            x2, y2 = _to_xy(max_score, angle, max_score)
+            axis_rows.append(
                 {
-                    "tick": str(int(tick)),
-                    "order": idx,  # ★ 显式顺序
+                    "公司": company,
+                    "facet": facet_label,
+                    "x": 0.0,
+                    "y": 0.0,
+                    "x2": x2,
+                    "y2": y2,
+                }
+            )
+
+        median_coords = [
+            _to_xy(score, angle, max_score)
+            for score, angle in zip(reference_values, angles)
+        ]
+        median_coords.append(median_coords[0])
+        for order, (x, y) in enumerate(median_coords):
+            median_rows.append(
+                {"公司": company, "facet": facet_label, "order": order, "x": x, "y": y}
+            )
+
+        coords = [
+            _to_xy(row.get(f"{label}_得分", 0.0), angles[index], max_score)
+            for index, label in enumerate(axis_labels)
+        ]
+        closed = coords + [coords[0]]
+        for idx, (x, y) in enumerate(closed):
+            poly_rows.append(
+                {
+                    "公司": company,
+                    "facet": facet_label,
+                    "idx": idx,
                     "x": x,
                     "y": y,
                 }
             )
-    ring_df = pd.DataFrame(ring_rows)
-
-    # ---------- 2. 轴线（中心 → 最外顶点） ----------
-    axis_rows: list[dict] = []
-    for angle in angles:
-        x2, y2 = _to_xy(max_score, angle)
-        axis_rows.append({"x": 0.0, "y": 0.0, "x2": x2, "y2": y2})
-    axis_df = pd.DataFrame(axis_rows)
-
-    # ---------- 2.5 新增：50 分中位参考五边形（虚线） ----------
-    median_rows: list[dict] = []
-    median_coords = [_to_xy(max_score * 0.5, a) for a in angles]
-    median_coords.append(median_coords[0])
-    for idx, (x, y) in enumerate(median_coords):
-        median_rows.append({"order": idx, "x": x, "y": y})  # ★ 加 order
-    median_df = pd.DataFrame(median_rows)
-
-    # ---------- 3. 每个公司的多边形轮廓 + 顶点 ----------
-    poly_rows: list[dict] = []
-    vertex_rows: list[dict] = []
-    for _, row in score_frame.iterrows():
-        company = str(row["公司"])
-        # 判断每个顶点是否缺失
-        scores = []
-        for label in axis_labels:
-            s = row.get(f"{label}_得分", None)
-            # _capability_scores 里缺失被强制写 0；用一个额外标记判断
-            scores.append(s)
-        # 缺失判断：原始分数如果来自缺失，会在 raw 里对应 NaN；
-        # 这里用 score==0 且该顶点实际在 raw 里为 NaN 时判定缺失
-        # 更简单：直接读取 raw_frame 的 NaN —— 需要把 raw 传进来
-        # 当前函数拿不到 raw，于是改用一个约定：
-        #   缺失的顶点在 score_frame 里被额外标记
-        coords = [
-            _to_xy(row.get(f"{label}_得分", 0.0), angles[i]) for i, label in enumerate(axis_labels)
-        ]
-        closed = coords + [coords[0]]
-        for idx, (x, y) in enumerate(closed):
-            poly_rows.append({"公司": company, "idx": idx, "x": x, "y": y})
         for label, (x, y) in zip(axis_labels, coords):
             vertex_rows.append(
                 {
                     "公司": company,
+                    "facet": facet_label,
                     "顶点": label,
                     "x": x,
                     "y": y,
                     "得分": float(row.get(f"{label}_得分", 0.0)),
                 }
             )
-    poly_df = pd.DataFrame(poly_rows)
-    vertex_df = pd.DataFrame(vertex_rows)
 
-    # ---------- 4. 顶点文字标签（外移到 1.22 倍半径，避免顶部/底部裁切） ----------
-    label_rows: list[dict] = []
-    for label, angle in zip(axis_labels, angles):
-        x, y = _to_xy(max_score * 1.22, angle)
-        label_rows.append({"label": label, "x": x, "y": y})
-    label_df = pd.DataFrame(label_rows)
+        for label, angle in zip(axis_labels, angles):
+            x, y = _to_xy(max_score * 1.22, angle, max_score)
+            label_rows.append(
+                {
+                    "公司": company,
+                    "facet": facet_label,
+                    "label": label,
+                    "x": x,
+                    "y": y,
+                }
+            )
 
-    # ---------- 5. 坐标范围：固定 [-(max_score*1.3), +(max_score*1.3)] ----------
+    return {
+        "ring": pd.DataFrame(ring_rows),
+        "axis": pd.DataFrame(axis_rows),
+        "median": pd.DataFrame(median_rows),
+        "poly": pd.DataFrame(poly_rows),
+        "vertex": pd.DataFrame(vertex_rows),
+        "label": pd.DataFrame(label_rows),
+    }
+
+
+def _radar_layers(
+    data: Mapping[str, pd.DataFrame],
+    company_colors: Mapping[str, str],
+    *,
+    max_score: float,
+    label_font_size: int,
+    ring_color: str,
+    median_color: str,
+    show_legend: bool,
+    legend_name: str,
+    shared_data: pd.DataFrame | None = None,
+) -> alt.LayerChart:
     scale_limit = max_score * 1.30
     domain = [-scale_limit, scale_limit]
-
     color_scale = alt.Scale(
         domain=list(company_colors.keys()),
         range=list(company_colors.values()),
     )
 
-    # ★ 新增：绑定到图例的交互选择。点击图例切换显示/隐藏该公司；
-    #   点击 Altair 自带的图例即可实现筛选，无需 Streamlit 重跑。
+    def _source(layer: str) -> alt.Chart:
+        """One shared DataFrame keeps Altair faceting valid for layered charts."""
+        if shared_data is None:
+            return alt.Chart(data[layer])
+        return alt.Chart(shared_data).transform_filter(
+            alt.datum["_layer"] == layer
+        )
+
+    # 点击图例切换显示/隐藏该公司；单公司小图不会显示图例。
     legend_select = alt.selection_point(
-        name="capability_company_legend_select",
+        name=legend_name,
         fields=["公司"],
         bind="legend",
-        toggle="event.shiftKey",  # ★ 按住 Shift 点击可"取消选中"，
-        #    直接点击则累加多选
-        clear=False,  # ★ 禁止双击空白清空选择
-        empty=True,  # ★ 无选择时全部按默认样式显示
+        toggle="event.shiftKey",
+        clear=False,
+        empty=True,
     )
 
-    x_enc_base = alt.X(
-        "x:Q",
-        scale=alt.Scale(domain=domain),
-        axis=None,
-    )
-    y_enc_base = alt.Y(
-        "y:Q",
-        scale=alt.Scale(domain=domain),
-        axis=None,
-    )
+    x_enc = alt.X("x:Q", scale=alt.Scale(domain=domain), axis=None)
+    y_enc = alt.Y("y:Q", scale=alt.Scale(domain=domain), axis=None)
 
     ring_layer = (
-        alt.Chart(ring_df)
-        .mark_line(color="#CBD5E1", strokeWidth=0.9, opacity=0.9)
+        _source("ring")
+        .mark_line(color=ring_color, strokeWidth=0.9, opacity=0.9)
         .encode(
-            x=x_enc_base,
-            y=y_enc_base,
+            x=x_enc,
+            y=y_enc,
             detail="tick:N",
-            order=alt.Order("order:Q"),  # ★ 按顺序连边
+            order=alt.Order("order:Q"),
         )
     )
     axis_layer = (
-        alt.Chart(axis_df)
-        .mark_rule(color="#CBD5E1", strokeWidth=0.9, opacity=0.9)
-        .encode(
-            x=x_enc_base,
-            y=y_enc_base,
-            x2="x2:Q",
-            y2="y2:Q",
+        _source("axis")
+        .mark_rule(color=ring_color, strokeWidth=0.9, opacity=0.9)
+        .encode(x=x_enc, y=y_enc, x2="x2:Q", y2="y2:Q")
+    )
+    median_layer = (
+        _source("median")
+        .mark_line(
+            color=median_color,
+            strokeWidth=1.6,
+            strokeDash=[6, 4],
+            opacity=0.95,
         )
+        .encode(x=x_enc, y=y_enc, order=alt.Order("order:Q"))
     )
 
-    # ★ 多边形图层：自带图例 + 透明度受 selection 控制
     poly_layer = (
-        alt.Chart(poly_df)
+        _source("poly")
         .mark_line(strokeWidth=2.2)
         .encode(
-            x=x_enc_base,
-            y=y_enc_base,
+            x=x_enc,
+            y=y_enc,
             color=alt.Color(
                 "公司:N",
                 scale=color_scale,
@@ -212,13 +254,12 @@ def build_capability_radar_chart(
         .add_params(legend_select)
     )
 
-    # ★ 顶点图层：与多边形同步高亮/淡化
     vertex_layer = (
-        alt.Chart(vertex_df)
+        _source("vertex")
         .mark_circle(size=70)
         .encode(
-            x=x_enc_base,
-            y=y_enc_base,
+            x=x_enc,
+            y=y_enc,
             color=alt.Color("公司:N", scale=color_scale, legend=None),
             tooltip=[
                 "公司:N",
@@ -234,44 +275,161 @@ def build_capability_radar_chart(
     )
 
     label_layer = (
-        alt.Chart(label_df)
+        _source("label")
         .mark_text(
-            fontSize=label_font_size,  # ★ 改用参数
+            fontSize=label_font_size,
             fontWeight="bold",
             color="#0C233C",
             align="center",
         )
-        .encode(
-            x=x_enc_base,
-            y=y_enc_base,
-            text="label:N",
-        )
+        .encode(x=x_enc, y=y_enc, text="label:N")
     )
 
-    median_layer = (
-        alt.Chart(median_df)
-        .mark_line(
-            color="#64748B",  # 深一点的灰，与同心网格区分
-            strokeWidth=1.6,
-            strokeDash=[6, 4],
-            opacity=0.95,
-        )
-        .encode(
-            x=x_enc_base,
-            y=y_enc_base,
-            order=alt.Order("order:Q"),  # ★ 按顺序连边
-        )
+    return (
+        ring_layer
+        + axis_layer
+        + median_layer
+        + poly_layer
+        + vertex_layer
+        + label_layer
     )
 
+
+def build_capability_radar_chart(
+    score_frame: pd.DataFrame,
+    axis_labels: list[str],
+    company_colors: Mapping[str, str],
+    *,
+    max_score: float = 100.0,
+    panel_width: int = 560,
+    panel_height: int = 560,
+    show_legend: bool = True,  # ★ 单公司小图时关掉
+    label_font_size: int = 13,  # ★ 小图用 9
+    ring_color: str = "#CBD5E1",  # ★ 网格颜色可调
+    median_color: str = "#64748B",  # ★ 中位线颜色可调
+    reference_scores: Sequence[float] | None = None,  # ★ 参考五边形（默认 50 分）
+) -> alt.Chart:
+    """能力五边形雷达图（Altair 手绘极坐标→笛卡尔）。
+
+    参数
+    ----
+    score_frame: 列 = 公司 + "<label>_得分"，每行一家公司
+    axis_labels: 5 个顶点名称。**顺序决定顶点顺序**：
+                 第 0 个在 12 点方向，之后顺时针每 72° 一个。
+    company_colors: 公司 → 颜色（16 进制）
+    max_score:     分数上限（默认 100）
+    """
+    if score_frame.empty or not axis_labels:
+        raise ValueError("能力雷达图缺少输入数据。")
+
+    data = _radar_data(
+        score_frame,
+        axis_labels,
+        max_score=max_score,
+        reference_scores=reference_scores,
+    )
+    layers = _radar_layers(
+        data,
+        company_colors,
+        max_score=max_score,
+        label_font_size=label_font_size,
+        ring_color=ring_color,
+        median_color=median_color,
+        show_legend=show_legend,
+        legend_name="capability_company_legend_select",
+    )
     return apply_report_theme(
-        (ring_layer + axis_layer + median_layer + poly_layer + vertex_layer + label_layer)
-        .properties(
+        layers.properties(
             width=panel_width,
             height=panel_height,
             padding={"top": 0, "bottom": 0, "left": 5, "right": 5},
-        )
-        .configure_legend(
+        ).configure_legend(
             # ★ 图例容器不裁剪，允许超出默认框
             clipHeight=220,
+        )
+    )
+
+
+def build_capability_radar_grid(
+    score_frame: pd.DataFrame,
+    axis_labels: list[str],
+    company_colors: Mapping[str, str],
+    *,
+    facet_titles: Mapping[str, str] | None = None,
+    reference_scores: Sequence[float] | None = None,
+    columns: int = 5,
+    max_score: float = 100.0,
+    panel_width: int = 230,
+    panel_height: int = 230,
+    label_font_size: int = 9,
+    ring_color: str = "#CBD5E1",
+    median_color: str = "#94A3B8",
+    spacing: int = 10,
+) -> alt.Chart:
+    """Render several company pentagons as one faceted chart.
+
+    One Streamlit chart element per row is far cheaper than one element per
+    company (the report can contain ~90 companies).  The facet header is the
+    company name, so the name and the pentagon are guaranteed to share the same
+    centre line — the previous layout centred the HTML name over the whole
+    column while Vega left-aligned the chart.
+
+    参数
+    ----
+    facet_titles: 公司 → 面板标题（默认公司名；追踪公司可加 ★ 前缀）
+    reference_scores: 该组各顶点中位数，所有面板共用
+    columns: 每行公司数（默认 5）
+    """
+    if score_frame.empty or not axis_labels:
+        raise ValueError("能力雷达图缺少输入数据。")
+
+    companies = [str(value) for value in score_frame["公司"]]
+    titles = {company: str((facet_titles or {}).get(company, company)) for company in companies}
+    data = _radar_data(
+        score_frame,
+        axis_labels,
+        max_score=max_score,
+        reference_scores=reference_scores,
+        facet_titles=titles,
+    )
+    # Altair 要求分面的图层共享同一个 data 对象；把六类几何合并为长表，
+    # 再用 _layer 过滤，既满足分面要求，也避免重复构造 DataFrame。
+    shared_data = pd.concat(
+        [frame.assign(_layer=name) for name, frame in data.items()],
+        ignore_index=True,
+        sort=False,
+    )
+    layers = _radar_layers(
+        data,
+        company_colors,
+        max_score=max_score,
+        label_font_size=label_font_size,
+        ring_color=ring_color,
+        median_color=median_color,
+        show_legend=False,
+        legend_name="capability_company_legend_select_grid",
+        shared_data=shared_data,
+    )
+    column_count = max(1, min(int(columns), len(companies)))
+    facet = alt.Facet(
+        "facet:N",
+        sort=[titles[company] for company in companies],
+        header=alt.Header(
+            title=None,
+            labelOrient="top",
+            labelAnchor="middle",
+            labelFontSize=12,
+            labelFontWeight="bold",
+            labelColor="#00338D",
+            labelPadding=2,
+            labelLimit=150,
+        ),
+    )
+    faceted = layers.properties(width=panel_width, height=panel_height).facet(
+        facet, columns=column_count
+    )
+    return apply_report_theme(
+        faceted.properties(
+            padding={"top": 4, "bottom": 0, "left": 4, "right": 4}
         )
     )
