@@ -158,38 +158,70 @@ CAPABILITY_STEP_SCORE_FALLBACK: dict[str, list[dict]] = {
         {"min": float("-inf"), "score": 0.0},  # <100%        → 0 分
     ],
 }
+# ★ 能力五边形百分位打分的分数下限。
+# 百分位排名天然是 0–100：组内最后一名一定拿 0 分。但"前三大"这类分组本身
+# 就是行业头部，组内末位并不代表能力为零。因此把排名映射到
+# [下限, 100] 区间，既保留相对位次，又避免出现塌陷到圆心的 0 分顶点。
+# 该下限也可由 Excel「图表配置(JSON)」的 score_floor 覆盖。
+CAPABILITY_PERCENTILE_FLOOR: float = 30.0
+
+# ★ 分组/顶点级别的排名得分下限。
+# 前三大公司的保费增速本身都是正增长（2025Q4：平安 6.5%、人保 3.3%、太保 -0.1%），
+# 但全行业池里包含大量高增长的小公司，若统一使用 30 分下限，
+# 头部三家会被压到 46–72 分，视觉上放大了本已很小的增速差异。
+# 因此对“前三大 × 保费增速”单独使用 70–100 分区间，保留相对位次但不再过度惩罚。
+# 可由 Excel「图表配置(JSON)」的 group_score_floors 覆盖。
+CAPABILITY_GROUP_SCORE_FLOORS: dict[str, dict[str, float]] = {
+    "前三大": {"PREMIUM_GROWTH": 70.0},
+}
+
+# ★ 以"全行业"为标尺的分组。
+# 前三大 / 前4-10 是按行业地位划分的头部群体，若仍只在 3 家或 7 家内部互比，
+# 组内最后一名会被判为 0 分（例如平安产险 ROE 12.1% 却是 0 分），明显失真。
+# 这些分组改为与全部样本比较，其余分组仍做同分类组内排名。
+CAPABILITY_INDUSTRY_BENCHMARK_GROUPS: frozenset[str] = frozenset({"前三大", "前4-10"})
+
 # ★ 新增：能力五边形的默认打分基准
 # 只在这些指标出现在雷达图 axes 里且 Excel 未提供 lower/upper 时兜底。
 # 金额类基准使用"万元"（Step3 输出的标准单位是万元）。
 DEFAULT_CAPABILITY_AXES: list[dict] = [
-    {
-        "code": "PREMIUM_GROWTH",
-        "label": "保费增速",
-        "period": "本季度数",
-        "lower": -10.0,
-        "upper": 40.0,
-    },
-    {"code": "ROE", "label": "ROE", "period": "本年累计数", "lower": 0.0, "upper": 12.0},
-    {
-        "code": "TOTAL_ASSETS",
-        "label": "总资产",
-        "period": "本季度数",
-        "lower": 500_000,
-        "upper": 30_000_000,
-    },
+    # 五个顶点与五种能力一一对应，顺序即雷达图顺时针方向。
     {
         "code": "ACTUAL_CAPITAL",
-        "label": "实际资本",
+        "label": "资本实力",
         "period": "本季度末数",
         "lower": 200_000,
         "upper": 15_000_000,
     },
-    # ★ 偿付能力改为"阶梯打分"：不再使用 lower/upper 线性映射，
-    #   而是按 ≥200/150/120/100 的档位给分。
+    # 偿付能力按绝对档位打分：≥200/150/120/100。
     {
         "code": "COMBINED_SOLVENCY_RATIO",
         "label": "偿付能力",
         "period": "本季度末数",
         "steps": CAPABILITY_STEP_SCORE_FALLBACK["COMBINED_SOLVENCY_RATIO"],
+    },
+    {
+        "code": "ROE",
+        "label": "盈利能力",
+        "period": "本年累计数",
+        "lower": 0.0,
+        "upper": 12.0,
+    },
+    # 承保风控能力 = 综合成本率，越低越好；按行业平均值打分。
+    {
+        "code": "COMBINED_RATIO",
+        "label": "承保风控能力",
+        "period": "本年累计数",
+        "scoring": "average",
+        "lower_is_better": True,
+        "average_center": 60.0,
+        "average_span": 0.10,
+    },
+    {
+        "code": "PREMIUM_GROWTH",
+        "label": "业务拓展",
+        "period": "本季度数",
+        "lower": -10.0,
+        "upper": 40.0,
     },
 ]

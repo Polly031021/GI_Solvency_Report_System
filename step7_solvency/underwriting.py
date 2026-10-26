@@ -330,6 +330,77 @@ def annual_underwriting_counts(
     return counts[columns].sort_values("年度").reset_index(drop=True)
 
 
+def underwriting_exclusions(
+    data: pd.DataFrame,
+    year: int,
+    annual: pd.DataFrame,
+) -> pd.DataFrame:
+    """List companies in the reporting-year universe that are not in the sample.
+
+    A company is excluded when either annual combined ratio or premium is
+    missing, or when the combined ratio is outside the valid 0–1000% range.
+    The returned table names the company and the exact missing/invalid metric,
+    so the summary can explain the gap instead of only showing a count.
+    """
+    columns = ["公司", "未纳入原因", "综合成本率（%）", "签单保费（万元）"]
+    if not isinstance(data, pd.DataFrame) or data.empty or annual.empty:
+        return pd.DataFrame(columns=columns)
+    df = data.copy()
+    for column in ("公司", "指标编码", "报告期", "期间口径", "单位", "数值"):
+        if column not in df.columns:
+            df[column] = ""
+    df["公司"] = _normalise_company(df["公司"])
+    df["指标编码"] = df["指标编码"].fillna("").astype(str).str.strip()
+    df["数值"] = pd.to_numeric(df["数值"], errors="coerce")
+    df["年度"] = df["报告期"].map(_annual_year)
+    year_rows = df[df["年度"].eq(int(year)) & df["数值"].notna()]
+    universe = {
+        str(name).strip()
+        for name in year_rows["公司"].dropna().astype(str)
+        if str(name).strip()
+    }
+    valid = set(annual[annual["年度"].eq(int(year))]["公司"].astype(str))
+    missing = sorted(universe - valid)
+    rows: list[dict[str, object]] = []
+    for company in missing:
+        company_rows = year_rows[year_rows["公司"].astype(str).eq(company)]
+        ratio_rows = company_rows[
+            company_rows["指标编码"].eq("COMBINED_RATIO")
+        ].dropna(subset=["数值"])
+        premium_rows = company_rows[
+            company_rows["指标编码"].isin(("SIGNED_PREMIUM", "PREMIUM_INCOME"))
+        ].dropna(subset=["数值"])
+        reasons: list[str] = []
+        ratio_value = None
+        if ratio_rows.empty:
+            reasons.append("缺综合成本率")
+        else:
+            ratio_work = ratio_rows[["数值", "单位"]].copy()
+            ratio_work["年度"] = int(year)
+            ratio_work = _ratio_to_percent(ratio_work)
+            ratio_value = float(ratio_work["数值"].iloc[0])
+            if not 0.0 < ratio_value < 1000.0:
+                reasons.append(f"综合成本率 {ratio_value:,.1f}%（超出有效区间）")
+        premium_value = None
+        if premium_rows.empty:
+            reasons.append("缺签单保费")
+        else:
+            premium_value = float(premium_rows["数值"].iloc[0])
+            if premium_value <= 0:
+                reasons.append("签单保费为 0")
+        if not reasons:
+            reasons.append("有效样本不足")
+        rows.append(
+            {
+                "公司": company,
+                "未纳入原因": "、".join(reasons),
+                "综合成本率（%）": ratio_value,
+                "签单保费（万元）": premium_value,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def build_underwriting_year_chart(
     annual: pd.DataFrame,
     year: int,
@@ -797,6 +868,12 @@ def render_underwriting_efficiency_scatter(
     counts = annual_underwriting_counts(annual, breakeven=breakeven)
     years = sorted(annual["年度"].dropna().astype(int).unique().tolist())
     count_chart = build_underwriting_count_chart(counts, years=years)
+    latest_year_for_sample = int(years[-1]) if years else None
+    exclusions = (
+        underwriting_exclusions(data, latest_year_for_sample, annual)
+        if latest_year_for_sample is not None
+        else pd.DataFrame()
+    )
 
     if years:
         latest_year = int(years[-1])
@@ -821,6 +898,27 @@ def render_underwriting_efficiency_scatter(
             else None
         )
         latest_counts = counts[counts["年度"].eq(latest_year)]
+        sample_count = (
+            int(latest_counts.iloc[0]["有效公司数"])
+            if not latest_counts.empty
+            else 0
+        )
+        if not exclusions.empty:
+            exclusion_parts = [
+                f"{str(row['公司'])}（{str(row['未纳入原因'])}）"
+                for _, row in exclusions.iterrows()
+            ]
+            sample_note = t(
+                f"样本公司数 {sample_count} 家；未纳入 {len(exclusions)} 家："
+                + "；".join(exclusion_parts),
+                f"Sample companies: {sample_count}; excluded {len(exclusions)}: "
+                + "; ".join(exclusion_parts),
+            )
+        else:
+            sample_note = t(
+                f"样本公司数 {sample_count} 家",
+                f"Sample companies: {sample_count}",
+            )
         profit_count = (
             int(latest_counts.iloc[0]["盈利"]) if not latest_counts.empty else 0
         )
@@ -876,14 +974,9 @@ def render_underwriting_efficiency_scatter(
                     if median_ratio is not None
                     else t("综合成本率中位数暂不可用", "Median combined ratio is not available")
                 ),
-                (
-                    t(
-                        f"样本公司数 {int(latest_counts.iloc[0]['有效公司数'])} 家",
-                        f"Sample companies: {int(latest_counts.iloc[0]['有效公司数'])}",
-                    )
-                    if not latest_counts.empty
-                    else t("样本公司数暂不可用", "Sample company count is not available")
-                ),
+                sample_note
+                if not latest_counts.empty
+                else t("样本公司数暂不可用", "Sample company count is not available"),
             ],
             footnote=t(
                 "加权综合成本率 = Σ（公司综合成本率 × 公司保费）/ Σ公司保费；"
@@ -892,6 +985,29 @@ def render_underwriting_efficiency_scatter(
                 "below 100% indicates underwriting profit.",
             ),
         )
+
+    if not exclusions.empty:
+        with st.expander(
+            t(
+                "查看未纳入样本的公司及缺失指标",
+                "View excluded companies and missing metrics",
+            ),
+            expanded=False,
+        ):
+            st.dataframe(
+                translate_dataframe(exclusions),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                t(
+                    "未纳入原因：综合成本率缺失或超出 0–1000% 有效区间、"
+                    "签单保费缺失或为 0；上述公司不参与当年散点图与盈利/亏损计数。",
+                    "Excluded when the combined ratio is missing or outside the valid 0–1000% range, "
+                    "or when signed premium is missing or zero. These companies are not plotted "
+                    "and do not enter the profit/loss count for the year.",
+                )
+            )
 
     year_label = f"{years[0]}–{years[-1]}" if years else "—"
     st.caption(

@@ -38,6 +38,42 @@ from .trend import metric_bar_axis_domain
 from .structure import display_period_label
 
 
+def _scope_priority(scope: pd.Series) -> pd.Series:
+    """Rank period bases so the current-quarter value wins over prior quarter.
+
+    The previous regex treated both 本季度末数 and 上季度末数 as "period-end" and
+    then kept whichever row appeared first in the source, which could pair a
+    prior-quarter quantitative-risk total with current-quarter components.
+    """
+    text = scope.fillna("").astype(str).str.strip()
+    priority = pd.Series(9, index=text.index, dtype=int)
+    priority[text.str.contains("本年累计|年度累计|全年累计", na=False)] = 0
+    priority[
+        text.str.contains("本季度末数|本季末|期末数|期末$|当期|时点", na=False)
+    ] = 0
+    priority[text.str.contains("本季度数", na=False)] = 1
+    priority[text.str.contains("上季度", na=False)] = 20
+    priority[text.str.contains("下季度|预测", na=False)] = 99
+    return priority
+
+
+def _capital_amount_label(value: object) -> str:
+    """Keep small capital amounts readable instead of rounding them to zero."""
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return ""
+    number = float(number)
+    if abs(number) < 1e-9:
+        return ""
+    if abs(number) >= 100:
+        return f"{number:,.0f}"
+    if abs(number) >= 10:
+        return f"{number:,.1f}"
+    if abs(number) >= 0.01:
+        return f"{number:,.2f}"
+    return f"{number:,.3f}"
+
+
 def _period_year_quarter(value: object) -> tuple[int | None, int]:
     text = str(value or "").strip()
     year_match = re.search(r"(20\d{2})", text)
@@ -317,22 +353,31 @@ def build_capital_ratio_combo_chart(
         dense_layout,
     )
     components = _signed_stack_positions(components, "数值", "组成顺序")
+    component_values = pd.to_numeric(components["数值"], errors="coerce")
+    components["标签对齐"] = "middle"
     if bar_layout == "grouped":
-        components["标签位置"] = pd.to_numeric(components["数值"], errors="coerce") / 2
-    components["数值标签"] = components.apply(
-        lambda row: (
-            ""
-            if pd.isna(row["数值"])
-            or (
-                bar_layout == "stacked"
-                and (
-                    pd.isna(row["构成占比"]) or abs(float(row["构成占比"])) < MIN_INSIDE_LABEL_SHARE
-                )
-            )
-            else whole_number_label(row["数值"])
-        ),
-        axis=1,
-    )
+        components["标签位置"] = component_values / 2
+    else:
+        shares = pd.to_numeric(components["构成占比"], errors="coerce").abs()
+        # 小占比项目把数字放到柱体外侧，避免两个标签叠在一起或只显示一个。
+        small = shares.lt(0.06) & component_values.abs().gt(1e-9)
+        positive = component_values.gt(0)
+        components.loc[small, "标签位置"] = components.loc[small, "堆叠终点"]
+        components.loc[small & ~positive, "标签位置"] = components.loc[
+            small & ~positive, "堆叠起点"
+        ]
+        components.loc[small & positive, "标签对齐"] = "bottom"
+        components.loc[small & ~positive, "标签对齐"] = "top"
+    components["数值标签"] = [
+        _capital_amount_label(value) for value in component_values
+    ]
+    label_length = max((len(text) for text in components["数值标签"] if text), default=0)
+    if label_length >= 10:
+        label_font_size = max(6, value_font_size - 2)
+    elif label_length >= 7:
+        label_font_size = max(7, value_font_size - 1)
+    else:
+        label_font_size = value_font_size
 
     if share_line:
         wide = components.pivot_table(
@@ -459,17 +504,33 @@ def build_capital_ratio_combo_chart(
     }
     if bar_layout == "grouped":
         label_encoding["xOffset"] = category_offset
-    inside_labels = (
-        alt.Chart(components)
-        .mark_text(
-            tooltip=False,
-            fontSize=value_font_size,
-            fontWeight="bold",
-            baseline="middle",
+
+    def _label_layer(alignment: str, baseline: str, dy: int, use_fill_color: bool) -> alt.Chart:
+        layer_encoding = dict(label_encoding)
+        if not use_fill_color:
+            layer_encoding["color"] = alt.value("#0C233C")
+        layer_rows = components[components["标签对齐"].astype(str).eq(alignment)]
+        return (
+            alt.Chart(layer_rows)
+            .mark_text(
+                tooltip=False,
+                fontSize=label_font_size,
+                fontWeight="bold",
+                baseline=baseline,
+                dy=dy,
+            )
+            .encode(**layer_encoding)
         )
-        .encode(**label_encoding)
-    )
-    bar_panel = alt.layer(bars, inside_labels).properties(height=190)
+
+    inside_labels = _label_layer("middle", "middle", 0, True)
+    outside_top_labels = _label_layer("bottom", "bottom", -2, False)
+    outside_bottom_labels = _label_layer("top", "top", 2, False)
+    bar_panel = alt.layer(
+        bars,
+        inside_labels,
+        outside_top_labels,
+        outside_bottom_labels,
+    ).properties(height=190)
     if line_rows.empty:
         return apply_report_theme(bar_panel.properties(title=company))
 
@@ -489,7 +550,7 @@ def build_capital_ratio_combo_chart(
             y=alt.Y(
                 "线值:Q",
                 axis=ratio_axis,
-                scale=alt.Scale(zero=False, padding=18),
+                scale=alt.Scale(zero=False, padding=26),
             ),
             tooltip=[
                 "公司:N",
@@ -513,7 +574,7 @@ def build_capital_ratio_combo_chart(
                 axis=None,
                 scale=combo_period_scale,
             ),
-            y=alt.Y("线值:Q", axis=ratio_axis, scale=alt.Scale(zero=False, padding=18)),
+            y=alt.Y("线值:Q", axis=ratio_axis, scale=alt.Scale(zero=False, padding=26)),
             tooltip=[
                 "公司:N",
                 "报告期:N",
@@ -525,7 +586,7 @@ def build_capital_ratio_combo_chart(
         alt.Chart(line_rows)
         .mark_text(
             tooltip=False,
-            dy=-14,
+            dy=-12,
             color="#FD349C",
             fontSize=value_font_size,
             fontWeight="bold",
@@ -537,11 +598,11 @@ def build_capital_ratio_combo_chart(
                 axis=None,
                 scale=combo_period_scale,
             ),
-            y=alt.Y("线值:Q", axis=ratio_axis, scale=alt.Scale(zero=False, padding=18)),
+            y=alt.Y("线值:Q", axis=ratio_axis, scale=alt.Scale(zero=False, padding=26)),
             text="线标签:N",
         )
     )
-    line_panel = alt.layer(line, points, line_labels).properties(height=72)
+    line_panel = alt.layer(line, points, line_labels).properties(height=84)
     return apply_report_theme(
         alt.vconcat(line_panel, bar_panel, spacing=4)
         .resolve_scale(x="shared")
@@ -592,8 +653,8 @@ def capital_ratio_amount_axis_domain(
         return 0.0, 1.0
     lower = min(0.0, min(negative_totals))
     upper = max(0.0, max(positive_totals))
-    padded_lower = lower * 1.08 if lower < 0 else 0.0
-    padded_upper = upper * 1.08 if upper > 0 else 1.0
+    padded_lower = lower * 1.18 if lower < 0 else 0.0
+    padded_upper = upper * 1.18 if upper > 0 else 1.0
     return float(padded_lower), float(padded_upper)
 
 
@@ -623,9 +684,7 @@ def capital_structure_industry_ratios(
         return None
     if "期间口径" in rows.columns:
         scope = rows["期间口径"].fillna("").astype(str).str.strip()
-        rows["_口径优先级"] = scope.str.contains("本年累计|期末|本季末|当期", na=False).map(
-            {True: 0, False: 1}
-        )
+        rows["_口径优先级"] = _scope_priority(scope)
         rows = rows.sort_values(
             ["公司", "指标编码", "_口径优先级"],
             kind="stable",
@@ -683,9 +742,7 @@ def quant_risk_industry_sentence(
         return ""
     if "期间口径" in rows.columns:
         scope = rows["期间口径"].fillna("").astype(str).str.strip()
-        rows["_口径优先级"] = scope.str.contains("本年累计|期末|本季末|当期", na=False).map(
-            {True: 0, False: 1}
-        )
+        rows["_口径优先级"] = _scope_priority(scope)
         rows = rows.sort_values(
             ["公司", "指标编码", "_口径优先级"],
             kind="stable",
@@ -718,14 +775,83 @@ def quant_risk_industry_sentence(
     if not averages:
         return ""
 
+    # 风险分散效应与特征系数影响不是"占比"型正向项目，单独计算其抵减幅度。
+    # 两者都是负数/抵减项，取绝对值后按量化风险最低资本归一，便于比较集中度。
+    diversification_series = pd.Series(dtype=float)
+    diversification_code = "QUANT_RISK_DIVERSIFICATION_EFFECT"
+    if diversification_code in pivot.columns:
+        diversification_series = (
+            pd.to_numeric(pivot.loc[valid, diversification_code], errors="coerce")
+            .abs()
+            / denominator.loc[valid]
+            * 100.0
+        ).dropna()
+
+    feature_series = pd.Series(dtype=float)
+    required_components = (
+        "NON_LIFE_INSURANCE_RISK_CAPITAL",
+        "MARKET_RISK_CAPITAL",
+        "CREDIT_RISK_CAPITAL",
+        "QUANT_RISK_DIVERSIFICATION_EFFECT",
+    )
+    optional_components = (
+        "LIFE_INSURANCE_RISK_CAPITAL",
+        "CONTRACT_LOSS_ABSORPTION_EFFECT",
+    )
+    # 优先按公式重算，避免只覆盖少数公司的披露值把全行业分布带偏。
+    # 源表中的“风险分散效应”以正数记录抵减额，公式中应作为减项。
+    if all(component in pivot.columns for component in required_components):
+        optional_present = tuple(
+            component
+            for component in optional_components
+            if component in pivot.columns
+        )
+        feature_components = (
+            "NON_LIFE_INSURANCE_RISK_CAPITAL",
+            "MARKET_RISK_CAPITAL",
+            "CREDIT_RISK_CAPITAL",
+            *optional_present,
+        )
+        component_frame = pivot[list(feature_components)].apply(
+            pd.to_numeric, errors="coerce"
+        )
+        # 只有必填风险项都非空的公司才重算；否则缺失项会被当成 0，
+        # 反而算出明显偏高的“正”特征系数影响。
+        feature_valid = (
+            pivot[list(required_components)]
+            .apply(pd.to_numeric, errors="coerce")
+            .notna()
+            .all(axis=1)
+            & pd.to_numeric(pivot[denominator_code], errors="coerce").gt(0)
+        )
+        component_sum = component_frame.fillna(0.0).sum(axis=1) - (
+            pd.to_numeric(
+                pivot["QUANT_RISK_DIVERSIFICATION_EFFECT"], errors="coerce"
+            )
+            .abs()
+            .fillna(0.0)
+        )
+        derived_feature = (
+            pd.to_numeric(pivot[denominator_code], errors="coerce")
+            - component_sum
+        )
+        feature_series = (
+            derived_feature.loc[feature_valid]
+            / pd.to_numeric(
+                pivot.loc[feature_valid, denominator_code], errors="coerce"
+            )
+            * 100.0
+        ).dropna()
+    # 不再回退到稀疏的 FEATURE_FACTOR_IMPACT 披露值：该列只有少数公司，
+    # 口径与全行业重算值不可比，混用会把分布带偏。
+
     dominant_label = max(averages, key=averages.get)
     dominant_short = (
         "保险风险" if dominant_label.startswith("非寿险业务保险风险") else dominant_label
     )
-    year_match = re.search(r"(20\d{2})", latest_period)
-    year_text = year_match.group(1) if year_match else display_period_label(latest_period)
+    period_text = str(latest_period)
     sentence = (
-        f"财产险公司{year_text}年度的最低资本以{dominant_short}为主"
+        f"财产险公司{period_text}的最低资本以{dominant_short}为主"
         f"（平均占比{averages[dominant_label]:.1f}%）"
     )
 
@@ -754,7 +880,49 @@ def quant_risk_industry_sentence(
         comparison = f"；信用风险平均占比{credit:.1f}%"
     else:
         comparison = ""
-    return sentence + comparison + "。"
+
+    concentration_parts: list[str] = []
+    outlier_parts: list[str] = []
+    if not diversification_series.empty:
+        div_median = float(diversification_series.median())
+        div_low = float(diversification_series.quantile(0.10))
+        div_high = float(diversification_series.quantile(0.90))
+        concentration_parts.append(
+            f"风险分散率中位数为{div_median:.1f}%，"
+            f"多数公司集中在{div_low:.1f}%–{div_high:.1f}%"
+        )
+        if float(diversification_series.min()) < div_low:
+            outlier_parts.append(
+                f"风险分散率最低为{diversification_series.idxmin()}"
+                f"（{float(diversification_series.min()):.1f}%）"
+            )
+    if not feature_series.empty:
+        feature_median = float(feature_series.median())
+        feature_low = float(feature_series.quantile(0.10))
+        feature_high = float(feature_series.quantile(0.90))
+        concentration_parts.append(
+            f"特征系数影响中位数为{feature_median:.1f}%，"
+            f"多数公司集中在{feature_low:.1f}%至{feature_high:.1f}%"
+        )
+        if float(feature_series.max()) > feature_high:
+            outlier_parts.append(
+                f"特征系数影响最高为{feature_series.idxmax()}"
+                f"（{float(feature_series.max()):.1f}%）"
+            )
+
+    concentration_text = ""
+    if concentration_parts:
+        concentration_text = (
+            "；行业的风险分散效应和特征系数影响整体较为集中，"
+            + "；".join(concentration_parts)
+        )
+        if outlier_parts:
+            concentration_text += (
+                "，个别公司表现突出（" + "；".join(outlier_parts) + "）"
+            )
+        else:
+            concentration_text += "，个别公司表现突出"
+    return sentence + comparison + concentration_text + "。"
 
 
 def insurance_risk_industry_sentence(
@@ -782,9 +950,7 @@ def insurance_risk_industry_sentence(
         return ""
     if "期间口径" in rows.columns:
         scope = rows["期间口径"].fillna("").astype(str).str.strip()
-        rows["_口径优先级"] = scope.str.contains("本年累计|期末|本季末|当期", na=False).map(
-            {True: 0, False: 1}
-        )
+        rows["_口径优先级"] = _scope_priority(scope)
         rows = rows.sort_values(
             ["公司", "指标编码", "_口径优先级"],
             kind="stable",
@@ -848,6 +1014,11 @@ def insurance_risk_industry_sentence(
         .mean()
         .sort_values(ascending=False)
     )
+    preferred_means = premium_means[
+        ~premium_means.index.astype(str).isin(["其他", "未分类"])
+    ]
+    if not preferred_means.empty:
+        premium_means = preferred_means
     overall_premium = float(ratios["保费及准备金风险"].mean())
     high_groups = [
         str(group)
@@ -911,6 +1082,137 @@ def insurance_risk_industry_sentence(
         f"{outlier_text}{highest_text}。"
     )
     return first_sentence + second_sentence
+
+
+def insurance_risk_composition_metrics(
+    frame: pd.DataFrame,
+    period_order: Iterable[str],
+    *,
+    group_column: str = "同业分类",
+    denominator_code: str = "NON_LIFE_INSURANCE_RISK_CAPITAL",
+) -> dict[str, object]:
+    """Return the latest-period insurance-risk composition statistics.
+
+    The composition chart previously showed a plain sentence.  These values
+    feed the compact insight card above the chart (sample size, average
+    premium/reserve and catastrophe shares, and the highest-catastrophe
+    company) while keeping every number data-driven.
+    """
+    periods = [str(period) for period in period_order]
+    if frame.empty or not periods:
+        return {}
+    latest_period = periods[-1]
+    premium_code = "NON_LIFE_PREMIUM_RESERVE_RISK_CAPITAL"
+    catastrophe_code = "NON_LIFE_CATASTROPHE_RISK_CAPITAL"
+    diversification_code = "NON_LIFE_INSURANCE_RISK_DIVERSIFICATION_EFFECT"
+    codes = (premium_code, catastrophe_code, diversification_code, denominator_code)
+    rows = frame[
+        frame["报告期"].astype(str).eq(latest_period)
+        & frame["指标编码"].astype(str).isin(codes)
+    ].copy()
+    rows["数值"] = pd.to_numeric(rows["数值"], errors="coerce")
+    rows = rows.dropna(subset=["数值"])
+    if rows.empty:
+        return {}
+    if "期间口径" in rows.columns:
+        scope = rows["期间口径"].fillna("").astype(str).str.strip()
+        rows["_口径优先级"] = _scope_priority(scope)
+        rows = rows.sort_values(
+            ["公司", "指标编码", "_口径优先级"], kind="stable"
+        )
+    rows = rows.drop_duplicates(["公司", "指标编码"], keep="first")
+    pivot = rows.pivot_table(
+        index="公司",
+        columns="指标编码",
+        values="数值",
+        aggfunc="first",
+    )
+    required = {premium_code, catastrophe_code, denominator_code}
+    if not required.issubset(pivot.columns):
+        return {}
+    denominator = pd.to_numeric(pivot[denominator_code], errors="coerce")
+    valid = denominator.gt(0)
+    if not valid.any():
+        return {}
+    ratios = pd.DataFrame(
+        {
+            "公司": pivot.index[valid],
+            "保费及准备金风险": (
+                pd.to_numeric(pivot.loc[valid, premium_code], errors="coerce")
+                / denominator.loc[valid]
+                * 100.0
+            ).to_numpy(),
+            "巨灾风险": (
+                pd.to_numeric(pivot.loc[valid, catastrophe_code], errors="coerce")
+                / denominator.loc[valid]
+                * 100.0
+            ).to_numpy(),
+        }
+    ).dropna()
+    if ratios.empty:
+        return {}
+    diversification_mean = None
+    if diversification_code in pivot.columns:
+        div_ratio = (
+            pd.to_numeric(
+                pivot.loc[valid, diversification_code], errors="coerce"
+            )
+            .abs()
+            / denominator.loc[valid]
+            * 100.0
+        ).dropna()
+        if not div_ratio.empty:
+            diversification_mean = float(div_ratio.mean())
+
+    group_values = pd.Series("未分类", index=ratios.index, dtype=object)
+    if group_column in frame.columns:
+        mapping = (
+            frame[["公司", group_column]]
+            .dropna()
+            .assign(
+                **{
+                    group_column: lambda data: data[group_column]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", "未分类")
+                }
+            )
+            .drop_duplicates("公司", keep="first")
+            .set_index("公司")[group_column]
+            .to_dict()
+        )
+        group_values = ratios["公司"].map(mapping).fillna("未分类")
+    ratios["公司分类"] = group_values.to_numpy()
+    premium_means = (
+        ratios.groupby("公司分类")["保费及准备金风险"]
+        .mean()
+        .sort_values(ascending=False)
+    )
+    preferred_means = premium_means[
+        ~premium_means.index.astype(str).isin(["其他", "未分类"])
+    ]
+    if not preferred_means.empty:
+        premium_means = preferred_means
+    overall_premium = float(ratios["保费及准备金风险"].mean())
+    top_groups = [
+        str(group)
+        for group, value in premium_means.items()
+        if float(value) >= overall_premium
+    ][:3]
+    highest = ratios.loc[ratios["巨灾风险"].idxmax()]
+    return {
+        "period": latest_period,
+        "n": int(len(ratios)),
+        "premium_mean": overall_premium,
+        "premium_median": float(ratios["保费及准备金风险"].median()),
+        "catastrophe_mean": float(ratios["巨灾风险"].mean()),
+        "catastrophe_median": float(ratios["巨灾风险"].median()),
+        "diversification_mean": diversification_mean,
+        "top_groups": top_groups,
+        "highest_company": str(highest["公司"]),
+        "highest_value": float(highest["巨灾风险"]),
+    }
 
 
 def component_stack_axis_domain(

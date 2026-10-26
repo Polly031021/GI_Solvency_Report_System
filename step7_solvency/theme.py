@@ -21,6 +21,19 @@ def render_report_style() -> None:
         body:has(.solvency-report-title) [data-testid="stHeader"] {
             background:#FFFFFF!important;
         }
+        /* 报告页的主滚动容器固定在 stMain 上。Vega 图表异步挂载后，
+           Streamlit 偶尔不会重新计算公式高度，这里显式恢复纵向滚动，
+           避免鼠标停在图表上时出现“下面还有内容但滚不动”的情况。 */
+        [data-testid="stMain"]:has(.solvency-report-title) {
+            overflow-y:auto!important;
+            overflow-x:hidden!important;
+            overscroll-behavior-y:contain;
+            scrollbar-gutter:stable;
+        }
+        [data-testid="stMainBlockContainer"]:has(.solvency-report-title) {
+            overflow:visible!important;
+            padding-bottom:4rem!important;
+        }
         [class*="st-key-s7_report_module_"],
         [class*="st-key-s7_trend_group_"],
         .solvency-report-title, .solvency-module-title,
@@ -96,19 +109,88 @@ def render_report_style() -> None:
             border-bottom:2px solid #00338D; padding-bottom:8px; margin:6px 0 18px;
         }
         .solvency-module-title {
-            color:#1E293B; font-size:17px; font-weight:600; letter-spacing:1px;
-            background:rgba(255,255,255,.45); border:1px solid rgba(255,255,255,.8);
-            border-radius:8px; padding:8px 18px; width:fit-content;
-            box-shadow:0 4px 12px rgba(0,0,0,.03), inset 0 1px 0 rgba(255,255,255,.5);
+            color:#0C233C; font-size:17px; font-weight:800; letter-spacing:.5px;
+            background:linear-gradient(90deg,#F1F6FF 0%,#FFFFFF 82%);
+            border:1px solid #DCE6F5; border-left:5px solid #00338D;
+            border-radius:9px; padding:9px 16px; width:fit-content; max-width:100%;
+            box-shadow:0 3px 10px rgba(12,35,60,.06);
             margin:10px 0 18px;
         }
         [class*="st-key-s7_report_module_"] h3 {
-            color:#1E293B!important; font-size:17px!important; font-weight:600!important;
-            letter-spacing:1px; background:rgba(255,255,255,.45)!important;
-            border:1px solid rgba(255,255,255,.8); border-radius:8px!important;
-            padding:8px 18px!important; width:fit-content; margin:10px 0 18px!important;
-            box-shadow:0 4px 12px rgba(0,0,0,.03), inset 0 1px 0 rgba(255,255,255,.5)!important;
+            color:#0C233C!important; font-size:17px!important; font-weight:800!important;
+            letter-spacing:.5px!important;
+            background:linear-gradient(90deg,#F1F6FF 0%,#FFFFFF 82%)!important;
+            border:1px solid #DCE6F5!important; border-left:5px solid #00338D!important;
+            border-radius:9px!important; padding:9px 16px!important;
+            width:fit-content!important; max-width:100%!important;
+            margin:10px 0 18px!important;
+            box-shadow:0 3px 10px rgba(12,35,60,.06)!important;
         }
+        /* 公司业绩展示：每家公司一张独立的浅色卡片，标题、最新名次和图表
+           共用同一视觉表面，避免在白色画布上“融为一体”。 */
+        [class*="st-key-s7_performance_panel_"] {
+            background:linear-gradient(180deg,#F7FAFF 0%,#FFFFFF 72%);
+            border:1px solid #DCE6F5; border-radius:12px;
+            padding:10px 11px 5px;
+            box-shadow:0 5px 16px rgba(12,35,60,.06);
+            break-inside:avoid-page; page-break-inside:avoid;
+            overflow:visible!important;
+            box-sizing:border-box;
+        }
+        [class*="st-key-s7_performance_panel_"] > [data-testid="stVerticalBlock"] {
+            gap:.22rem!important;
+        }
+        [class*="st-key-s7_performance_panel_"] [data-testid="stVegaLiteChart"] {
+            background:#FFFFFF; border:1px solid #E4EBF5; border-radius:9px;
+            padding:3px 4px 0; overflow:hidden;
+        }
+        .s7-pattern-panel-head {
+            display:flex; align-items:center; gap:6px; min-width:0;
+            margin:0 0 2px;
+        }
+        .s7-pattern-panel-title {
+            color:#0C233C; font-size:13px; font-weight:800; line-height:1.32;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+            min-width:0; flex:1 1 auto;
+        }
+        .s7-pattern-panel-title::before {
+            content:""; display:inline-block; width:6px; height:6px;
+            border-radius:50%; background:#00338D; margin-right:6px;
+            vertical-align:1px;
+        }
+        .s7-pattern-panel-meta {
+            display:flex; flex-wrap:wrap; gap:4px; margin:0 0 3px;
+        }
+        .s7-pattern-pill {
+            display:inline-flex; align-items:center;
+            background:#EEF4FF; color:#1E3A8A;
+            border:1px solid #D5E2FA; border-radius:999px;
+            padding:1px 7px; font-size:10px; font-weight:700; line-height:1.6;
+            white-space:nowrap;
+        }
+        .s7-pattern-pill--muted {
+            background:#F8FAFC; color:#64748B; border-color:#E2E8F0;
+        }
+        .s7-pattern-group {
+            display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+            background:linear-gradient(90deg,#FDF0ED 0%,#FFF9F7 70%,#FFFFFF 100%);
+            border:1px solid #F4D8D2; border-left:5px solid #D94330;
+            border-radius:10px; padding:7px 13px; margin:20px 0 11px;
+            box-shadow:0 2px 8px rgba(217,67,48,.05);
+        }
+        .s7-pattern-group__name {
+            color:#8C1D18; font-size:14px; font-weight:800; letter-spacing:.3px;
+        }
+        .s7-pattern-group__count {
+            display:inline-flex; align-items:center;
+            background:#D94330; color:#FFFFFF; border-radius:999px;
+            padding:1px 8px; font-size:11px; font-weight:800;
+        }
+        .s7-pattern-group__hint {
+            color:#9A5B52; font-size:11px; font-weight:500;
+        }
+        /* 能力五边形的公司名称已作为 Vega 分面标题渲染在每张小图正上方，
+           名称与五边形天然共用中心线，不再需要额外对齐样式。 */
         .solvency-analysis-note {
             background:#F2F6FC; border-left:4px solid #00338D;
             border-radius:4px; padding:9px 13px; margin:6px 0 0; color:#243B53;
@@ -188,13 +270,81 @@ def render_report_style() -> None:
         .solvency-analysis-ai {color:#D84315; font-size:12px; margin-top:5px;}
         .solvency-analysis-ai--error {color:#C00000;}
         .solvency-report-analysis {
-            background:#F4F7FC; border-left:4px solid #00338D;
-            border-radius:3px; padding:7px 10px; margin:4px 0 10px;
+            position:relative; box-sizing:border-box;
+            background:linear-gradient(120deg,#F7FAFF 0%,#EEF4FF 58%,#FFFFFF 100%);
+            border:1px solid #DCE6F5; border-left:4px solid #00338D;
+            border-radius:10px; padding:11px 14px 10px; margin:6px 0 12px;
+            box-shadow:0 4px 14px rgba(0,51,141,.06);
+            break-inside:avoid-page; page-break-inside:avoid;
         }
-        .solvency-report-analysis p {margin:2px 0; line-height:1.45;}
-        .solvency-note-default {color:#0A1F5C; font-size:14px;}
+        .solvency-report-analysis p {margin:2px 0; line-height:1.65;}
+        .solvency-note-default {color:#0A1F5C; font-size:13px;}
         .solvency-note-custom {color:#1E49E2; font-size:14px; font-weight:600;}
         .solvency-report-footnote {color:#777; font-size:12px; font-style:italic; margin:4px 0 16px;}
+        /* 图表前的数据型结论条：与 Excel 分析文字区分，保证每张图先给结论。 */
+        .s7-chart-summary {
+            position:relative; box-sizing:border-box;
+            display:flex; align-items:flex-start; gap:11px;
+            background:linear-gradient(120deg,#F7FAFF 0%,#EEF4FF 56%,#FFFFFF 100%);
+            border:1px solid #D8E4F8; border-left:4px solid #00338D;
+            border-radius:10px; padding:10px 14px 9px; margin:6px 0 12px;
+            box-shadow:0 4px 14px rgba(0,51,141,.06);
+            break-inside:avoid-page; page-break-inside:avoid;
+        }
+        .s7-chart-summary::after {
+            content:""; position:absolute; right:14px; top:12px;
+            width:28px; height:4px; border-radius:2px;
+            background:#00338D; opacity:.18;
+        }
+        .s7-chart-summary__tag {
+            flex:0 0 auto; display:inline-flex; align-items:center;
+            background:linear-gradient(135deg,#00338D 0%,#1E49E2 100%);
+            color:#FFFFFF; border-radius:999px;
+            padding:3px 10px; margin-top:1px;
+            font-size:10px; font-weight:800; letter-spacing:.5px;
+            box-shadow:0 2px 6px rgba(0,51,141,.18);
+        }
+        .s7-chart-summary__text {
+            margin:0; padding-right:38px; color:#0C233C;
+            font-size:13px; line-height:1.72; text-align:justify;
+        }
+        /* 公司小图横向滚动：每家公司固定宽度，超出页面宽度后出现横向滚动条。 */
+        @media screen {
+            [class*="st-key-annual_company_grid_scroll_"] {
+                max-width:100%!important;
+                overflow-x:auto!important; overflow-y:hidden!important;
+                padding:2px 2px 12px!important;
+                scrollbar-width:thin; scrollbar-color:#B9C7E2 #F2F6FC;
+                overscroll-behavior-x:contain;
+            }
+            [class*="st-key-annual_company_grid_scroll_"] [data-testid="stHorizontalBlock"] {
+                display:flex!important; flex-wrap:nowrap!important;
+                align-items:flex-start!important;
+                width:max-content!important; min-width:100%!important;
+                gap:10px!important;
+            }
+            [class*="st-key-annual_company_grid_scroll_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+                flex:0 0 300px!important;
+                width:300px!important;
+                min-width:300px!important;
+                max-width:300px!important;
+            }
+            [class*="st-key-annual_company_grid_scroll_"]::-webkit-scrollbar {height:10px;}
+            [class*="st-key-annual_company_grid_scroll_"]::-webkit-scrollbar-track {
+                background:#F2F6FC; border-radius:6px;
+            }
+            [class*="st-key-annual_company_grid_scroll_"]::-webkit-scrollbar-thumb {
+                background:#B9C7E2; border-radius:6px;
+            }
+            [class*="st-key-annual_company_grid_scroll_"]::-webkit-scrollbar-thumb:hover {
+                background:#93A9D2;
+            }
+            /* 固定宽度卡片内让较长的公司名换行，避免被裁切。 */
+            [class*="st-key-annual_company_grid_scroll_"] .annual-company-title {
+                white-space:normal!important; overflow-wrap:anywhere;
+                line-height:1.3; min-height:34px; margin:0 0 16px;
+            }
+        }
         [class*="st-key-annual_company_panel_"] {
             border:1px solid #EAEAEA!important; border-radius:0!important;
             padding:14px 4px 2px!important; box-shadow:none!important;
@@ -455,6 +605,86 @@ def render_report_style() -> None:
                 color:#00338D!important; font-size:30px!important; font-weight:900!important;
                 background:transparent!important; border:none!important; border-radius:0!important;
                 box-shadow:none!important; padding:0!important; margin:10px 0 8px!important;
+            }
+        }
+
+        /* 核心资本占比：口径说明 + 行业观察的双层卡片 */
+        .s7-capital-insight {
+            border:1px solid #DCE6F5; border-radius:14px;
+            padding:16px 18px 14px; margin:6px 0 14px;
+            background:linear-gradient(135deg,#FFFFFF 0%,#F7FAFF 55%,#EEF4FF 100%);
+            box-shadow:0 8px 22px rgba(0,51,141,.07);
+            break-inside:avoid-page; page-break-inside:avoid;
+            font-family:Microsoft YaHei, 微软雅黑, sans-serif;
+        }
+        .s7-capital-insight__head {
+            display:flex; align-items:flex-start; justify-content:space-between;
+            gap:12px; flex-wrap:wrap; margin:0 0 12px;
+        }
+        .s7-capital-insight__title {
+            color:#0C233C; font-size:15px; font-weight:800; letter-spacing:.2px;
+        }
+        .s7-capital-insight__sub {
+            color:#64748B; font-size:11px; margin-top:3px;
+        }
+        .s7-capital-insight__badge {
+            display:inline-flex; align-items:center;
+            background:#00338D; color:#FFFFFF; border-radius:999px;
+            padding:3px 10px; font-size:10px; font-weight:800; letter-spacing:.5px;
+            white-space:nowrap;
+        }
+        .s7-capital-stats {
+            display:grid; grid-template-columns:repeat(3,minmax(0,1fr));
+            gap:10px; margin:0 0 12px;
+        }
+        .s7-capital-stat {
+            background:#FFFFFF; border:1px solid #DCE6F5; border-radius:10px;
+            padding:10px 12px 9px; box-sizing:border-box;
+            border-top:3px solid #00338D;
+        }
+        .s7-capital-stat--pink {border-top-color:#FD349C;}
+        .s7-capital-stat--muted {border-top-color:#94A3B8;}
+        .s7-capital-stat__label {
+            color:#64748B; font-size:10px; font-weight:700; letter-spacing:.3px;
+        }
+        .s7-capital-stat__value {
+            color:#00338D; font-size:23px; font-weight:900; line-height:1.3;
+            margin:2px 0 1px;
+        }
+        .s7-capital-stat--pink .s7-capital-stat__value {color:#C2186B;}
+        .s7-capital-stat--muted .s7-capital-stat__value {color:#475569;}
+        .s7-capital-stat__value--small {font-size:16px; padding:3px 0 2px;}
+        .s7-capital-stat__note {color:#94A3B8; font-size:10px;}
+        .s7-capital-grid {
+            display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px;
+        }
+        .s7-capital-card {
+            background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;
+            padding:10px 12px 9px; box-sizing:border-box;
+            border-left:3px solid #00338D;
+        }
+        .s7-capital-card--accent {border-left-color:#FD349C; background:#FFFAFC;}
+        .s7-capital-card__title {
+            color:#0C233C; font-size:12px; font-weight:800;
+            margin:0 0 5px; display:flex; align-items:center; gap:6px;
+        }
+        .s7-capital-tag {
+            display:inline-flex; align-items:center;
+            background:#EEF4FF; color:#00338D; border-radius:999px;
+            padding:1px 7px; font-size:9px; font-weight:800; letter-spacing:.4px;
+        }
+        .s7-capital-tag--pink {background:#FDECF4; color:#C2186B;}
+        .s7-capital-card__body {
+            color:#334155; font-size:11.5px; line-height:1.75; margin:0;
+            text-align:justify;
+        }
+        @media (max-width:900px) {
+            .s7-capital-stats, .s7-capital-grid {grid-template-columns:1fr;}
+        }
+        @media print {
+            .s7-capital-insight {
+                box-shadow:none!important; background:#FFFFFF!important;
+                border:1px solid #CBD5E1!important;
             }
         }
         </style>
