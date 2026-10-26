@@ -244,10 +244,13 @@ def selected_chart_names(
         if first == PRINT_ALL_LABEL:
             return [m.chart_name for m in modules]
         second = st.session_state.get("company_nav_level_two", "全部")
-        # 按 Excel 顺序筛选
+        # 按 Excel 顺序筛选；没有二级分类的模块使用图表名作为导航入口，
+        # 与侧边栏 ui.navigation 的口径保持一致。
         pool = [m for m in modules if m.level_one == first]
         if second and second != "全部":
-            pool = [m for m in pool if m.level_two == second]
+            pool = [
+                m for m in pool if (m.level_two or m.chart_name) == second
+            ]
         # 二级分类就是图表入口，渲染该层级下全部模块。
         return [m.chart_name for m in pool]
 

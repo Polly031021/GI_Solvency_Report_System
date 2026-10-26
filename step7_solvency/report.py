@@ -73,9 +73,15 @@ from .specs import ALL_COMPANY_TYPES, PICTURE_DIR, SORT_ASCENDING, SORT_DESCENDI
 from .theme import render_report_style
 
 
+# 这三张图固定展示最近三年；保费增速与赔付率需要多留一年基数。
+THREE_YEAR_DISPLAY_CHARTS = {"保费增速", "赔付率与费用率"}
+THREE_YEAR_TREND_CHARTS = {"投资收益率"}
+
+
 def configured_chart_periods(
     periods: list[str],
     chart_config: dict | None,
+    chart_name: str = "",
 ) -> list[str]:
     """Apply optional year limits and annual labels to one chart."""
     config = chart_config or {}
@@ -108,6 +114,11 @@ def configured_chart_periods(
         year_limit = int(config.get("years"))
     except (TypeError, ValueError):
         year_limit = None
+    if chart_name in THREE_YEAR_DISPLAY_CHARTS:
+        # 多保留一年历史，保证第一个展示年度也能算出同比增速。
+        year_limit = None
+    elif chart_name in THREE_YEAR_TREND_CHARTS:
+        year_limit = 3
     if year_limit is not None and year_limit > 0:
         ordered = ordered[-year_limit:]
     return ordered
@@ -416,6 +427,7 @@ def show_step_7_solvency(
         chart_periods = configured_chart_periods(
             selected_periods,
             module.chart_config if module else {},
+            chart_name,
         )
         if not chart_periods:
             st.warning(f"“{chart_name}”在配置的年度范围内没有可用数据。")

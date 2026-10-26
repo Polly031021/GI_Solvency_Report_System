@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from html import escape
 
 import altair as alt
@@ -231,6 +231,31 @@ def render_report_metric(
     latest = metric_frame[metric_frame["报告期"].astype(str).eq(latest_period)].copy()
     latest["数值"] = pd.to_numeric(latest["数值"], errors="coerce")
     latest = latest.dropna(subset=["数值"]).drop_duplicates(subset=["公司"], keep="last")
+    if code == "INVESTMENT_RETURN" and not latest.empty:
+        values = pd.to_numeric(latest["数值"], errors="coerce").dropna()
+        if not values.empty:
+            mean_value = float(values.mean())
+            median_value = float(values.median())
+            top3_mean = float(values.nlargest(min(3, len(values))).mean())
+            top10_mean = float(values.nlargest(min(10, len(values))).mean())
+            positive_count = int((values > 0).sum())
+            negative_count = int((values < 0).sum())
+            investment_text = t(
+                f"以{latest_period}样本计，平均投资收益率约 {mean_value:.2f}%，"
+                f"中位数 {median_value:.2f}%；前三大平均 {top3_mean:.2f}%，"
+                f"前十大平均 {top10_mean:.2f}%；{positive_count} 家为正收益、"
+                f"{negative_count} 家为负收益。",
+                f"As of {latest_period}, the average investment return is {mean_value:.2f}% "
+                f"(median {median_value:.2f}%); the top 3 average {top3_mean:.2f}% and the "
+                f"top 10 average {top10_mean:.2f}%. {positive_count} companies posted positive "
+                f"returns and {negative_count} negative.",
+            )
+            st.markdown(
+                '<div class="solvency-report-analysis">'
+                f'<p class="solvency-note-default">{escape(investment_text)}</p>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
     if not latest.empty:
         max_row = latest.loc[latest["数值"].idxmax()]
         min_row = latest.loc[latest["数值"].idxmin()]
@@ -270,6 +295,39 @@ def render_report_metric(
             "<div class='solvency-analysis-spacer' aria-hidden='true'></div>",
             unsafe_allow_html=True,
         )
+    company_count = int(metric_frame["公司"].nunique())
+
+    def _render_company_period_cards() -> None:
+        with st.container(key=f"s7_company_bars_page_{key_prefix}_{code}"):
+            shared_y_domain = metric_bar_axis_domain(metric_frame, code, ordered_periods)
+            period_colors = report_period_color_map(ordered_periods)
+            st.caption(
+                t(
+                    f"以下按公司展示各报告期柱状小图（共 {company_count} 家）；"
+                    "所有公司统一使用同一纵轴范围，不同报告期使用不同颜色。"
+                    "每家公司固定宽度，左右滚动可查看全部公司。",
+                    f"Small bar charts by company and reporting period ({company_count} companies). "
+                    "All companies share the same y-axis range; colours identify periods. "
+                    "Each company keeps a fixed width; scroll horizontally to see every company.",
+                )
+            )
+            render_chart_legend(
+                [(period_colors[period], period, "square") for period in ordered_periods]
+            )
+            render_company_chart_grid(
+                metric_frame,
+                lambda company_frame: build_company_period_bar_chart(
+                    company_frame,
+                    code,
+                    ordered_periods,
+                    shared_y_domain=shared_y_domain,
+                    dense_layout=False,
+                    panel_count=min(company_count, 4),
+                ),
+                key_prefix=f"{key_prefix}_{code}_period_bars",
+                highlight_company=highlight_company,
+            )
+
     if company_panels:
         expected_count = metric_frame["公司"].nunique() * len(ordered_periods)
         disclosed_count = metric_frame.drop_duplicates(["公司", "报告期"]).shape[0]
@@ -324,33 +382,7 @@ def render_report_metric(
                     key=f"{key_prefix}_{code}_trend_{group_index}",
                 )
     if company_period_bars:
-        with st.container(key=f"s7_company_bars_page_{key_prefix}_{code}"):
-            company_panel_count = metric_frame["公司"].nunique()
-            shared_y_domain = metric_bar_axis_domain(metric_frame, code, ordered_periods)
-            period_colors = report_period_color_map(ordered_periods)
-            st.caption(
-                t(
-                    "以下按公司展示各报告期柱状小图；所有公司统一使用同一纵轴范围，"
-                    "不同报告期使用不同颜色。",
-                    "Small bar charts by company and reporting period. All companies share the same y-axis range; colours identify periods.",
-                )
-            )
-            render_chart_legend(
-                [(period_colors[period], period, "square") for period in ordered_periods]
-            )
-            render_company_chart_grid(
-                metric_frame,
-                lambda company_frame: build_company_period_bar_chart(
-                    company_frame,
-                    code,
-                    ordered_periods,
-                    shared_y_domain=shared_y_domain,
-                    dense_layout=company_panel_count >= 10,
-                    panel_count=company_panel_count,
-                ),
-                key_prefix=f"{key_prefix}_{code}_period_bars",
-                highlight_company=highlight_company,
-            )
+        _render_company_period_cards()
 
 
 def render_chart_legend(
@@ -384,6 +416,52 @@ def render_chart_legend(
     )
 
 
+def render_chart_summary(text: str, *, label: str | None = None) -> None:
+    """Render one data-driven takeaway line before a chart module."""
+    message = str(text or "").strip()
+    if not message:
+        return
+    st.markdown(
+        "<div class='s7-chart-summary'>"
+        f"<span class='s7-chart-summary__tag'>{escape(label or t('核心结论', 'Key takeaway'))}</span>"
+        f"<p class='s7-chart-summary__text'>{escape(message)}</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_horizontal_panel_strip(
+    items: Sequence[object],
+    render_panel: Callable[[object, int], None],
+    *,
+    key_prefix: str,
+) -> None:
+    """Render company panels as a horizontal strip with a fixed card width.
+
+    More than four panels switch to a horizontally scrollable strip so that
+    dozens of companies keep a readable width instead of being squeezed into
+    one page-width row. Print keeps the existing auto-fit grid because the
+    scroll styling is scoped to screen media.
+    """
+    if not items:
+        return
+    scrollable = len(items) > 6
+    key = (
+        f"annual_company_grid_scroll_{key_prefix}"
+        if scrollable
+        else f"annual_company_grid_{key_prefix}"
+    )
+    with st.container(key=key):
+        panel_columns = st.columns(
+            len(items),
+            gap="small" if scrollable else None,
+            vertical_alignment="top",
+        )
+        for index, (column, item) in enumerate(zip(panel_columns, items)):
+            with column:
+                render_panel(item, index)
+
+
 def render_company_chart_grid(
     frame: pd.DataFrame,
     chart_factory: Callable[[pd.DataFrame], object],
@@ -392,58 +470,59 @@ def render_company_chart_grid(
     highlight_company: str = "无",
     panel_width: int | None = None,
 ) -> None:
-    """Render equal company panels in one page-width row without scrolling."""
+    """Render company panels as fixed-width cards in a horizontal strip."""
     companies = ordered_companies(frame)
     if not companies:
         st.warning(t("当前筛选范围没有可绘制的公司数据。", "No company data to plot in the current selection."))
         return
     company_count = len(companies)
-    title_font_size = (
-        9 if company_count >= 12 else 10 if company_count >= 8 else 11 if company_count >= 5 else 13
-    )
-    column_gap = None if company_count >= 8 else "small"
-    with st.container(key=f"annual_company_grid_{key_prefix}"):
-        panel_columns = st.columns(
-            company_count,
-            gap=column_gap,
-            vertical_alignment="top",
-        )
-        tracked_company = str(highlight_company or "").strip()
-        for index, (column, company) in enumerate(zip(panel_columns, companies)):
-            company_frame = frame[frame["公司"].fillna("").astype(str).eq(company)].copy()
-            tone = (
-                "tracked"
-                if tracked_company and tracked_company != "无" and company == tracked_company
-                else "gray" if index % 2 else "white"
+    title_font_size = 12 if company_count >= 8 else 13
+    tracked_company = str(highlight_company or "").strip()
+    if company_count > 6:
+        st.caption(
+            t(
+                "每家公司固定宽度；左右拖动下方滚动条可查看全部公司。",
+                "Each company keeps a fixed width; drag the horizontal scrollbar below to see every company.",
             )
-            with column:
-                with st.container(
-                    border=True,
-                    width="stretch",
-                    gap=None,
-                    key=f"annual_company_panel_{tone}_{key_prefix}_{index}",
-                ):
-                    st.markdown(
-                        "<div class='annual-company-title' "
-                        f"style='font-size:{title_font_size}px'>{escape(company)}</div>",
-                        unsafe_allow_html=True,
+        )
+
+    def _render_panel(company: object, index: int) -> None:
+        company_name = str(company)
+        company_frame = frame[frame["公司"].fillna("").astype(str).eq(company_name)].copy()
+        tone = (
+            "tracked"
+            if tracked_company and tracked_company != "无" and company_name == tracked_company
+            else "gray" if index % 2 else "white"
+        )
+        with st.container(
+            border=True,
+            width="stretch",
+            gap=None,
+            key=f"annual_company_panel_{tone}_{key_prefix}_{index}",
+        ):
+            st.markdown(
+                "<div class='annual-company-title' "
+                f"style='font-size:{title_font_size}px'>{escape(company_name)}</div>",
+                unsafe_allow_html=True,
+            )
+            # ★ 把 try/except 移进容器内：图表失败时，公司标题列依然保留
+            try:
+                chart = chart_factory(company_frame)
+            except (ValueError, KeyError) as exc:
+                st.warning(
+                    t(
+                        f"该公司的图表暂不可用：{exc}",
+                        f"Chart unavailable for this company: {exc}",
                     )
-                    # ★ 把 try/except 移进容器内：图表失败时，公司标题列依然保留
-                    try:
-                        chart = chart_factory(company_frame)
-                    except (ValueError, KeyError) as exc:
-                        st.warning(
-                            t(
-                                f"该公司的图表暂不可用：{exc}",
-                                f"Chart unavailable for this company: {exc}",
-                            )
-                        )
-                        continue
-                    render_altair_chart(
-                        chart_without_internal_title(chart),
-                        width="stretch",
-                        key=f"{key_prefix}_{index}",
-                    )
+                )
+                return
+            render_altair_chart(
+                chart_without_internal_title(chart),
+                width="stretch",
+                key=f"{key_prefix}_{index}",
+            )
+
+    render_horizontal_panel_strip(companies, _render_panel, key_prefix=key_prefix)
 
 
 def render_altair_chart(chart: object, **kwargs) -> None:

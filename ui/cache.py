@@ -26,6 +26,7 @@ from services.solvency_company_identity import (
 )
 from services.solvency_step3_standardizer import target_template_workbook_bytes
 from services.solvency_step6_analysis import prepare_analysis_frame
+from services.solvency_step7_recompute import recompute_step7_metrics
 from services.solvency_financing_analysis import read_major_financing_workbook
 from services.step7_excel_config import load_step7_config
 from services.solvency_gold_standard import load_gold_manifest
@@ -102,6 +103,9 @@ def prepare_visualization_source(
     report_profile_id: str,
 ) -> tuple[pd.DataFrame, tuple[str, ...]]:
     enriched = add_missing_derived_metrics(frame) if report_profile_id == "LIFE_SOLVENCY" else frame
+    # 原始数据表里的计算列可能因 Excel 公式未重算而保持旧值；STEP7/8
+    # 在这里按基础指标重算，确保图表始终反映当前录入的数据。
+    enriched = recompute_step7_metrics(enriched)
     return prepare_analysis_frame(enriched, report_profile_id)
 
 
