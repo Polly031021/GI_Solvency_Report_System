@@ -412,7 +412,12 @@ def render_plan_loss_expense_combo(
                         st.error(f"❌ {panel.company} 赔付率/费用率图渲染失败：{exc}")
 
 
-def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
+def render_plan_performance_pattern_grid(
+    frame,
+    key_prefix,
+    module_override,
+    rank_frame=None,
+):
     companies = ordered_companies(frame)
     if not companies:
         st.warning(t("当前没有公司数据。", "No company data."))
@@ -458,10 +463,30 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
     _df["报告期"] = _df["报告期"].astype(str)
     _df["公司"] = _df["公司"].astype(str).str.strip()
 
+    # 排名池使用全部公司（不受公司/类型筛选影响），展示仍按当前选择；
+    # 否则选中一家公司时排名会变成“1/1”，与报告中其他口径不一致。
+    _rank_source = frame
+    if isinstance(rank_frame, pd.DataFrame) and not rank_frame.empty:
+        _rank_source = rank_frame.copy()
+        _rank_source["数值"] = pd.to_numeric(_rank_source["数值"], errors="coerce")
+        _rank_source["报告期"] = _rank_source["报告期"].astype(str)
+        _rank_source["公司"] = (
+            _rank_source["公司"].fillna("").astype(str).str.strip()
+        )
+        _rank_source = _rank_source[
+            _rank_source["公司"].ne("") & _rank_source["公司"].ne("nan")
+        ]
+
     all_companies = list(
         dict.fromkeys(c for c in _df["公司"].dropna().astype(str) if c and c != "nan")
     )
+    rank_companies = list(
+        dict.fromkeys(
+            c for c in _rank_source["公司"].dropna().astype(str) if c and c != "nan"
+        )
+    )
     n_companies = len(all_companies)
+    n_rank_companies = len(rank_companies)
     if n_companies == 0:
         st.warning(t("无公司数据。", "No company data."))
         return
@@ -491,7 +516,7 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
 
     rank_rows: list[dict] = []
     for period in periods_list:
-        period_df = _df[_df["报告期"].eq(period)]
+        period_df = _rank_source[_rank_source["报告期"].eq(period)]
         revenue = _annual_rank_metric(period_df, revenue_code)
         profit = _annual_rank_metric(period_df, profit_code)
         if revenue.empty or profit.empty:
@@ -558,7 +583,7 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
     latest_sample_n = (
         int(latest_rank["公司"].nunique())
         if not latest_rank.empty
-        else len(all_companies)
+        else n_rank_companies
     )
     period_span = (
         f"{periods_list[0]}–{periods_list[-1]}"
@@ -597,10 +622,26 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
 
     bullets: list[str] = [
         t(
-            f"覆盖全部 {n_companies} 家公司 · {period_span}（{len(periods_list)} 个报告期）；"
-            f"各期有效样本 {period_sample_span} 家",
-            f"All {n_companies} companies · {period_span} ({len(periods_list)} periods); "
-            f"effective sample per period {period_sample_span}",
+            (
+                f"排名池为全部 {n_rank_companies} 家公司，当前展示 {n_companies} 家 · "
+                f"{period_span}（{len(periods_list)} 个报告期）；"
+                f"各期有效样本 {period_sample_span} 家"
+            )
+            if n_companies != n_rank_companies
+            else (
+                f"覆盖全部 {n_companies} 家公司 · {period_span}"
+                f"（{len(periods_list)} 个报告期）；各期有效样本 {period_sample_span} 家"
+            ),
+            (
+                f"Ranked against all {n_rank_companies} companies; showing {n_companies} · "
+                f"{period_span} ({len(periods_list)} periods); "
+                f"effective sample per period {period_sample_span}"
+            )
+            if n_companies != n_rank_companies
+            else (
+                f"All {n_companies} companies · {period_span} "
+                f"({len(periods_list)} periods); effective sample per period {period_sample_span}"
+            ),
         ),
         t("业绩模式分布：" + pattern_summary, "Pattern mix: " + pattern_summary),
     ]
@@ -648,7 +689,10 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
             f"{latest_period} 收入—利润排名轨迹",
             f"{latest_period} revenue–profit rank trajectory",
         ),
-        value=t(f"{n_companies} 家样本", f"{n_companies} companies"),
+        value=t(
+            f"{n_companies} 家展示 / {n_rank_companies} 家排名",
+            f"{n_companies} shown / {n_rank_companies} ranked",
+        ),
         delta=t(f"{len(active_patterns)} 类模式", f"{len(active_patterns)} patterns"),
         delta_tone="neutral",
         bullets=bullets,
@@ -822,6 +866,7 @@ def render_plan_performance_pattern_grid(frame, key_prefix, module_override):
                                 y_value_title=profit_label,
                                 panel_width=panel_width,
                                 panel_height=panel_height,
+                                rank_frame=_rank_source,
                             )
                             render_altair_chart(
                                 _chart,

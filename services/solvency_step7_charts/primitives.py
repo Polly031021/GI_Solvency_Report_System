@@ -195,13 +195,16 @@ def apply_industry_chart_theme(
             labelColor=REPORT_AXIS_COLOR,
             labelFont=REPORT_FONT,
             labelFontSize=10,
-            ticks=False,
+            tickColor=REPORT_DOMAIN_COLOR,
+            tickSize=4,
+            ticks=True,
             titleColor=REPORT_AXIS_COLOR,
             titleFont=REPORT_FONT,
             titleFontSize=10,
         )
-        .configure_axisX(grid=False)
-        .configure_axisY(grid=True)
+        # 坐标轴需要可见：网格线只保留纵向，刻度线在横纵轴都显示。
+        .configure_axisX(grid=False, ticks=True)
+        .configure_axisY(grid=True, ticks=True)
         .configure_legend(
             labelColor=REPORT_TEXT_COLOR,
             labelFont=REPORT_FONT,

@@ -155,7 +155,13 @@ def render_combination_analysis(
 
     # ★ 新增：公司业绩展示（收入排名—利润排名，按模式分列）
     if plan.kind == PERFORMANCE_PATTERN_GRID:
-        render_plan_performance_pattern_grid(frame, key_prefix, module_override)
+        render_plan_performance_pattern_grid(
+            frame,
+            key_prefix,
+            module_override,
+            # 排名按上传数据中的全部公司计算，展示仍遵循公司/类型筛选。
+            rank_frame=industry_frame,
+        )
         return
 
     if plan.kind == KEY_METRICS_TABLE:
