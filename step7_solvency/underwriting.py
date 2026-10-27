@@ -1162,8 +1162,12 @@ def render_underwriting_efficiency_scatter(
                 "综合成本率": t("综合成本率（%）", "Combined ratio (%)"),
             }
         )
+        # 注意：上面已把“保费排名”重命名为“签单保费排名”，排序必须使用
+        # 重命名后的列名；否则会抛出 KeyError('保费排名')，主流程捕获后
+        # 在这一张图下方显示“承保效益 暂无法绘制”。
+        sort_column = t("签单保费排名", "Signed premium rank")
         st.dataframe(
-            translate_dataframe(detail.sort_values(["年度", "保费排名"])),
+            translate_dataframe(detail.sort_values(["年度", sort_column])),
             width="stretch",
             hide_index=True,
         )

@@ -647,7 +647,16 @@ def _year_axis(years: list[str]) -> alt.X:
         sort=years,
         title=None,
         scale=alt.Scale(paddingInner=0.12, paddingOuter=0.30),
-        axis=alt.Axis(labelAngle=0, labelFontSize=11, labelPadding=9),
+        axis=alt.Axis(
+            labelAngle=0,
+            labelFontSize=11,
+            labelPadding=9,
+            # 显式打开横轴轴线与刻度，避免主题配置把横轴整体收成一条无轴线的图。
+            domain=True,
+            ticks=True,
+            tickSize=4,
+            grid=False,
+        ),
     )
 
 
@@ -756,6 +765,10 @@ def build_industry_premium_total_chart(
                     orient="left",
                     format=value_format,
                     tickCount=5,
+                    domain=True,
+                    ticks=True,
+                    tickSize=4,
+                    grid=True,
                 ),
             ),
             tooltip=[
@@ -887,6 +900,10 @@ def build_industry_premium_mix_chart(
                     orient="left",
                     format=".0%",
                     tickCount=5,
+                    domain=True,
+                    ticks=True,
+                    tickSize=4,
+                    grid=True,
                 ),
             ),
             color=alt.Color("类别:N", scale=bar_color_scale, legend=None),

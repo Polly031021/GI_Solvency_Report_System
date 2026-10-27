@@ -109,6 +109,7 @@ def build_performance_pattern_trajectory(
     y_title: str = "净利润排名",
     x_value_title: str = "",
     y_value_title: str = "",
+    rank_frame: pd.DataFrame | None = None,
 ) -> alt.Chart:
     """构建单家公司的收入—利润排名轨迹图（分列展示版）。
 
@@ -120,6 +121,18 @@ def build_performance_pattern_trajectory(
     df["数值"] = pd.to_numeric(df["数值"], errors="coerce")
     df["报告期"] = df["报告期"].astype(str)
     df["公司"] = df["公司"].astype(str).str.strip()
+
+    # 排名池：默认与展示数据一致；传入 rank_frame 时按全部公司排名，
+    # 保证筛选后每张小图显示的名次仍是全行业名次。
+    rank_source = df
+    if isinstance(rank_frame, pd.DataFrame) and not rank_frame.empty:
+        rank_source = rank_frame.copy()
+        rank_source["数值"] = pd.to_numeric(rank_source["数值"], errors="coerce")
+        rank_source["报告期"] = rank_source["报告期"].astype(str)
+        rank_source["公司"] = rank_source["公司"].astype(str).str.strip()
+        rank_source = rank_source[
+            rank_source["公司"].ne("") & rank_source["公司"].ne("nan")
+        ]
 
     all_companies = list(
         dict.fromkeys(c for c in df["公司"].dropna().astype(str) if c and c != "nan")
@@ -170,7 +183,7 @@ def build_performance_pattern_trajectory(
     rank_rows: list[dict] = []
 
     for period in period_order:
-        period_df = df[df["报告期"].eq(str(period))]
+        period_df = rank_source[rank_source["报告期"].eq(str(period))]
         revenue = _pick_company_value(
             period_df[period_df["指标编码"].astype(str).eq(revenue_code)][
                 ["公司", "数值", "期间口径"]
