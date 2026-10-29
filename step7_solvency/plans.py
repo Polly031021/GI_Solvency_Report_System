@@ -15,6 +15,7 @@ from services.solvency_step7_chart_plans import (
     CAPITAL_STRUCTURE_COMBO,
     CAPABILITY_RADAR,
     INDUSTRY_PREMIUM_STRUCTURE,
+    INDUSTRY_PREMIUM_BY_LINE,
     INDUSTRY_MARKET_SHARE,
     SOLVENCY_DISCLOSURE_OVERVIEW,
     UNDERWRITING_EFFICIENCY_SCATTER,
@@ -42,6 +43,7 @@ from .plan_renderers import (
     render_plan_capability_radar,
     render_plan_company_line_trend,
     render_plan_industry_premium_structure,
+    render_plan_industry_premium_by_line,
     render_plan_industry_market_share,
     render_plan_capital_amount_combo,
     render_plan_capital_efficiency_bubble,
@@ -139,6 +141,14 @@ def render_combination_analysis(
         render_plan_industry_market_share(
             industry_frame if industry_frame is not None else frame,
             unit_mode=unit_mode,
+            key_prefix=key_prefix,
+            module_override=module_override,
+        )
+        return
+
+    # ★ 分险种保费收入：源表为项目根目录《分险种保费收入.xlsx》，不受公司筛选影响
+    if plan.kind == INDUSTRY_PREMIUM_BY_LINE:
+        render_plan_industry_premium_by_line(
             key_prefix=key_prefix,
             module_override=module_override,
         )

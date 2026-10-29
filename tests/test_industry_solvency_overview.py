@@ -86,6 +86,7 @@ def test_step7_template_has_fourth_industry_module() -> None:
     industry = [m for m in modules if m.level_one == "行业概览"]
     assert [m.chart_name for m in industry] == [
         "行业整体保费规模与结构",
+        "分险种保费收入",
         "行业市场份额",
         "承保效益",
         "偿付能力披露整体情况",

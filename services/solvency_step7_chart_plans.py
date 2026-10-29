@@ -31,6 +31,7 @@ PREMIUM_GROWTH_STRUCTURE = "premium_growth_structure"  # 车险结构 + 总保�
 LOSS_EXPENSE_COST_RATIO = "loss_expense_cost_ratio"
 PERFORMANCE_PATTERN_GRID = "performance_pattern_grid"  # ★ 新增：业绩模式分列网格
 INDUSTRY_PREMIUM_STRUCTURE = "industry_premium_structure"  # ★ 新增：行业整体保费规模与结构
+INDUSTRY_PREMIUM_BY_LINE = "industry_premium_by_line"  # ★ 新增：分险种保费收入与同比增速
 INDUSTRY_MARKET_SHARE = "industry_market_share"  # ★ 新增：行业市场份额
 SOLVENCY_DISCLOSURE_OVERVIEW = "solvency_disclosure_overview"  # 行业合计偿付能力披露
 COMPANY_LINE_TREND = "company_line_trend"                # ★ 新增：每家公司一个跨期折线小图
@@ -159,6 +160,11 @@ SPECIAL_CHART_PLANS: dict[str, ChartPlan] = {
     "行业市场份额": ChartPlan(
         INDUSTRY_MARKET_SHARE,
         "最新年度按公司类别的保费、净利润、承保利润市场份额与金额对比",
+    ),
+    "分险种保费收入": ChartPlan(
+        INDUSTRY_PREMIUM_BY_LINE,
+        "各险种年度保费合并为一张柱线组合图：车险用右轴、其他险种用左轴，"
+        "折线为同比增速，缺失年度以“×”标注",
     ),
     "偿付能力披露整体情况": ChartPlan(
         SOLVENCY_DISCLOSURE_OVERVIEW,

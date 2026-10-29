@@ -29,6 +29,7 @@ from .solvency_step7_chart_plans import (
     LOSS_EXPENSE_COST_RATIO,
     PERFORMANCE_PATTERN_GRID,
     INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增：行业整体保费规模与结构
+    INDUSTRY_PREMIUM_BY_LINE,  # ★ 新增：分险种保费收入与同比增速
     INDUSTRY_MARKET_SHARE,  # ★ 新增：行业市场份额
     SOLVENCY_DISCLOSURE_OVERVIEW,  # 行业合计偿付能力披露
     COMPANY_LINE_TREND,        # ★ 新增：公司折线趋势图
@@ -61,6 +62,8 @@ CHART_KIND_LABELS = {
     "业绩模式分列图": PERFORMANCE_PATTERN_GRID,
     "行业保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,  # ★ 新增
     "行业整体保费规模与结构图": INDUSTRY_PREMIUM_STRUCTURE,
+    "分险种保费收入图": INDUSTRY_PREMIUM_BY_LINE,  # ★ 新增
+    "分险种保费收入组合图": INDUSTRY_PREMIUM_BY_LINE,
     "行业市场份额图": INDUSTRY_MARKET_SHARE,
     "偿付能力整体情况卡片": SOLVENCY_DISCLOSURE_OVERVIEW,
     "偿付能力披露整体情况": SOLVENCY_DISCLOSURE_OVERVIEW,
