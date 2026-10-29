@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Capability scores must use full peer-category pools, not displayed companies."""
+"""Capability scores use the original pools and do not change with display filters."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _row(
     }
 
 
-def test_rank_and_average_scores_use_full_peer_category() -> None:
+def test_original_scoring_is_stable_when_display_filter_changes() -> None:
     baseline = pd.DataFrame(
         [
             _row("甲公司", "TOTAL_ASSETS", 70.0, "前三大"),
@@ -52,26 +52,44 @@ def test_rank_and_average_scores_use_full_peer_category() -> None:
             "code": "COMBINED_RATIO",
             "label": "承保",
             "period": "本年累计数",
+            "lower_is_better": True,
         },
     ]
 
-    scores, _, _ = capability_scores(
+    full_scores, _, _ = capability_scores(
+        baseline,
+        axes,
+        ["2025Q4"],
+        baseline_frame=baseline,
+        industry_benchmark_groups=CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
+    )
+    selected_scores, _, _ = capability_scores(
         selected,
         axes,
         ["2025Q4"],
         baseline_frame=baseline,
         industry_benchmark_groups=CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
     )
-    scores = scores.set_index("公司")
+    full_scores = full_scores.set_index("公司")
+    selected_scores = selected_scores.set_index("公司")
 
-    # Each selected company is lowest in its own two-company category, so the
-    # rank floor applies even though it is above the other displayed company.
-    assert scores.loc["甲公司", "资产_得分"] == 30.0
-    assert scores.loc["丙公司", "资产_得分"] == 30.0
-    # 甲公司's 95% combined ratio is better than its category average of 100%,
-    # but worse than the other selected company's large-category peer average.
-    assert abs(float(scores.loc["甲公司", "承保_得分"]) - 80.0) < 1e-9
+    # Filtering display companies must return exactly the scores already
+    # calculated in the full-company universe.
+    for company in ("甲公司", "丙公司"):
+        assert (
+            selected_scores.loc[company, "资产_得分"]
+            == full_scores.loc[company, "资产_得分"]
+        )
+        assert (
+            selected_scores.loc[company, "承保_得分"]
+            == full_scores.loc[company, "承保_得分"]
+        )
+
+    # Top 3 keeps the original full-industry ranking pool.
+    assert abs(float(selected_scores.loc["甲公司", "资产_得分"]) - (30 + 70 / 3)) < 1e-9
+    # Large companies keep their same-category pool.
+    assert selected_scores.loc["丙公司", "资产_得分"] == 30.0
 
 
 if __name__ == "__main__":
-    test_rank_and_average_scores_use_full_peer_category()
+    test_original_scoring_is_stable_when_display_filter_changes()
