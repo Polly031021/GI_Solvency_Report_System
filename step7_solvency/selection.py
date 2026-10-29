@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 import colorsys
+import hashlib
 import pandas as pd
 import streamlit as st
+from services.report_i18n import t
 from services.solvency_navigation import (
     COMPANY_NAVIGATION,
     KPMG_CHART_COLORS,
@@ -31,6 +33,83 @@ def valid_state(key: str, options: Iterable[str], *, multiple: bool = False) -> 
         st.session_state[key] = [value for value in st.session_state[key] if value in values]
     elif st.session_state[key] not in values:
         st.session_state.pop(key, None)
+
+
+def multiselect_popover(
+    label: str,
+    options: Iterable[str],
+    *,
+    key: str,
+    default: Iterable[str] | None = None,
+    format_func: Callable[[str], str] | None = None,
+    help: str | None = None,
+) -> list[str]:
+    """Render a dropdown-like checklist whose full option list stays visible.
+
+    Native ``st.multiselect`` removes selected values from its dropdown and
+    renders them only as chips.  This popover keeps every option in the list,
+    uses a checked box beside each selected value, and stores the canonical
+    selection in ``key`` so the rest of Step 7 can keep using a list of strings.
+    """
+    values = list(
+        dict.fromkeys(str(option) for option in options if str(option).strip())
+    )
+    valid_state(key, values, multiple=True)
+    if key not in st.session_state:
+        default_values = values if default is None else list(default)
+        st.session_state[key] = [
+            value
+            for value in dict.fromkeys(str(item) for item in default_values)
+            if value in values
+        ]
+
+    current = [value for value in st.session_state.get(key, []) if value in values]
+    signature_key = f"_{key}_popover_signature"
+    signature = (tuple(values), tuple(current))
+    if st.session_state.get(signature_key) != signature:
+        # A caller (or a restored session) may set the canonical list directly.
+        # Reset the individual checkbox widgets to that authoritative state.
+        for option in values:
+            digest = hashlib.sha1(option.encode("utf-8")).hexdigest()[:12]
+            st.session_state[f"{key}_option_{digest}"] = option in current
+
+    formatter = format_func or (lambda value: value)
+    if not current:
+        summary = t("未选择", "None selected")
+    elif len(current) == len(values):
+        summary = t(f"全部 {len(values)} 项", f"All {len(values)}")
+    else:
+        summary = t(
+            f"已选 {len(current)} / {len(values)} 项",
+            f"{len(current)} of {len(values)} selected",
+        )
+
+    selected: list[str] = []
+    with st.popover(
+        f"{label} · {summary}",
+        icon=":material/keyboard_arrow_down:",
+        help=help,
+        width="stretch",
+    ):
+        with st.container(
+            key=f"s7_company_filter_checklist_{key}",
+            height=min(380, max(120, len(values) * 34)),
+        ):
+            if not values:
+                st.caption(t("暂无选项", "No options available"))
+            for option in values:
+                digest = hashlib.sha1(option.encode("utf-8")).hexdigest()[:12]
+                checked = st.checkbox(
+                    formatter(option),
+                    key=f"{key}_option_{digest}",
+                )
+                if checked:
+                    selected.append(option)
+
+    selected = [option for option in values if option in set(selected)]
+    st.session_state[key] = selected
+    st.session_state[signature_key] = (tuple(values), tuple(selected))
+    return selected
 
 
 def metric_title(frame: pd.DataFrame, code: str) -> str:

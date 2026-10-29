@@ -61,8 +61,8 @@ from .rendering import render_image_override_controls, render_report_metric
 from .selection import (
     company_scope_for_types,
     metric_sort_options,
+    multiselect_popover,
     module_by_chart_name,
-    reset_company_selection_for_types,
     selected_chart_names,
     sort_companies_by_metric,
     step7_modules_from_state,
@@ -221,18 +221,15 @@ def show_step_7_solvency(
         expanded=False,
         icon=":material/tune:",
     ):
-        c0, c1, c2, c3, c4 = st.columns([1, 2, 1, 1, 1])
+        c0, c1, c2, c3, c4 = st.columns([1.35, 2.3, 1, 1, 1])
         peer_groups = nonblank_values(frame, "同业分类")
         type_options = [ALL_COMPANY_TYPES, *peer_groups]
-        st.session_state.setdefault("s7_company_types", [ALL_COMPANY_TYPES])
-        valid_state("s7_company_types", type_options, multiple=True)
         with c0:
-            selected_types_raw = st.multiselect(
+            selected_types_raw = multiselect_popover(
                 t("公司类型", "Company type"),
                 type_options,
                 key="s7_company_types",
-                on_change=reset_company_selection_for_types,
-                args=(frame,),
+                default=[ALL_COMPANY_TYPES],
                 format_func=category_name,
                 help=t(
                     "沿用偿付能力平台的‘同业分类’字段进行筛选。",
@@ -248,11 +245,11 @@ def show_step_7_solvency(
             all_companies,
         )
         with c1:
-            selected_companies = st.multiselect(
+            selected_companies = multiselect_popover(
                 t("展示公司", "Companies"),
                 all_companies,
                 key=company_selection_key,
-                placeholder=t("选择一家或多家公司", "Select one or more companies"),
+                default=all_companies,
             )
         with c2:
             unit_options = ["十亿元", "亿元", "百万元", "十万元"]
@@ -402,7 +399,10 @@ def show_step_7_solvency(
 
     for chart_index, chart_name in enumerate(chart_names):
         if print_all and chart_index:
-            st.markdown("<div class='solvency-report-page-break'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='solvency-report-page-break'></div>",
+                unsafe_allow_html=True,
+            )
 
         # ★ 先尝试从 Excel 模块里找元数据
         module = module_by_chart_name(step7_modules, chart_name) if step7_modules else None
@@ -424,17 +424,11 @@ def show_step_7_solvency(
             module_requires_all = module.requires_all  # ★ 改用 Excel 的值
             module_entry_metric_codes = module.metric_codes
 
-        chart_periods = configured_chart_periods(
-            selected_periods,
-            module.chart_config if module else {},
-            chart_name,
-        )
-        if not chart_periods:
-            st.warning(f"“{chart_name}”在配置的年度范围内没有可用数据。")
-            continue
-        chart_scope = scoped[
-            scoped["报告期"].fillna("").astype(str).isin(chart_periods)
-        ].copy()
+        if module is not None and str(module.module_id).strip():
+            module_identity = str(module.module_id).strip()
+        else:
+            module_identity = f"{chart_index}_{chart_name}"
+        module_expander_key = f"s7_module_expander_{module_identity}"
 
         # 标题：Excel 有二级就拼上，没有就省掉；二级与图表同名时只保留一次。
         title_parts = []
@@ -449,104 +443,135 @@ def show_step_7_solvency(
         title_text = " - ".join(title_parts)
 
         with st.container(key=f"s7_report_module_{chart_index}"):
-            st.markdown(
-                f"<div class='solvency-module-title'>{title_text}</div>",
-                unsafe_allow_html=True,
-            )
-
-            # 分析/注释：优先用 Excel 的；英文模式只翻译默认分析内容，自定义内容保持原文。
-            chart_note = dict(notes.get(chart_name, {}) or {})
-            if is_english() and chart_note.get("分析内容-默认"):
-                chart_note["分析内容-默认"] = translate_default_analysis(
-                    chart_note["分析内容-默认"]
-                )
-            render_report_analysis(chart_note)
-
-            override = image_overrides.get(chart_name)
-            if override:
-                st.image(
-                    override["data"],
-                    caption=t("图片覆盖：", "Image override: ") + str(override["name"]),
-                    width="stretch",
-                )
-            else:
-                # ★ 决定图表类型：Excel 优先，其次回退到 chart_plan_for
-                CHART_KIND_ALIASES = {
-                    "能力五边形": CAPABILITY_RADAR,
-                    "能力雷达图": CAPABILITY_RADAR,
-                    "承保效益散点图": UNDERWRITING_EFFICIENCY_SCATTER,  # ★ 新增
-                    "结构变化组合图": STRUCTURE_CHANGE_CHART,  # ★ 新增
-                    "业绩模式分列图": PERFORMANCE_PATTERN_GRID,  # ★ 新增
-                    "公司业绩轨迹图": PERFORMANCE_PATTERN_GRID,  # ★ 新增（兼容旧写法）
-                    "偿付能力整体情况卡片": SOLVENCY_DISCLOSURE_OVERVIEW,
-                    "偿付能力披露整体情况": SOLVENCY_DISCLOSURE_OVERVIEW,
-                }
-                if module_chart_kind:
-                    plan_kind = CHART_KIND_ALIASES.get(module_chart_kind, module_chart_kind)
-                else:
-                    plan_kind = chart_plan_for(chart_name).kind
-
-                available_codes = set(chart_scope["指标编码"].fillna("").astype(str))
-                missing_codes = [c for c in module_entry_metric_codes if c not in available_codes]
-
-                if module_requires_all and missing_codes:
-                    st.warning(
-                        t(
-                            f"“{localized_chart_name(chart_name)}”缺少 {len(missing_codes)} 个必要指标，暂无法按 Excel 指定格式完整绘图。",
-                            f"“{localized_chart_name(chart_name)}” is missing {len(missing_codes)} required metrics and cannot yet be drawn in the Excel-specified format.",
-                        )
+            with st.container(key=f"s7_module_expander_wrap_{chart_index}"):
+                with st.expander(
+                    title_text,
+                    expanded=True,
+                    key=module_expander_key,
+                ):
+                    chart_periods = configured_chart_periods(
+                        selected_periods,
+                        module.chart_config if module else {},
+                        chart_name,
                     )
-                    st.caption(
-                        t("缺失指标编码：", "Missing metric codes: ")
-                        + t("、", ", ").join(missing_codes)
-                    )
-                elif plan_kind in {SINGLE_METRIC_TREND, TREND_WITH_COMPANY_BARS, COMPANY_BAR_TREND}:
-                    # 指标编码：Excel 优先
-                    codes_for_this_chart = module_metric_codes or tuple(
-                        metric_codes_for_chart(chart_name)
-                    )
-                    for code in codes_for_this_chart:
-                        render_report_metric(
-                            chart_scope,
-                            code,
-                            periods=chart_periods,
-                            show_labels=show_labels,
-                            decimals=decimals,
-                            unit_mode=unit_mode,
-                            transparent=transparent,
-                            show_average=show_average,
-                            highlight_company=highlight_company,
-                            enable_ai=enable_ai and ai_data_consent,
-                            key_prefix=f"s7_{chart_index}",
-                            company_panels=(plan_kind == COMPANY_BAR_TREND),
-                            company_period_bars=(plan_kind == TREND_WITH_COMPANY_BARS),
-                            annual_labels=bool(
-                                module.chart_config.get("annual_labels")
-                                if module
-                                else False
-                            ),
+                    if not chart_periods:
+                        st.warning(f"“{chart_name}”在配置的年度范围内没有可用数据。")
+                        continue
+                    chart_scope = scoped[
+                        scoped["报告期"].fillna("").astype(str).isin(chart_periods)
+                    ].copy()
+
+                    # 分析/注释：优先用 Excel 的；英文模式只翻译默认分析内容。
+                    chart_note = dict(notes.get(chart_name, {}) or {})
+                    if is_english() and chart_note.get("分析内容-默认"):
+                        chart_note["分析内容-默认"] = translate_default_analysis(
+                            chart_note["分析内容-默认"]
                         )
-                else:
-                    try:
-                        render_combination_analysis(
-                            chart_scope,
-                            chart_name,
-                            periods=chart_periods,
-                            unit_mode=unit_mode,
-                            highlight_company=highlight_company,
-                            key_prefix=f"s7_{chart_index}",
-                            financing_data=financing_data,
-                            module_override=module,  # ★ 新增
-                            industry_frame=frame,
+                    render_report_analysis(chart_note)
+
+                    override = image_overrides.get(chart_name)
+                    if override:
+                        st.image(
+                            override["data"],
+                            caption=t("图片覆盖：", "Image override: ")
+                            + str(override["name"]),
+                            width="stretch",
                         )
-                    except (ValueError, KeyError) as exc:
-                        st.warning(
-                            t(
-                                f"“{localized_chart_name(chart_name)}”暂无法绘制：{exc}",
-                                f"“{localized_chart_name(chart_name)}” cannot be drawn yet: {exc}",
+                    else:
+                        # ★ 决定图表类型：Excel 优先，其次回退到 chart_plan_for
+                        CHART_KIND_ALIASES = {
+                            "能力五边形": CAPABILITY_RADAR,
+                            "能力雷达图": CAPABILITY_RADAR,
+                            "承保效益散点图": UNDERWRITING_EFFICIENCY_SCATTER,
+                            "结构变化组合图": STRUCTURE_CHANGE_CHART,
+                            "业绩模式分列图": PERFORMANCE_PATTERN_GRID,
+                            "公司业绩轨迹图": PERFORMANCE_PATTERN_GRID,
+                            "偿付能力整体情况卡片": SOLVENCY_DISCLOSURE_OVERVIEW,
+                            "偿付能力披露整体情况": SOLVENCY_DISCLOSURE_OVERVIEW,
+                        }
+                        if module_chart_kind:
+                            plan_kind = CHART_KIND_ALIASES.get(
+                                module_chart_kind,
+                                module_chart_kind,
                             )
+                        else:
+                            plan_kind = chart_plan_for(chart_name).kind
+
+                        available_codes = set(
+                            chart_scope["指标编码"].fillna("").astype(str)
                         )
-            render_report_footnote(chart_note, language=get_language())
+                        missing_codes = [
+                            code
+                            for code in module_entry_metric_codes
+                            if code not in available_codes
+                        ]
+
+                        if module_requires_all and missing_codes:
+                            st.warning(
+                                t(
+                                    f"“{localized_chart_name(chart_name)}”缺少 {len(missing_codes)} 个必要指标，暂无法按 Excel 指定格式完整绘图。",
+                                    f"“{localized_chart_name(chart_name)}” is missing {len(missing_codes)} required metrics and cannot yet be drawn in the Excel-specified format.",
+                                )
+                            )
+                            st.caption(
+                                t("缺失指标编码：", "Missing metric codes: ")
+                                + t("、", ", ").join(missing_codes)
+                            )
+                        elif plan_kind in {
+                            SINGLE_METRIC_TREND,
+                            TREND_WITH_COMPANY_BARS,
+                            COMPANY_BAR_TREND,
+                        }:
+                            codes_for_this_chart = module_metric_codes or tuple(
+                                metric_codes_for_chart(chart_name)
+                            )
+                            for code in codes_for_this_chart:
+                                show_metric_average = (
+                                    show_average or code == "INVESTMENT_RETURN"
+                                )
+                                render_report_metric(
+                                    chart_scope,
+                                    code,
+                                    periods=chart_periods,
+                                    show_labels=show_labels,
+                                    decimals=decimals,
+                                    unit_mode=unit_mode,
+                                    transparent=transparent,
+                                    show_average=show_metric_average,
+                                    highlight_company=highlight_company,
+                                    enable_ai=enable_ai and ai_data_consent,
+                                    key_prefix=f"s7_{chart_index}",
+                                    company_panels=(plan_kind == COMPANY_BAR_TREND),
+                                    company_period_bars=(
+                                        plan_kind == TREND_WITH_COMPANY_BARS
+                                    ),
+                                    annual_labels=bool(
+                                        module.chart_config.get("annual_labels")
+                                        if module
+                                        else False
+                                    ),
+                                )
+                        else:
+                            try:
+                                render_combination_analysis(
+                                    chart_scope,
+                                    chart_name,
+                                    periods=chart_periods,
+                                    unit_mode=unit_mode,
+                                    highlight_company=highlight_company,
+                                    key_prefix=f"s7_{chart_index}",
+                                    financing_data=financing_data,
+                                    module_override=module,
+                                    industry_frame=frame,
+                                )
+                            except (ValueError, KeyError) as exc:
+                                st.warning(
+                                    t(
+                                        f"“{localized_chart_name(chart_name)}”暂无法绘制：{exc}",
+                                        f"“{localized_chart_name(chart_name)}” cannot be drawn yet: {exc}",
+                                    )
+                                )
+                    render_report_footnote(chart_note, language=get_language())
 
     if print_all:
         render_report_back_cover(picture_dir=PICTURE_DIR)

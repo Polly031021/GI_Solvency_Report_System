@@ -101,14 +101,11 @@ def capability_scores(
     1. 若顶点配置里带 `steps`（或该编码在 step_score_fallback 里），
        则按阶梯打分。例如偿付能力：≥200%=100, 150~200%=70,
        120~150%=50, 100~120%=30, <100%=0。
-    2. 其余顶点按相对位次打分：
-       - 「前三大 / 前4-10」按全行业样本排名（头部公司不与只有 3~7 家的
-         小池子比，避免优秀公司被排成 0 分）；
-       - 其他分组在同分类内排名（大型只跟大型比，中小只跟中小比）。
+    2. 排名类顶点均在所选公司所在的同业类别内打分：大型只跟大型比，
+       前三大只跟前三大比，评分池来自全量基准数据，不受展示公司筛选影响。
     3. 百分位不再硬映射到 0–100，而是映射到 [score_floor, 100]
        （默认 30）。组内最后一名仍有 30 分，避免顶点塌陷到圆心。
-    4. 若同分类内有效样本不足 2 家（无法排名），自动回退到全量池，
-       避免出现"整个分类所有公司都是同一分数"的情况。
+    4. 若同分类内有效样本不足 2 家，仍保留在该分类内，不跨类别借用样本。
 
     参数
     ----
@@ -119,7 +116,7 @@ def capability_scores(
     group_column     : 用于分组的列名，默认"同业分类"
     step_score_fallback : 阶梯打分兜底配置，默认用模块级 CAPABILITY_STEP_SCORE_FALLBACK
     score_floor      : 百分位得分下限（默认 30），仅作用于排名类顶点
-    industry_benchmark_groups : 使用全行业池的分组，默认前三大 / 前4-10
+    industry_benchmark_groups : 可选跨类别对标分组；默认为空，全部按同业类别排名
     group_score_floors : 分组×顶点级别的得分下限覆盖，例如
         {"前三大": {"PREMIUM_GROWTH": 70}}；用于把头部公司的
         保费增速映射到 70–100 分，而不是统一 30–100 分。
@@ -209,7 +206,9 @@ def capability_scores(
                 "period": target_period,
                 "steps": list(steps) if steps else None,
                 "scoring": str(ax.get("scoring", "") or "").strip().lower(),
-                "lower_is_better": bool(ax.get("lower_is_better", False)),
+                "lower_is_better": bool(
+                    ax.get("lower_is_better", code == "COMBINED_RATIO")
+                ),
                 "average_center": float(ax.get("average_center", 60.0) or 60.0),
                 "average_span": float(ax.get("average_span", 0.10) or 0.10),
             }
@@ -270,9 +269,9 @@ def capability_scores(
         lower_is_better: bool = True,
         filter_ratio: bool = False,
     ) -> float:
-        """Score a value around the industry average.
+        """Score a value around the peer-category average.
 
-        center is the industry-average score (default 60).  A company that is
+        center is the peer-category-average score (default 60).  A company that is
         10% better than the average (span=0.10) reaches 100; 10% worse reaches
         20.  For combined ratio, lower is better and invalid outliers are
         removed before the average is calculated.
@@ -304,14 +303,10 @@ def capability_scores(
         return max(0.0, min(100.0, score))
 
     def _pool_for(label: str, company_group: str) -> list[float]:
-        """选择该公司的对标池：头部群体看全行业，其余看同分类。"""
+        """Select the company's peer-category pool from the full baseline."""
         if company_group in benchmark_groups:
             return baseline_pool_all.get(label, [])
-        pool = baseline_pool_by_group.get((company_group, label), [])
-        if len(pool) < 2:
-            # 组内不足 2 家（无法排名），退回到全量池
-            pool = baseline_pool_all.get(label, [])
-        return pool
+        return baseline_pool_by_group.get((company_group, label), [])
 
     # 归一一次，后续所有筛选/排名都基于同一份数值列。
     period_frame["指标编码"] = period_frame["指标编码"].fillna("").astype(str).str.strip()
@@ -447,7 +442,7 @@ def capability_scores(
             if scoring == "average" or (
                 code == "COMBINED_RATIO" and scoring in {"", "rank"}
             ):
-                industry_pool = baseline_pool_all.get(label, [])
+                industry_pool = _pool_for(label, company_group)
                 score_row[f"{label}_得分"] = _average_score(
                     value,
                     industry_pool,
@@ -461,8 +456,7 @@ def capability_scores(
                 continue
 
             # ③ 其余顶点：按对标池相对位次打分。
-            #    保费增速同样使用该口径；头部群体（前三大 / 前4-10）自动
-            #    切到全行业池，其他分组在同分类内排名。
+            #    保费增速同样使用该口径；排名池来自全量数据中的同分类公司。
             #    位次映射到 [floor, 100]，组内末位不再被判 0 分。
             pool = _pool_for(label, company_group)
             axis_floor = floor

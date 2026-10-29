@@ -175,11 +175,10 @@ CAPABILITY_GROUP_SCORE_FLOORS: dict[str, dict[str, float]] = {
     "前三大": {"PREMIUM_GROWTH": 70.0},
 }
 
-# ★ 以"全行业"为标尺的分组。
-# 前三大 / 前4-10 是按行业地位划分的头部群体，若仍只在 3 家或 7 家内部互比，
-# 组内最后一名会被判为 0 分（例如平安产险 ROE 12.1% 却是 0 分），明显失真。
-# 这些分组改为与全部样本比较，其余分组仍做同分类组内排名。
-CAPABILITY_INDUSTRY_BENCHMARK_GROUPS: frozenset[str] = frozenset({"前三大", "前4-10"})
+# 能力五边形默认始终使用公司所在同业类别作为排名池。
+# 该常量保留为显式配置入口：若 Excel 确实需要某个分类跨类别对标，可在此
+# 或 chart_config.industry_benchmark_groups 中单独指定。
+CAPABILITY_INDUSTRY_BENCHMARK_GROUPS: frozenset[str] = frozenset()
 
 # ★ 新增：能力五边形的默认打分基准
 # 只在这些指标出现在雷达图 axes 里且 Excel 未提供 lower/upper 时兜底。

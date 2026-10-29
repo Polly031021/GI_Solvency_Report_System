@@ -94,6 +94,52 @@ def render_report_style() -> None:
         [class*="st-key-s7_report_module_"] {
             font-size:14px;
         }
+        [class*="st-key-s7_module_expander_"] [data-testid="stExpander"] {
+            border:0!important;
+            background:transparent!important;
+        }
+        [class*="st-key-s7_module_expander_"] details > summary {
+            box-sizing:border-box;
+            color:#0C233C!important;
+            font-family:Microsoft YaHei, 微软雅黑, sans-serif!important;
+            font-size:17px!important;
+            font-weight:800!important;
+            line-height:normal!important;
+            letter-spacing:.5px!important;
+            background:linear-gradient(90deg,#F1F6FF 0%,#FFFFFF 82%)!important;
+            border:1px solid #DCE6F5!important;
+            border-left:5px solid #00338D!important;
+            border-radius:9px!important;
+            padding:9px 16px!important;
+            margin:10px 0 18px!important;
+            width:fit-content!important;
+            max-width:100%!important;
+            box-shadow:0 3px 10px rgba(12,35,60,.06)!important;
+        }
+        [class*="st-key-s7_module_expander_"] details > summary p,
+        [class*="st-key-s7_module_expander_"] details > summary div,
+        [class*="st-key-s7_module_expander_"] details > summary [data-testid="stMarkdownContainer"] {
+            color:#0C233C!important;
+            font-family:Microsoft YaHei, 微软雅黑, sans-serif!important;
+            font-size:17px!important;
+            font-weight:800!important;
+            line-height:normal!important;
+            letter-spacing:.5px!important;
+            margin:0!important;
+        }
+        [class*="st-key-s7_module_expander_"] details[open] > summary {
+            margin-bottom:10px!important;
+        }
+        /* Step 7 company filters keep the complete option text visible in the
+           dropdown checklist, including long company names. */
+        [class*="st-key-s7_company_filter_checklist_"] [data-testid="stCheckbox"] label,
+        [class*="st-key-s7_company_filter_checklist_"] [data-testid="stCheckbox"] p {
+            white-space:normal!important;
+            overflow:visible!important;
+            text-overflow:clip!important;
+            overflow-wrap:anywhere;
+            line-height:1.45;
+        }
         [class*="st-key-s7_report_module_"] p,
         [class*="st-key-s7_report_module_"] label,
         [class*="st-key-s7_report_module_"] button,
@@ -404,11 +450,19 @@ def render_report_style() -> None:
         @media print {
             [data-testid="stHeader"], [data-testid="stSidebar"],
             [data-testid="stToolbar"], [data-testid="collapsedControl"],
-            [data-testid="stExpander"], div[role="tablist"], h1,
+            div[role="tablist"], h1,
             .platform-page-heading, .solvency-report-title,
             .solvency-no-print,
             [class*="st-key-capital_bubble_print_controls_"],
             [class*="st-key-risk_scatter_print_controls_"] {display:none!important;}
+            [data-testid="stExpander"] {display:none!important;}
+            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"] {
+                display:block!important;
+            }
+            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"]:not([open]),
+            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"]:has(details:not([open])) {
+                display:none!important;
+            }
             .capital_efficiency_zoom_brush,
             .capital_efficiency_zoom_brush_bg,
             [class*="capital_efficiency_zoom_"][class*="_brush"],

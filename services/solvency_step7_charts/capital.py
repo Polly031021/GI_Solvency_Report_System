@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 
 import altair as alt
 import pandas as pd
+from ..report_i18n import category_name, is_english, translate_text
 from ..solvency_navigation import KPMG_BRIGHT_CHART_COLORS, KPMG_CAPITAL_COMBO_COLORS
 
 from .primitives import (
@@ -922,6 +923,55 @@ def quant_risk_industry_sentence(
             )
         else:
             concentration_text += "，个别公司表现突出"
+    if is_english():
+        english_parts = [
+            f"In {period_text}, property insurers' minimum capital was primarily driven by "
+            f"{translate_text(dominant_short)} (average share {averages[dominant_label]:.1f}%)."
+        ]
+        if market is not None and credit is not None:
+            if abs(difference) < 0.3:
+                english_parts.append(
+                    f"Average market and credit risk shares were similar at "
+                    f"{market:.1f}% and {credit:.1f}%, respectively."
+                )
+            else:
+                higher_name = "Credit risk" if difference > 0 else "Market risk"
+                lower_name = "Market risk" if difference > 0 else "Credit risk"
+                verb = "slightly exceeded" if abs(difference) <= 5.0 else "exceeded"
+                english_parts.append(
+                    f"The average {higher_name.lower()} share of {higher_value:.1f}% {verb} "
+                    f"the average {lower_name.lower()} share of {lower_value:.1f}%."
+                )
+        concentration_bits: list[str] = []
+        if not diversification_series.empty:
+            concentration_bits.append(
+                f"the median diversification rate was {div_median:.1f}%, with most companies "
+                f"between {div_low:.1f}% and {div_high:.1f}%"
+            )
+        if not feature_series.empty:
+            concentration_bits.append(
+                f"the median feature-factor impact was {feature_median:.1f}%, with most "
+                f"companies between {feature_low:.1f}% and {feature_high:.1f}%"
+            )
+        if concentration_bits:
+            english_parts.append(
+                "Risk concentration was relatively stable: " + "; ".join(concentration_bits) + "."
+            )
+        if outlier_parts:
+            english_outliers: list[str] = []
+            if not diversification_series.empty and float(diversification_series.min()) < div_low:
+                english_outliers.append(
+                    f"{diversification_series.idxmin()} had the lowest diversification rate "
+                    f"({float(diversification_series.min()):.1f}%)"
+                )
+            if not feature_series.empty and float(feature_series.max()) > feature_high:
+                english_outliers.append(
+                    f"{feature_series.idxmax()} had the highest feature-factor impact "
+                    f"({float(feature_series.max()):.1f}%)"
+                )
+            if english_outliers:
+                english_parts.append("Notable observations: " + "; ".join(english_outliers) + ".")
+        return " ".join(english_parts)
     return sentence + comparison + concentration_text + "。"
 
 
@@ -1081,6 +1131,29 @@ def insurance_risk_industry_sentence(
         f"各类型公司的巨灾风险最低资本平均占比{catastrophe_distribution}，"
         f"{outlier_text}{highest_text}。"
     )
+    if is_english():
+        group_text_en = ", ".join(category_name(group) for group in high_groups)
+        premium_distribution_en = (
+            "a relatively dispersed distribution across companies"
+            if premium_distribution == "较分散"
+            else "a relatively concentrated distribution across companies"
+        )
+        catastrophe_distribution_en = (
+            "was relatively concentrated across company categories"
+            if catastrophe_distribution == "相对比较集中"
+            else "showed some differences across company categories"
+        )
+        outlier_en = {
+            "少数公司表现突出": "a small number of companies stood out",
+            "部分公司表现突出": "some companies stood out",
+            "公司间差异较为平稳": "differences across companies remained stable",
+        }[outlier_text]
+        return (
+            f"Premium and reserve risk capital was highest among {group_text_en}, with "
+            f"{premium_distribution_en}. Average catastrophe risk capital shares "
+            f"{catastrophe_distribution_en}; {outlier_en}. "
+            f"The highest share was {highest['公司']} at {float(highest['巨灾风险']):.1f}%."
+        )
     return first_sentence + second_sentence
 
 
