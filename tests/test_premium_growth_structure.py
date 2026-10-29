@@ -92,7 +92,28 @@ def test_missing_motor_split_uses_unallocated_segment() -> None:
 
 def test_chart_uses_independent_left_and_right_axes() -> None:
     frame = _premium_frame()
+    frame = pd.concat(
+        [
+            frame,
+            pd.DataFrame(
+                [
+                    {
+                        "公司": company,
+                        "报告期": f"{year}Q4",
+                        "指标编码": "COMBINED_SOLVENCY_RATIO",
+                        "期间口径": "本季度末数",
+                        "数值": 180.0 + year - 2021,
+                        "同业分类": "前十大",
+                    }
+                    for company in ("甲公司", "乙公司")
+                    for year in range(2021, 2026)
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
     panels = [prepare_premium_growth_panel(frame, company) for company in ("甲公司", "乙公司")]
+    assert not panels[0].solvency_frame.empty
     chart = build_premium_growth_structure_chart(
         panels[0],
         growth_domain=premium_growth_axis_domain(panels),
@@ -104,7 +125,8 @@ def test_chart_uses_independent_left_and_right_axes() -> None:
     assert "'orient': 'right'" in spec_text
     assert "总保费同比增速" in spec_text
     assert "'title': '年份'" in spec_text
-    assert "'width': 280" in spec_text
+    assert "'width': 310" in spec_text
+    assert "综合偿付能力充足率" not in spec_text
 
 
 def test_groups_follow_company_category_order() -> None:

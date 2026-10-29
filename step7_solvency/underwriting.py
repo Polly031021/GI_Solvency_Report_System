@@ -867,8 +867,9 @@ def render_underwriting_efficiency_scatter(
 
     counts = annual_underwriting_counts(annual, breakeven=breakeven)
     years = sorted(annual["年度"].dropna().astype(int).unique().tolist())
+    display_years = sorted(years, reverse=True)
     count_chart = build_underwriting_count_chart(counts, years=years)
-    latest_year_for_sample = int(years[-1]) if years else None
+    latest_year_for_sample = max(years) if years else None
     exclusions = (
         underwriting_exclusions(data, latest_year_for_sample, annual)
         if latest_year_for_sample is not None
@@ -876,7 +877,7 @@ def render_underwriting_efficiency_scatter(
     )
 
     if years:
-        latest_year = int(years[-1])
+        latest_year = max(years)
         latest_rows = annual[annual["年度"].eq(latest_year)].copy()
         latest_rows["综合成本率"] = pd.to_numeric(
             latest_rows["综合成本率"], errors="coerce"
@@ -1009,7 +1010,7 @@ def render_underwriting_efficiency_scatter(
                 )
             )
 
-    year_label = f"{years[0]}–{years[-1]}" if years else "—"
+    year_label = f"{min(years)}–{max(years)}" if years else "—"
     st.caption(
         t(
             f"展示 {year_label} 共 {len(years)} 个年度 ｜ "
@@ -1060,7 +1061,10 @@ def render_underwriting_efficiency_scatter(
             )
         )
 
-    year_slots: list[int | None] = [*years, *([None] * max(0, 5 - len(years)))]
+    year_slots: list[int | None] = [
+        *display_years,
+        *([None] * max(0, 5 - len(display_years))),
+    ]
     cells: list[tuple[str, int | None]] = [
         *(("year", year) for year in year_slots),
         ("counts", None),

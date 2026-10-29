@@ -22,7 +22,7 @@ from services.solvency_report_notes import (
     overlay_notes,
     read_notes_workbook,
 )
-from services.report_i18n import is_english, t, translate_dataframe
+from services.report_i18n import is_english, t, translate_dataframe, translate_text
 from services.solvency_step6_analysis import sort_report_periods
 
 
@@ -225,6 +225,9 @@ def render_report_analysis(note: dict[str, str] | None) -> None:
     note = note or {}
     default_text = str(note.get("分析内容-默认", "") or "").strip()
     custom_text = str(note.get("分析内容-自定义", "") or "").strip()
+    if is_english():
+        default_text = translate_text(default_text)
+        custom_text = translate_text(custom_text)
     if not default_text and not custom_text:
         return
     paragraphs = []
@@ -250,6 +253,7 @@ def render_report_footnote(
     text = str((note or {}).get("注释内容", "") or "").strip()
     if text:
         prefix = t("注：", "Note: ", language)
+        text = translate_text(text, language)
         st.markdown(
             f'<p class="solvency-report-footnote">{prefix}{html.escape(text)}</p>',
             unsafe_allow_html=True,

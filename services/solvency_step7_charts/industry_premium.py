@@ -10,6 +10,7 @@ import altair as alt
 import pandas as pd
 
 from ..report_style import COBALT_BLUE, PACIFIC_BLUE, PINK, PRIMARY_BLUE, PURPLE
+from ..report_i18n import t
 from .primitives import apply_industry_chart_theme
 
 
@@ -645,9 +646,11 @@ def _year_axis(years: list[str]) -> alt.X:
     return alt.X(
         "年度:O",
         sort=years,
-        title=None,
+        title=t("年份", "Year"),
         scale=alt.Scale(paddingInner=0.12, paddingOuter=0.30),
         axis=alt.Axis(
+            values=years,
+            labels=True,
             labelAngle=0,
             labelFontSize=11,
             labelPadding=9,
@@ -789,7 +792,7 @@ def build_industry_premium_total_chart(
             color=PRIMARY_BLUE,
         )
         .encode(
-            x=alt.X("年度:O", sort=years, axis=None),
+            x=_year_axis(years),
             y=alt.Y("合计:Q", scale=y_scale, axis=None),
             text=alt.Text("合计:Q", format=value_format),
         )
@@ -811,7 +814,7 @@ def build_industry_premium_total_chart(
                 ),
             )
             .encode(
-                x=alt.X("年度:O", sort=years, axis=None),
+                x=_year_axis(years),
                 y=alt.Y(
                     "增长率:Q",
                     title="同比增速",
@@ -921,7 +924,7 @@ def build_industry_premium_mix_chart(
         alt.Chart(label_frame)
         .mark_text(fontSize=9, fontWeight="bold")
         .encode(
-            x=alt.X("年度:O", sort=years, axis=None),
+            x=_year_axis(years),
             y=alt.Y("标签位置:Q", scale=share_scale, axis=None),
             text=alt.Text("占比:Q", format=".0%"),
             color=alt.Color(
@@ -950,7 +953,7 @@ def build_industry_premium_mix_chart(
                 ),
             )
             .encode(
-                x=alt.X("年度:O", sort=years, axis=None),
+                x=_year_axis(years),
                 y=alt.Y(
                     "增长率:Q",
                     title="同比增速",

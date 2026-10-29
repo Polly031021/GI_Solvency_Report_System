@@ -420,6 +420,12 @@ DISCLOSURE_NAMES_EN: dict[str, str] = {
     "损失吸收效应": "Loss absorption effect",
     "保险风险（寿）": "Insurance risk (life)",
     "保险风险（非寿）": "Insurance risk (non-life)",
+    "非寿险业务保险风险": "Non-life insurance risk",
+    "保费及准备金风险": "Premium and reserve risk",
+    "巨灾风险": "Catastrophe risk",
+    "风险分散": "Diversification",
+    "赔付率": "Loss ratio",
+    "费用率": "Expense ratio",
     "保险风险": "Insurance risk",
     "市场风险": "Market risk",
     "信用风险": "Credit risk",
@@ -488,6 +494,27 @@ FIELD_NAMES_EN: dict[str, str] = {
     "签单保费排名": "Signed premium rank",
     "盈亏平衡": "Break-even",
     "保费单位": "Premium unit",
+    "状态": "Status",
+    "原始公司名称": "Original company name",
+    "标准公司名称": "Standard company name",
+    "公司统一编码": "Company identifier",
+    "报告类型": "Report type",
+    "报告年度": "Reporting year",
+    "报告季度": "Reporting quarter",
+    "披露日期": "Disclosure date",
+    "一级模块": "Level-one module",
+    "二级模块": "Level-two module",
+    "行次": "Line number",
+    "是否预测": "Forecast",
+    "来源页码": "Source page",
+    "原始披露值": "Original disclosed value",
+    "备注": "Notes",
+    "来源类型": "Source type",
+    "指标属性": "Metric attribute",
+    "来源文件": "Source file",
+    "来源工作表": "Source worksheet",
+    "导入批次": "Import batch",
+    "计算逻辑": "Calculation logic",
 }
 FIELD_NAMES_EN["类型"] = "Type"
 
@@ -502,12 +529,39 @@ DEFAULT_ANALYSIS_EN: dict[str, str] = {
     "各公司实际资本/认可资产率年度走势，每家公司一个折线小图": "Annual actual capital / recognised assets ratio for each company, shown as one small line chart per company",
     "各公司最低资本年度变动走势，每家公司一个折线小图": "Annual minimum capital trend for each company, shown as one small line chart per company",
     "每家公司近五年车险/非车险结构占比与总保费同比增速": "Five-year motor/non-motor mix and total premium growth for each company",
+    "多公司实际资本/认可资产率跨期趋势对比。": "Actual capital / recognised assets ratio trend comparison across companies.",
+    "100%堆叠柱展示核心一级、核心二级、附属一级和附属二级资本构成。": "100% stacked bars show the composition of core tier 1, core tier 2, ancillary tier 1 and ancillary tier 2 capital.",
+    "非寿险业务保险风险构成：巨灾风险、准备金风险、保费风险和风险分散。": "Non-life insurance risk composition: catastrophe risk, reserve risk, premium risk and diversification.",
+    "多公司保险风险/认可负债率跨期趋势对比。": "Insurance risk / recognised liabilities ratio trend comparison across companies.",
+    "每家公司近五年赔付率、费用率堆叠及综合成本率变化。": "Five-year loss ratio, expense ratio stack and combined ratio for each company.",
+    "各公司近五年投资收益率年度变动情况。": "Annual investment return movements for each company over the past five years.",
 }
 
 
 # 长句或高频短语，按长度从长到短替换，避免先替换短词破坏长句。
 PHRASE_EN: dict[str, str] = {
     "公司级偿付能力对标报告": "Company Solvency Benchmarking Report",
+    "当前没有公司数据。": "No company data.",
+    "当前没有同时具备赔付率和费用率的年度数据。": "No annual data with both loss ratio and expense ratio is available.",
+    "核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本。": "Core capital is capital that can absorb losses both on a going-concern basis and in liquidation.",
+    "附属资本是指在破产清算状态下可以吸收损失的资本。": "Ancillary capital is capital that can absorb losses in liquidation.",
+    "小型、外资系、农业保险和自保公司的核心资本占比较为相似，处于80%至100%区间；资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。": "Small companies, foreign-invested insurers, agricultural insurers and captive insurers have broadly similar core capital shares, within the 80%–100% range. These companies use instruments such as capital supplementary bonds to support solvency and sustainable business development.",
+    "部分集团子公司、大型公司及中型公司的附属资本占比较高，通常是在保司偿付能力充足率持续承压的情况下，通过发行次级定期债务、资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。": "Some group subsidiaries, large companies and medium-sized companies have relatively high ancillary capital shares. When solvency ratios are under pressure, they commonly issue subordinated term debt or capital supplementary bonds to support solvency and sustainable business development.",
+    "每家公司平铺展示最近 ": "Each company displays the latest ",
+    " 个年度：下方为赔付率，上方为费用率，柱高合计为综合成本率；红色虚线为 100% 盈亏平衡线。柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。": " years side by side. Loss ratio is below and expense ratio above; their combined height is the combined ratio. The red dashed line marks 100% break-even. Values above the bars show the combined ratio, with * indicating a calculated loss-plus-expense ratio.",
+    "赔付率": "Loss ratio",
+    "费用率": "Expense ratio",
+    "100% 盈亏平衡线": "100% break-even line",
+    "非寿险业务": "Non-life insurance",
+    "保费及准备金风险": "Premium and reserve risk",
+    "准备金风险": "Reserve risk",
+    "巨灾风险": "Catastrophe risk",
+    "风险分散": "Diversification",
+    "风险分散率": "Diversification rate",
+    "特征系数影响": "Feature-factor impact",
+    "市场竞争": "Market competition",
+    "财险公司列表": "the property insurance company list",
+    "配置": "configuration",
     "保险公司偿付能力公司对标报告": "Insurance Company Solvency Benchmarking Report",
     "公司级图表设置与图片覆盖": "Company chart settings and image overrides",
     "公司内容分析与注释输入": "Company analysis and note inputs",
@@ -551,6 +605,15 @@ PHRASE_EN: dict[str, str] = {
     "图表说明：柱状图为综合偿付能力充足率；粉色折线为核心偿付能力充足率。各公司统一使用同一百分比纵轴范围，柱形颜色对应不同报告期。": "Chart note: bars show the combined solvency ratio and the pink line shows the core solvency ratio. All companies share the same percentage axis; bar colours identify reporting periods.",
     "核心偿付能力充足率（%）": "Core solvency ratio (%)",
     "综合偿付能力充足率（%）": "Combined solvency ratio (%)",
+    "核心资本充足率": "Core capital adequacy ratio",
+    "综合资本充足率": "Combined capital adequacy ratio",
+    "保单未来盈余/核心资本比例": "Policy future surplus / core capital",
+    "未来保单盈余": "Future policy surplus",
+    "认可负债余额": "Recognised liabilities",
+    "市场风险占比": "Market risk share",
+    "保险风险占比": "Insurance risk share",
+    "上年同期": "Prior-year period",
+    "本期": "Current period",
     "堆叠柱组合图": "Stacked bar combination",
     "并列柱组合图": "Grouped bar combination",
     "新增视图：每个报告期的两项资本各自成柱，上方仍保留对应充足率折线。": "New view: the two capital items are shown as separate bars for each reporting period, with the corresponding solvency ratio line above.",
@@ -658,6 +721,23 @@ PHRASE_EN: dict[str, str] = {
     "全样本图": "Full sample",
     "局部样本放大": "Zoomed sample",
     "总保费同比增速": "Total premium growth",
+    "所选公司平均投资收益率": "Selected-company average return",
+    "所选公司平均投资收益率（%）": "Selected-company average return (%)",
+    "所选公司平均": "Selected-company average",
+    "展开此模块": "Show module",
+    "偿付能力充足率指标": "Solvency ratio metrics",
+    "主要经营指标（财险）": "Key operating metrics (P&C)",
+    "S02-实际资本明细表": "S02 – Actual capital detail",
+    "近三年（综合）投资收益率": "Three-year (combined) investment return",
+    "S05-最低资本表": "S05 – Minimum capital",
+    "流动性风险监测指标": "Liquidity risk monitoring metrics",
+    "纳入综合口径": "Included in combined basis",
+    "纳入核心口径": "Included in core basis",
+    "Yes数据": "Yes",
+    "_得分": " score",
+    "财险": "Property & casualty",
+    "资本充足率": "Capital adequacy ratio",
+    "资本": "Capital",
     "具体图表（全部展示）": "Charts (show all)",
     "前十大展示口径": "Top 10 grouping",
     "实际资本/注册资本": "Actual capital / registered capital",
@@ -719,7 +799,6 @@ PHRASE_EN: dict[str, str] = {
     "签单保费": "Signed premium",
     "净利润率": "Net profit margin",
     "注册资本": "Registered capital",
-    "公司": "Company",
     "报告期": "Reporting period",
     "年度": "Year",
     "数值": "Value",
@@ -900,6 +979,7 @@ COLUMN_NAMES_EN: dict[str, str] = {
     "完整": "Complete",
     "公司数（家）": "Company count",
 }
+COLUMN_NAMES_EN.update(FIELD_NAMES_EN)
 
 
 def translate_dataframe(
@@ -922,6 +1002,10 @@ def translate_dataframe(
             if base in COLUMN_NAMES_EN:
                 suffix = text[len(base):]
                 rename[column] = f"{COLUMN_NAMES_EN[base]}{suffix}"
+        if column not in rename:
+            translated_column = translate_text(text, language)
+            if translated_column != text:
+                rename[column] = translated_column
     result = result.rename(columns=rename)
     if translate_values and is_english(language):
         # Translate units inside parenthetical column suffixes, e.g. 车险（亿元）.
@@ -938,7 +1022,11 @@ def translate_dataframe(
         )
     if translate_values:
         for column in result.columns:
-            if result[column].dtype == object:
+            if pd.api.types.is_string_dtype(
+                result[column].dtype
+            ) or pd.api.types.is_object_dtype(result[column].dtype):
+                if str(column) in {"Company", "公司", "公司名称"}:
+                    continue
                 result[column] = result[column].map(
                     lambda value: (
                         translate_text(value, language)

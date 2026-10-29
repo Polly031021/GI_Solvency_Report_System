@@ -6,7 +6,7 @@ import html
 
 import streamlit as st
 
-from services.report_i18n import t
+from services.report_i18n import is_english, t, translate_text
 
 
 def render_insight_card(
@@ -27,6 +27,14 @@ def render_insight_card(
     delta and interpretation bullets stay on one visual surface in both the
     screen report and the browser print output.
     """
+    if is_english():
+        title = translate_text(title)
+        headline = translate_text(headline)
+        value = translate_text(value)
+        delta = translate_text(delta)
+        bullets = [translate_text(str(item)) for item in bullets]
+        footnote = translate_text(footnote)
+        eyebrow = translate_text(eyebrow)
     eyebrow = eyebrow or t("模块解读", "Module insight")
     tone = delta_tone if delta_tone in {"up", "down", "neutral"} else "neutral"
     bullet_html = "".join(

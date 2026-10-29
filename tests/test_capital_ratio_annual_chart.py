@@ -240,9 +240,12 @@ def test_investment_return_uses_horizontal_year_labels() -> None:
         "INVESTMENT_RETURN",
         [f"{year}Q4" for year in range(2021, 2026)],
         {"甲公司": "#00338D"},
+        show_average=True,
     )
     spec_text = json.dumps(chart.to_dict(), ensure_ascii=False)
     assert '"labelAngle": 0' in spec_text
+    assert "所选公司平均" in spec_text
+    assert "#94A3B8" in spec_text
 
 
 def test_investment_return_marks_period_extremes() -> None:
@@ -290,6 +293,35 @@ def test_template_configures_five_year_investment_return_trend() -> None:
     assert module.chart_kind == "single_metric_trend"
     assert module.metric_codes == ("INVESTMENT_RETURN",)
     assert module.chart_config == {"years": 5, "annual_labels": True}
+
+
+def test_investment_return_page_renders_average_legend() -> None:
+    from streamlit.testing.v1 import AppTest
+
+    from test_workflow_smoke import synthetic_integrated_data
+
+    data = synthetic_integrated_data()
+    modules = load_step7_config(
+        ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    )
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=900)
+    at.session_state["logged_in"] = True
+    at.session_state["user_role"] = "项目组成员"
+    at.session_state["active_profile_id"] = "NON_LIFE_SOLVENCY"
+    at.session_state["integrated_data"] = data
+    at.session_state["standard_data"] = data
+    at.session_state["step7_modules"] = modules
+    at.session_state["workflow_main_tab"] = "STEP7 公司报告"
+    at.session_state["company_nav_level_one"] = "经营与偿付能力联动分析"
+    at.session_state["company_nav_level_two"] = "投资利润"
+    at.session_state["s7_company_types"] = ["全部"]
+    at.session_state["s7_unit_mode"] = "亿元"
+    at.run()
+
+    assert not at.exception, [error.value for error in at.exception]
+    page_text = "\n".join(item.value for item in at.markdown)
+    assert "所选公司平均投资收益率" in page_text
+    assert at.get("vega_lite_chart")
 
 
 def test_industry_capital_structure_ratios_use_latest_period_totals() -> None:
@@ -385,6 +417,7 @@ if __name__ == "__main__":
     test_investment_return_uses_horizontal_year_labels()
     test_investment_return_marks_period_extremes()
     test_template_configures_five_year_investment_return_trend()
+    test_investment_return_page_renders_average_legend()
     test_industry_capital_structure_ratios_use_latest_period_totals()
     test_insurance_risk_pressure_sentence_is_group_driven()
     print("全部通过")

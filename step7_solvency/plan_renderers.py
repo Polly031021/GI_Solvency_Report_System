@@ -262,13 +262,12 @@ def render_plan_premium_growth_structure(
         t(
             f"公司按“{group_column}”分组，每家公司平铺展示最近 {years} 个年度："
             "左轴为车险/非车险的 100% 结构占比，"
-            "右轴折线为总保费同比增速，次右轴粉色虚线为综合偿付能力充足率；"
+            "右轴折线为总保费同比增速；"
             "非车险按“总签单保费 - 车险”计算。"
             "柱内标注结构占比，折线在每个年度均标注同比增速。",
             f"Companies grouped by “{category_name(group_column)}”; each company shows the latest "
             f"{years} years side by side. The left axis is the 100% motor/non-motor mix; the "
-            "right-axis line is total premium growth and the pink dashed line on the far-right axis "
-            "is the combined solvency ratio. Non-motor premium is total signed premium less motor. "
+            "right-axis line is total premium growth. Non-motor premium is total signed premium less motor. "
             "Mix labels appear inside the bars, and the growth line is labelled for every year.",
         )
     )
@@ -276,11 +275,6 @@ def render_plan_premium_growth_structure(
         ("#00338D", t("车险", "Motor"), "square"),
         ("#00B8F5", t("非车险", "Non-motor"), "square"),
         ("#E36C0A", t("总保费同比增速", "Total premium growth"), "line"),
-        (
-            "#FD349C",
-            t("综合偿付能力充足率（右轴）", "Combined solvency ratio (right axis)"),
-            "line",
-        ),
     ]
     if any(panel.bar_frame["类别"].astype(str).eq("未拆分").any() for panel in panels):
         legend_items.append(("#D9E2EC", t("未拆分", "Unallocated"), "square"))
@@ -342,7 +336,7 @@ def render_plan_loss_expense_combo(
     """Render three-year loss/expense stacks for every selected company."""
     companies = ordered_companies(frame)
     if not companies:
-        st.warning("当前没有公司数据。")
+        st.warning(t("当前没有公司数据。", "No company data."))
         return
     cfg = module_override.chart_config if module_override else {}
     try:
@@ -362,21 +356,32 @@ def render_plan_loss_expense_combo(
     ]
     panels = [panel for panel in panels if not panel.bar_frame.empty]
     if not panels:
-        st.warning("当前没有同时具备赔付率和费用率的年度数据。")
+        st.warning(
+            t(
+                "当前没有同时具备赔付率和费用率的年度数据。",
+                "No annual data with both loss ratio and expense ratio is available.",
+            )
+        )
         return
 
     y_domain = loss_expense_axis_domain(panels)
     render_chart_summary(loss_expense_summary(panels, frame=frame))
     st.caption(
-        f"每家公司平铺展示最近 {years} 个年度：下方为赔付率，上方为费用率，"
-        "柱高合计为综合成本率；红色虚线为 100% 盈亏平衡线。"
-        "柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。"
+        t(
+            f"每家公司平铺展示最近 {years} 个年度：下方为赔付率，上方为费用率，"
+            "柱高合计为综合成本率；红色虚线为 100% 盈亏平衡线。"
+            "柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。",
+            f"Each company displays the latest {years} years side by side. Loss ratio is below "
+            "and expense ratio above; their combined height is the combined ratio. The red "
+            "dashed line marks 100% break-even. Values above the bars show the combined ratio, "
+            "with * indicating a calculated loss-plus-expense ratio.",
+        )
     )
     render_chart_legend(
         [
-            (LOSS_COLOR, "赔付率", "square"),
-            (EXPENSE_COLOR, "费用率", "square"),
-            (BREAKEVEN_COLOR, "100% 盈亏平衡线", "dash"),
+            (LOSS_COLOR, t("赔付率", "Loss ratio"), "square"),
+            (EXPENSE_COLOR, t("费用率", "Expense ratio"), "square"),
+            (BREAKEVEN_COLOR, t("100% 盈亏平衡线", "100% break-even line"), "dash"),
         ]
     )
 
@@ -387,7 +392,8 @@ def render_plan_loss_expense_combo(
         st.markdown(
             f"<div style='margin:18px 0 8px;font-size:14px;font-weight:700;"
             f"color:#00338D;border-left:4px solid #00338D;padding-left:8px;'>"
-            f"{escape(group_name)}（{len(group_panels)} 家）</div>",
+            f"{escape(category_name(group_name))}"
+            f"{t('（', ' (')}{len(group_panels)}{t(' 家）', ' companies)')}</div>",
             unsafe_allow_html=True,
         )
         for index in range(0, len(group_panels), columns_per_row):
@@ -409,7 +415,12 @@ def render_plan_loss_expense_combo(
                             ),
                         )
                     except Exception as exc:
-                        st.error(f"❌ {panel.company} 赔付率/费用率图渲染失败：{exc}")
+                        st.error(
+                            t(
+                                f"❌ {panel.company} 赔付率/费用率图渲染失败：{exc}",
+                                f"❌ {panel.company} loss/expense chart failed: {exc}",
+                            )
+                        )
 
 
 def render_plan_performance_pattern_grid(
@@ -1107,20 +1118,39 @@ def render_plan_capital_structure_combo(
         f"{ancillary_ratio:.1f}%" if ancillary_ratio is not None else "—"
     )
     core_definition = (
-        "核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本。"
+        t(
+            "核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本。",
+            "Core capital is capital that can absorb losses both on a going-concern basis "
+            "and in liquidation.",
+        )
     )
     ancillary_definition = (
-        "附属资本是指在破产清算状态下可以吸收损失的资本。"
+        t(
+            "附属资本是指在破产清算状态下可以吸收损失的资本。",
+            "Ancillary capital is capital that can absorb losses in liquidation.",
+        )
     )
     structure_observation = (
-        "小型、外资系、农业保险和自保公司的核心资本占比较为相似，"
-        "处于80%至100%区间；资本补充债券等进行资本补充，"
-        "以支持偿付能力提升和业务持续健康发展。"
+        t(
+            "小型、外资系、农业保险和自保公司的核心资本占比较为相似，"
+            "处于80%至100%区间；资本补充债券等进行资本补充，"
+            "以支持偿付能力提升和业务持续健康发展。",
+            "Small companies, foreign-invested insurers, agricultural insurers and captive "
+            "insurers have broadly similar core capital shares, within the 80%–100% range. "
+            "These companies use instruments such as capital supplementary bonds to support "
+            "solvency and sustainable business development.",
+        )
     )
     supplement_observation = (
-        "部分集团子公司、大型公司及中型公司的附属资本占比较高，"
-        "通常是在保司偿付能力充足率持续承压的情况下，通过发行次级定期债务、"
-        "资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。"
+        t(
+            "部分集团子公司、大型公司及中型公司的附属资本占比较高，"
+            "通常是在保司偿付能力充足率持续承压的情况下，通过发行次级定期债务、"
+            "资本补充债券等进行资本补充，以支持偿付能力提升和业务持续健康发展。",
+            "Some group subsidiaries, large companies and medium-sized companies have relatively "
+            "high ancillary capital shares. When solvency ratios are under pressure, they commonly "
+            "issue subordinated term debt or capital supplementary bonds to support solvency and "
+            "sustainable business development.",
+        )
     )
     st.markdown(
         '<div class="s7-capital-insight">'
@@ -1251,7 +1281,8 @@ def render_plan_component_stack(
         if summary_sentence:
             st.markdown(
                 '<div class="solvency-report-analysis">'
-                f'<p class="solvency-note-default">{escape(summary_sentence)}</p>'
+                f'<p class="solvency-note-default">'
+                f'{escape(translate_text(summary_sentence))}</p>'
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -1281,7 +1312,14 @@ def render_plan_component_stack(
             top_groups = [
                 str(group) for group in risk_metrics.get("top_groups", [])
             ]
-            top_groups_text = "、".join(top_groups) if top_groups else t("暂无明显集中", "no clear concentration")
+            top_groups_text = (
+                t(
+                    "、".join(top_groups),
+                    ", ".join(category_name(group) for group in top_groups),
+                )
+                if top_groups
+                else t("暂无明显集中", "no clear concentration")
+            )
             risk_bullets = [
                 t(
                     f"保费及准备金风险平均占 {premium_mean:.1f}%，"
@@ -1313,7 +1351,7 @@ def render_plan_component_stack(
                 )
             )
             if summary_sentence:
-                risk_bullets.append(summary_sentence)
+                risk_bullets.append(translate_text(summary_sentence))
             render_insight_card(
                 title=t("保险风险构成", "Insurance risk composition"),
                 eyebrow=t("最低资本变动", "Minimum capital change"),
@@ -1338,7 +1376,8 @@ def render_plan_component_stack(
         elif summary_sentence:
             st.markdown(
                 '<div class="solvency-report-analysis">'
-                f'<p class="solvency-note-default">{escape(summary_sentence)}</p>'
+                f'<p class="solvency-note-default">'
+                f'{escape(translate_text(summary_sentence))}</p>'
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -1362,8 +1401,13 @@ def render_plan_component_stack(
         )
     elif chart_name == "保险风险构成":
         st.caption(
-            "柱高按各构成项目/非寿险业务保险风险最低资本的比例展示，实际金额仅保留在悬浮信息中；"
-            "负向风险分散位于零线下方。"
+            t(
+                "柱高按各构成项目/非寿险业务保险风险最低资本的比例展示，实际金额仅保留在悬浮信息中；"
+                "负向风险分散位于零线下方。",
+                "Bar heights show each component as a share of non-life insurance risk minimum "
+                "capital; amounts are available on hover. The negative diversification effect "
+                "sits below the zero line.",
+            )
         )
     elif chart_name == "各类市场风险占比":
         st.caption(
@@ -1700,9 +1744,8 @@ def _split_top10_peer_group(frame: pd.DataFrame) -> pd.DataFrame:
     - 其余原“前十大”公司 → “前4-10”
     - 其他分类原样保留。
 
-    作用于 DataFrame 的“同业分类”列；capability_scores 会按该列分组建立打分池。
-    前三大 / 前4-10 在打分时改用全行业池（见 CAPABILITY_INDUSTRY_BENCHMARK_GROUPS），
-    避免只有 3 家或 7 家的组内互比把优秀公司排成 0 分。
+    作用于 DataFrame 的“同业分类”列；capability_scores 会按该列从全量
+    基准数据建立同类别打分池。
     """
     if "同业分类" not in frame.columns or frame.empty:
         return frame
@@ -1717,7 +1760,13 @@ def _split_top10_peer_group(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_plan_capability_radar(
-    chart_frame, highlight_company, key_prefix, module_override, periods
+    chart_frame,
+    highlight_company,
+    key_prefix,
+    module_override,
+    periods,
+    *,
+    industry_frame=None,
 ):
     cfg = module_override.chart_config if module_override else {}
     axes_config = _normalize_capability_axes(
@@ -1733,10 +1782,10 @@ def render_plan_capability_radar(
     #   前三大 = 人保、平安、太保三家财险公司（实际数据名为人保产险/平安产险/太保产险，
     #   故按公司名前缀匹配）；其余前十大公司归入“前4-10”。
     #   拆分作用于 chart_frame 的“同业分类”列，使 capability_scores 的分组打分池
-    #   与下方展示分组口径一致；两个头部群体在打分时对全行业样本排名。
+    #   与下方展示分组口径一致。
     chart_frame = _split_top10_peer_group(chart_frame)
 
-    # 打分下限与"全行业对标分组"可由 Excel 图表配置覆盖，默认见 specs.py。
+    # 打分下限与可选跨类别对标分组可由 Excel 图表配置覆盖，默认见 specs.py。
     try:
         score_floor = float(cfg.get("score_floor", CAPABILITY_PERCENTILE_FLOOR))
     except (TypeError, ValueError):
@@ -1766,8 +1815,14 @@ def render_plan_capability_radar(
         group_score_floors = CAPABILITY_GROUP_SCORE_FLOORS
 
     latest_period_for_anchor = str(periods[-1]) if periods else ""
-    baseline_full = chart_frame[
-        chart_frame["报告期"].astype(str).eq(latest_period_for_anchor)
+    baseline_source = (
+        industry_frame
+        if isinstance(industry_frame, pd.DataFrame) and not industry_frame.empty
+        else chart_frame
+    )
+    baseline_source = _split_top10_peer_group(baseline_source)
+    baseline_full = baseline_source[
+        baseline_source["报告期"].astype(str).eq(latest_period_for_anchor)
     ].copy()
 
     score_all, raw_all, latest_period = capability_scores(
@@ -1936,10 +1991,10 @@ def render_plan_capability_radar(
         )
     bullets.append(
         t(
-            "承保风控能力按综合成本率相对行业平均值打分：行业平均=60 分，"
+            "承保风控能力按同类别综合成本率平均值打分：同类别平均=60 分，"
             "综合成本率越低得分越高。",
-            "Underwriting risk control is scored against the industry average "
-            "combined ratio (industry average = 60; lower is better).",
+            "Underwriting risk control is scored against the peer-category average "
+            "combined ratio (peer-category average = 60; lower is better).",
         )
     )
 
@@ -1955,9 +2010,9 @@ def render_plan_capability_radar(
                 bullets.append(
                     t(
                         f"追踪公司 {tracked_company}：五维均分 {tracked_avg:.0f}，"
-                        f"全样本第 {tracked_rank}/{sample_n}",
+                        f"展示公司中第 {tracked_rank}/{sample_n}",
                         f"Tracked {tracked_company}: five-axis average {tracked_avg:.0f}, "
-                        f"rank {tracked_rank}/{sample_n}",
+                        f"rank {tracked_rank}/{sample_n} among displayed companies",
                     )
                 )
 
@@ -1978,15 +2033,16 @@ def render_plan_capability_radar(
         bullets=bullets,
         footnote=t(
             "五个顶点依次对应资本实力、偿付能力、盈利能力、承保风控能力和业务拓展；"
-            "资本实力、盈利能力、业务拓展按行业相对位次打分，"
-            "承保风控能力按综合成本率相对行业平均值打分（行业平均=60 分，越低越优），"
+            "资本实力、盈利能力、业务拓展按公司所在同业类别内的全量样本相对位次打分，"
+            "承保风控能力按同类别综合成本率平均值打分（同类别平均=60 分，越低越优），"
             "偿付能力按绝对档位打分。"
             f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展单独映射到 70–100 分。"
             "灰色虚线为本组各顶点中位数。",
             "The five vertices are capital strength, solvency, profitability, underwriting "
             "risk control and business expansion. Capital strength, profitability and business "
-            "expansion are rank-scored against the industry; underwriting risk control is scored "
-            "against the industry-average combined ratio (average = 60; lower is better); solvency "
+            "expansion are rank-scored against the company's full peer category; underwriting "
+            "risk control is scored against the peer-category-average combined ratio "
+            "(average = 60; lower is better); solvency "
             f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
             "expansion axis uses 70–100. The grey dashed pentagon is the group median for each axis.",
         ),
@@ -1998,17 +2054,21 @@ def render_plan_capability_radar(
             f"展示 {latest_period}；每家公司单独一张能力五边形，"
             "按“同业分类”分组排列。"
             "五个顶点依次为：" + "、".join(axes_labels) + "。"
-            "资本实力、盈利能力、业务拓展按行业相对位次；"
-            "承保风控能力按综合成本率相对行业平均（60 分）打分；"
+            "资本实力、盈利能力、业务拓展按公司所在同业类别的全量样本相对位次；"
+            "承保风控能力按综合成本率相对同类别平均（60 分）打分；"
             "偿付能力按绝对档位打分。"
             f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展按 70–100 分映射。"
+            "评分池包含全量数据中的同类别公司，不受展示公司筛选影响；"
             "灰色虚线为本组各顶点中位数。",
             f"Showing {latest_period}; one capability pentagon per company, grouped by peer group. "
             f"Vertices: {', '.join(axes_labels)}. "
-            "Capital strength, profitability and business expansion are rank-scored; underwriting "
-            "risk control is scored against the industry-average combined ratio (60); solvency "
+            "Capital strength, profitability and business expansion are rank-scored against the "
+            "company's full peer category; underwriting risk control is scored against the "
+            "peer-category-average combined ratio (60); solvency "
             f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
-            "expansion axis uses a 70–100 scale. The grey dashed pentagon is the group median for each axis.",
+            "expansion axis uses a 70–100 scale. Scoring peers include every company in the same "
+            "category from the full dataset, regardless of the display-company filter. The grey "
+            "dashed pentagon is the group median for each axis.",
         )
     )
 
@@ -2684,7 +2744,7 @@ def render_plan_industry_market_share(
         t(
             "公司分类来自根目录《财险公司列表.xlsx》；"
             "前三大按公司名前缀匹配人保、平安、太保，其余原前十大公司归入前4-10。",
-            "Company categories come from 财险公司列表.xlsx. Top 3 is matched by company-name prefix "
+            "Company categories come from the property insurance company list. Top 3 is matched by company-name prefix "
             "to PICC, Ping An and CPIC; the remaining original Top 10 companies form Top 4–10.",
         )
     )

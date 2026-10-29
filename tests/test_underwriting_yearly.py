@@ -2,7 +2,6 @@
 """承保效益五年年度图的纯数据与图表规格测试。"""
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -13,11 +12,8 @@ sys.path.insert(0, str(ROOT))
 
 
 def _load_underwriting():
-    path = ROOT / "step7_solvency" / "underwriting.py"
-    spec = importlib.util.spec_from_file_location("underwriting_for_test", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    from step7_solvency import underwriting as module
+
     return module
 
 
@@ -214,6 +210,11 @@ def test_step7_underwriting_page_five_year_layout() -> None:
         assert f"{year} 年" in markdown_text, f"missing year card {year}"
     assert "盈利" in markdown_text and "亏损" in markdown_text
     assert "盈利 / 亏损公司数趋势" in markdown_text
+    year_card_positions = [
+        markdown_text.index(f"<div class='s7-uw-year-title'>{year} 年</div>")
+        for year in range(2021, 2026)
+    ]
+    assert year_card_positions == sorted(year_card_positions, reverse=True)
     charts = at.get("vega_lite_chart")
     assert len(charts) >= 6, f"expected 6 charts, got {len(charts)}"
 

@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 import altair as alt
 import pandas as pd
 
+from ..report_i18n import category_name, is_english
 from .primitives import (
     COMPACT_TREND_SCALE_CODES,
     REGULATORY_LIMITS,
@@ -25,6 +26,8 @@ from .primitives import (
     convert_multiple_units_to_percent,
     report_period_color_map,
 )
+
+AVERAGE_LINE_COLOR = "#94A3B8"
 
 
 def trend_y_domain(metric: pd.DataFrame, code: str) -> list[float]:
@@ -51,6 +54,7 @@ def build_metric_trend_group(
     y_domain: list[float],
     group_index: int = 1,
     group_count: int = 1,
+    show_average: bool = False,
 ) -> alt.Chart:
     companies = list(dict.fromkeys(metric["公司"].astype(str)))
     scale = company_scale(companies, company_colors)
@@ -164,6 +168,48 @@ def build_metric_trend_group(
                 tooltip=[alt.Tooltip("监管下限:Q", title="监管下限")],
             )
         )
+    if show_average and code == "INVESTMENT_RETURN":
+        average = (
+            metric.groupby("报告期", as_index=False)["数值"]
+            .mean()
+            .assign(公司="所选公司平均")
+        )
+        average["_报告期顺序"] = average["报告期"].astype(str).map(
+            {str(period): index for index, period in enumerate(periods)}
+        )
+        average = average.sort_values("_报告期顺序")
+        average_line = (
+            alt.Chart(average)
+            .mark_line(
+                color=AVERAGE_LINE_COLOR,
+                strokeWidth=2.8,
+                strokeDash=[8, 4],
+                point=alt.OverlayMarkDef(
+                    filled=True,
+                    size=64,
+                    color=AVERAGE_LINE_COLOR,
+                    stroke="#FFFFFF",
+                    strokeWidth=1.2,
+                ),
+            )
+            .encode(
+                x=alt.X(
+                    "报告期:N",
+                    sort=periods,
+                    title="报告期",
+                    axis=x_axis,
+                ),
+                y=alt.Y(
+                    "数值:Q",
+                    scale=alt.Scale(domain=y_domain, zero=False, nice=False),
+                ),
+                tooltip=[
+                    alt.Tooltip("报告期:N", title="报告期"),
+                    alt.Tooltip("数值:Q", title="所选公司平均投资收益率（%）", format=",.2f"),
+                ],
+            )
+        )
+        trend_layers.append(average_line)
     title = f"{name}跨期趋势"
     height = 420
     if group_count > 1:
@@ -286,6 +332,13 @@ def insurance_risk_liability_pressure_sentence(
         overall_mean = float(rows["数值"].mean())
         foreign_gap = non_foreign_mean - foreign_mean
         if foreign_gap >= max(0.25, abs(overall_mean) * 0.10):
+            if is_english():
+                return (
+                    f"The average non-life insurance risk pressure factor for foreign-invested "
+                    f"insurers was {foreign_mean:.2f}%, materially below the average of "
+                    f"{non_foreign_mean:.2f}% for other company categories, reflecting stricter "
+                    "risk controls at foreign-invested insurers."
+                )
             return (
                 f"外资系公司的非寿险保险风险压力因子平均值为{foreign_mean:.2f}%，"
                 f"明显低于其他类型公司的平均水平{non_foreign_mean:.2f}%，"
@@ -295,6 +348,12 @@ def insurance_risk_liability_pressure_sentence(
     lowest_mean = float(group_means.iloc[0])
     others = rows[rows["公司分类"].ne(lowest_group)]["数值"]
     if others.empty:
+        if is_english():
+            return (
+                f"The average non-life insurance risk pressure factor for "
+                f"{category_name(lowest_group)} in the latest year was {lowest_mean:.2f}%; "
+                "the current sample is insufficient for a cross-category comparison."
+            )
         return (
             f"最新年度{lowest_group}的非寿险保险风险压力因子平均值为"
             f"{lowest_mean:.2f}%，当前样本不足以进行跨类型比较。"
@@ -304,6 +363,19 @@ def insurance_risk_liability_pressure_sentence(
     difference = others_mean - lowest_mean
     clearly_lower = difference >= max(0.25, abs(overall_mean) * 0.10)
     group_text = lowest_group if lowest_group.endswith("公司") else f"{lowest_group}公司"
+    if is_english():
+        group_label = category_name(lowest_group)
+        if clearly_lower:
+            return (
+                f"The average non-life insurance risk pressure factor for {group_label} was "
+                f"{lowest_mean:.2f}%, materially below the average of {others_mean:.2f}% for "
+                "other company categories."
+            )
+        return (
+            f"Differences in non-life insurance risk pressure across company categories were "
+            f"relatively limited. {group_label} had the lowest average at {lowest_mean:.2f}%, "
+            f"versus {others_mean:.2f}% for other categories."
+        )
     if clearly_lower and lowest_group == "外资系":
         conclusion = (
             f"{group_text}的非寿险保险风险压力因子平均值为{lowest_mean:.2f}%，"
@@ -331,6 +403,7 @@ def build_single_metric_trend_chart(
     period_order: Iterable[str],
     company_colors: Mapping[str, str],
     highlight_company: str = "",
+    show_average: bool = False,
 ) -> alt.Chart:
     """Return one point-line trend chart (kept for small selections and callers)."""
     metric, periods, name, y_domain = prepare_metric_trend(
@@ -344,6 +417,7 @@ def build_single_metric_trend_chart(
         company_colors,
         highlight_company,
         y_domain,
+        show_average=show_average,
     )
 
 
@@ -353,6 +427,7 @@ def build_single_metric_trend_charts(
     period_order: Iterable[str],
     company_colors: Mapping[str, str],
     highlight_company: str = "",
+    show_average: bool = False,
 ) -> list[alt.Chart]:
     """Return one trend chart containing every selected company."""
     return [
@@ -362,6 +437,7 @@ def build_single_metric_trend_charts(
             period_order,
             company_colors,
             highlight_company,
+            show_average=show_average,
         )
     ]
 

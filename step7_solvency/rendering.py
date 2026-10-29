@@ -204,9 +204,14 @@ def render_report_metric(
         st.markdown(
             '<div class="solvency-report-analysis">'
             '<p class="solvency-note-default">'
-            "以该指标体现公司保险风险最低资本相对认可负债的压力因子值，"
-            "比率越高说明负债对应的保险风险水平越高。"
-            "</p>"
+            + t(
+                "以该指标体现公司保险风险最低资本相对认可负债的压力因子值，"
+                "比率越高说明负债对应的保险风险水平越高。",
+                "This metric expresses insurance risk minimum capital as a pressure factor "
+                "relative to recognised liabilities. A higher ratio indicates greater "
+                "insurance risk exposure for the corresponding liabilities.",
+            )
+            + "</p>"
             + (
                 '<p class="solvency-note-default">'
                 f"{escape(risk_pressure_text)}</p>"
@@ -360,6 +365,14 @@ def render_report_metric(
             external_legend.append(("#B8BDC7", t("未披露", "Not disclosed"), "square"))
         if code in {"CORE_SOLVENCY_RATIO", "COMBINED_SOLVENCY_RATIO"}:
             external_legend.append(("#ED2124", t("监管下限", "Regulatory minimum"), "dash"))
+        if code == "INVESTMENT_RETURN" and show_average:
+            external_legend.append(
+                (
+                    "#94A3B8",
+                    t("所选公司平均投资收益率", "Selected-company average return"),
+                    "dash",
+                )
+            )
         if external_legend:
             render_chart_legend(external_legend)
         charts = build_single_metric_trend_charts(
@@ -368,6 +381,7 @@ def render_report_metric(
             ordered_periods,
             company_color_map(metric_frame["公司"], highlight_company),
             highlight_company,
+            show_average=show_average,
         )
         if len(charts) > 1:
             st.markdown(
@@ -418,7 +432,7 @@ def render_chart_legend(
 
 def render_chart_summary(text: str, *, label: str | None = None) -> None:
     """Render one data-driven takeaway line before a chart module."""
-    message = str(text or "").strip()
+    message = translate_text(str(text or "").strip())
     if not message:
         return
     st.markdown(

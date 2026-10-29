@@ -2,6 +2,7 @@
 """STEP7 英文展示切换的回归测试。"""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -57,7 +58,63 @@ def test_step7_chinese_display_by_default() -> None:
     print("PASS STEP7 中文模式：默认展示保持不变")
 
 
+def test_step7_english_all_modules_have_no_chinese_ui_text() -> None:
+    at = _app_with_modules("en")
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    texts = [
+        item.value
+        for item in [*at.markdown, *at.caption]
+        if isinstance(item.value, str)
+    ]
+    combined = "\n".join(texts)
+    combined = re.sub(r"<style[\s\S]*?</style>", "", combined)
+    combined = re.sub(
+        r'<section class="platform-page-heading"[\s\S]*?</section>',
+        "",
+        combined,
+    )
+    for company in ("甲公司", "乙公司"):
+        combined = combined.replace(company, "")
+    leaked = [
+        line.strip()
+        for line in combined.splitlines()
+        if re.search(r"[\u4e00-\u9fff]", line)
+        and not any(
+            marker in line
+            for marker in (
+                "### 行业分析导航",
+                "当前身份：",
+                "切换后会清空",
+                "目标表和定位关键词",
+                "默认本地 Profile：",
+                "Profile：",
+                "v2 配置：",
+                "配置文件保存",
+                "当前配置范围：",
+            )
+        )
+    ]
+    charts = at.get("vega_lite_chart")
+    chart_text = []
+    for chart in charts:
+        chart_text.append(str(chart.proto.spec))
+        chart_text.extend(str(dataset.data) for dataset in chart.proto.datasets)
+    chart_combined = "\n".join(chart_text)
+    for company in ("甲公司", "乙公司"):
+        chart_combined = chart_combined.replace(company, "")
+    chart_leaks = [
+        line.strip()
+        for line in chart_combined.splitlines()
+        if re.search(r"[\u4e00-\u9fff]", line)
+    ]
+    assert not chart_leaks, "\n".join(chart_leaks[:40])
+    assert len(at.expander) >= len(build_modules())
+    assert not leaked, "\n".join(leaked[:40])
+
+
 if __name__ == "__main__":
     test_step7_english_display()
     test_step7_chinese_display_by_default()
+    test_step7_english_all_modules_have_no_chinese_ui_text()
     print("全部通过")

@@ -287,7 +287,12 @@ def render_combination_analysis(
     # ★ 新增：能力五边形雷达图
     elif plan.kind == CAPABILITY_RADAR:
         render_plan_capability_radar(
-            chart_frame, highlight_company, key_prefix, module_override, periods
+            chart_frame,
+            highlight_company,
+            key_prefix,
+            module_override,
+            periods,
+            industry_frame=industry_frame,
         )
         return
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import math
 import re
 
 import altair as alt
 import pandas as pd
 
+from ..report_i18n import t
 from .primitives import apply_report_theme, label_color_for_fill
 
 
@@ -24,10 +24,6 @@ PREMIUM_CATEGORY_COLORS = {
 PREMIUM_CATEGORY_ORDER = {"车险": 0, "非车险": 1, "未拆分": 2}
 GROWTH_LINE_COLOR = "#E36C0A"
 SOLVENCY_RATIO_CODE = "COMBINED_SOLVENCY_RATIO"
-SOLVENCY_LINE_COLOR = "#FD349C"
-# 偿付能力折线纵轴刻度间隔（百分点）。固定 100 一档，避免自适应区间
-# 把正常波动放大成剧烈起伏。
-SOLVENCY_AXIS_STEP = 100.0
 ANNUAL_SCOPE_KEYWORDS = ("本年累计", "年度累计", "全年累计")
 PREMIUM_GROWTH_GROUP_ORDER = (
     "前三大",
@@ -326,38 +322,6 @@ def group_premium_growth_panels(
     return [(name, grouped[name]) for name in [*ordered_names, *remaining]]
 
 
-def solvency_axis_domain(
-    solvency_frame: pd.DataFrame,
-    *,
-    step: float = SOLVENCY_AXIS_STEP,
-    min_low: float = 100.0,
-) -> tuple[float, float]:
-    """Return a fixed 100-point-step range around the solvency values.
-
-    The scale is rounded outward to multiples of ``step`` so the axis ticks
-    always fall on 100/200/300... rather than auto-fitting to each company.
-    The lower bound is kept at least 100% to leave room below the values.
-    """
-    values = pd.to_numeric(
-        solvency_frame.get("综合偿付能力充足率"), errors="coerce"
-    ).dropna()
-    if values.empty:
-        return min_low, min_low + step
-    low = float(values.min())
-    high = float(values.max())
-    step = max(1.0, float(step))
-    lower = math.floor(low / step) * step
-    upper = math.ceil(high / step) * step
-    if lower >= low:
-        lower -= step
-    if upper <= high:
-        upper += step
-    lower = max(min_low, lower)
-    if upper - lower < step:
-        upper = lower + step
-    return float(lower), float(upper)
-
-
 def premium_growth_axis_domain(
     panels: list[PremiumGrowthPanel],
 ) -> tuple[float, float]:
@@ -393,7 +357,7 @@ def build_premium_growth_structure_chart(
     share_scale = alt.Scale(domain=[0, 100], zero=True, nice=False)
     growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=False)
     x_axis = alt.Axis(
-        title=None,
+        title=t("年份", "Year"),
         labelAngle=0,
         labelFontSize=9,
         labelPadding=7,
@@ -547,79 +511,8 @@ def build_premium_growth_structure_chart(
         )
         growth_layers = [zero_axis, line, points, positive_labels, negative_labels]
 
-    solvency_layers: list[alt.Chart] = []
-    solvency_domain: tuple[float, float] | None = None
-    if not panel.solvency_frame.empty:
-        solvency_base = alt.Chart(panel.solvency_frame)
-        # 偿付能力折线使用固定 100 个百分点一档的纵轴刻度：
-        # 例如 120%–320% 记为 [100, 400]，让 20–30 个百分点的波动
-        # 在图上显得平缓，而不是被自适应区间放大成剧烈起伏。
-        solvency_domain = solvency_axis_domain(panel.solvency_frame)
-        solvency_scale = alt.Scale(domain=list(solvency_domain), zero=False, nice=False)
-        solvency_y = alt.Y(
-            "综合偿付能力充足率:Q",
-            scale=solvency_scale,
-            axis=alt.Axis(
-                orient="right",
-                offset=50,
-                format=".0f",
-                title="偿付能力（%）",
-                titlePadding=6,
-                titleFontSize=8,
-                labelFontSize=8,
-                values=list(
-                    range(
-                        int(solvency_domain[0]),
-                        int(solvency_domain[1]) + 1,
-                        int(SOLVENCY_AXIS_STEP),
-                    )
-                ),
-                grid=False,
-            ),
-        )
-        solvency_y_axisless = alt.Y(
-            "综合偿付能力充足率:Q",
-            scale=solvency_scale,
-            axis=None,
-        )
-        solvency_line = solvency_base.mark_line(
-            color=SOLVENCY_LINE_COLOR,
-            strokeWidth=2.0,
-            strokeDash=[5, 3],
-        ).encode(
-            x=x,
-            y=solvency_y,
-            tooltip=[
-                alt.Tooltip("年度:N", title="年度"),
-                alt.Tooltip(
-                    "综合偿付能力充足率:Q",
-                    title="综合偿付能力充足率（%）",
-                    format=".1f",
-                ),
-            ],
-        )
-        solvency_points = solvency_base.mark_point(
-            size=55,
-            filled=True,
-            color=SOLVENCY_LINE_COLOR,
-            stroke="#FFFFFF",
-            strokeWidth=1.2,
-        ).encode(
-            x=x,
-            y=solvency_y_axisless,
-            tooltip=[
-                alt.Tooltip("年度:N", title="年度"),
-                alt.Tooltip(
-                    "综合偿付能力充足率:Q",
-                    title="综合偿付能力充足率（%）",
-                    format=".1f",
-                ),
-            ],
-        )
-        solvency_layers = [solvency_line, solvency_points]
-
     chart = (
-        alt.layer(bars, bar_labels, *growth_layers, *solvency_layers)
+        alt.layer(bars, bar_labels, *growth_layers)
         .resolve_scale(y="independent", color="independent")
         .properties(
             title=alt.TitleParams(

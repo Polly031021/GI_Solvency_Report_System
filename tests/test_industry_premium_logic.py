@@ -90,6 +90,14 @@ def test_industry_premium_total_chart_has_bars_and_growth_line() -> None:
     assert bar_layer["mark"]["size"] == 28
     assert bar_layer["encoding"]["x"]["scale"]["paddingInner"] == 0.12
     assert bar_layer["encoding"]["x"]["sort"] == ["2022", "2023", "2024", "2025"]
+    assert bar_layer["encoding"]["x"]["title"] == "年份"
+    assert bar_layer["encoding"]["x"]["axis"]["values"] == [
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+    ]
+    assert bar_layer["encoding"]["x"]["axis"]["domain"] is True
     assert "color" not in bar_layer["encoding"]
     growth_line = next(
         layer for layer in spec["layer"] if layer["mark"]["type"] == "line"
@@ -100,6 +108,20 @@ def test_industry_premium_total_chart_has_bars_and_growth_line() -> None:
     assert growth_line["encoding"]["y"]["axis"]["labelExpr"] == "datum.label + '%'"
     assert spec["config"]["axis"]["labelColor"] == "#475569"
     assert spec["config"]["axis"]["gridColor"] == "#E5E7EB"
+    vega_spec = build_industry_premium_total_chart(
+        annual, unit_mode="亿元"
+    ).to_dict(format="vega")
+    year_axis = next(
+        axis
+        for axis in vega_spec["axes"]
+        if (
+            axis.get("scale") == "x"
+            or str(axis.get("scale", "")).startswith("layer_")
+            and axis.get("orient") == "bottom"
+        )
+    )
+    assert year_axis["title"] == "年份"
+    assert year_axis["values"] == ["2022", "2023", "2024", "2025"]
 
 
 def test_industry_premium_mix_chart_uses_100_percent_stack() -> None:
@@ -143,6 +165,20 @@ def test_industry_premium_mix_chart_uses_100_percent_stack() -> None:
         "#FD349C",
     ]
     assert share_bar["encoding"]["x"]["sort"] == ["2022", "2023", "2024", "2025"]
+    assert share_bar["encoding"]["x"]["title"] == "年份"
+    assert share_bar["encoding"]["x"]["axis"]["values"] == [
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+    ]
+    vega_spec = build_industry_premium_mix_chart(
+        annual, unit_mode="亿元"
+    ).to_dict(format="vega")
+    assert any(
+        axis.get("orient") == "bottom" and axis.get("title") == "年份"
+        for axis in vega_spec["axes"]
+    )
 
 
 def test_combined_structure_chart_places_two_panels_side_by_side() -> None:
