@@ -66,6 +66,19 @@ from services.solvency_step7_charts import (
     classify_performance_pattern,
     build_performance_pattern_trajectory,
     prepare_industry_premium_annual,
+    prepare_premium_by_line_overview,
+    load_premium_by_line_data,
+    premium_by_line_chart_frame,
+    premium_by_line_source_text,
+    build_premium_by_line_chart,
+    line_display_name,
+    ordered_premium_lines,
+    premium_line_frame,
+    LINE_COLORS,
+    MISSING_MARK_COLOR,
+    AMOUNT_COLUMN as PREMIUM_BY_LINE_AMOUNT_COLUMN,
+    GROWTH_COLUMN as PREMIUM_BY_LINE_GROWTH_COLUMN,
+    BASE_COLUMN as PREMIUM_BY_LINE_BASE_COLUMN,
     prepare_industry_solvency_overview,
     prepare_market_share_data,
     TOP10_CATEGORY,
@@ -2702,6 +2715,206 @@ def render_plan_industry_premium_structure(
         if not display.empty:
             st.markdown("**" + t("公司级明细（上传数据）", "Company detail (uploaded data)") + "**")
             st.dataframe(translate_dataframe(display), width="stretch", hide_index=True)
+
+
+def render_plan_industry_premium_by_line(
+    *,
+    key_prefix,
+    module_override=None,
+):
+    """行业概览：各险种年度保费合并为一张分组柱状图，缺失年度以“×”标出。"""
+    frame = load_premium_by_line_data()
+    overview = prepare_premium_by_line_overview(frame)
+    chart_frame = premium_by_line_chart_frame(frame)
+    if overview is None or chart_frame.empty:
+        st.warning(
+            t(
+                "当前没有可用的分险种保费收入数据。",
+                "No premium-by-line data is available.",
+            )
+        )
+        return
+
+    unit = "亿元"
+    amount_unit = unit_name(unit)
+    max_year = int(frame["年度"].max())
+    amount_text = f"{overview.total:,.0f} {amount_unit}"
+    source_text = premium_by_line_source_text()
+    lines = ordered_premium_lines(frame)
+
+    if overview.growth is None:
+        growth_delta = t("同比不可比", "YoY not comparable")
+        growth_tone = "neutral"
+    else:
+        growth_delta = t(
+            f"同比 {overview.growth:+.1f}%",
+            f"{overview.growth:+.1f}% YoY",
+        )
+        growth_tone = "up" if overview.growth >= 0 else "down"
+
+    bullets: list[str] = [
+        t(
+            f"{line_display_name(overview.top_line)}占列示险种合计 "
+            f"{overview.top_share:.1f}%",
+            f"{line_display_name(overview.top_line)} accounts for "
+            f"{overview.top_share:.1f}% of the listed lines",
+        ),
+    ]
+    if overview.fastest_line != overview.slowest_line:
+        bullets.append(
+            t(
+                f"{line_display_name(overview.fastest_line)}同比 "
+                f"{overview.fastest_growth:+.1f}%，为列示险种中增速最快",
+                f"{line_display_name(overview.fastest_line)} grew "
+                f"{overview.fastest_growth:+.1f}% YoY, the fastest among listed lines",
+            )
+        )
+        bullets.append(
+            t(
+                f"{line_display_name(overview.slowest_line)}同比 "
+                f"{overview.slowest_growth:+.1f}%，为列示险种中增速最低",
+                f"{line_display_name(overview.slowest_line)} grew "
+                f"{overview.slowest_growth:+.1f}% YoY, the slowest among listed lines",
+            )
+        )
+    if overview.legacy_lines:
+        legacy_names = t("、", ", ").join(
+            line_display_name(name) for name in overview.legacy_lines
+        )
+        legacy_frame = frame[
+            frame["险种"].astype(str).isin(overview.legacy_lines)
+        ]
+        legacy_first = int(legacy_frame["年度"].min())
+        legacy_last = int(legacy_frame["年度"].max())
+        legacy_span = (
+            str(legacy_first)
+            if legacy_first == legacy_last
+            else f"{legacy_first}–{legacy_last}"
+        )
+        bullets.append(
+            t(
+                f"{legacy_names}仅在 {legacy_span} 年有数，"
+                f"源表自 {legacy_last + 1} 年起未再单列。",
+                f"{legacy_names} are only available for {legacy_span}; the source no "
+                f"longer reports them separately from {legacy_last + 1}.",
+            )
+        )
+
+    render_insight_card(
+        title=t("分险种保费收入", "Premium by line of business"),
+        eyebrow=t("险种结构", "Line-of-business mix"),
+        headline=t(
+            f"{overview.year} 年列示险种原保险保费收入",
+            f"Original premium income by line ({overview.year})",
+        ),
+        value=amount_text,
+        delta=growth_delta,
+        delta_tone=growth_tone,
+        bullets=bullets,
+        footnote=t(
+            f"数据来源：{source_text}；分组柱为各险种年度原保险保费收入（亿元），"
+            "车险使用右侧纵轴、其他险种使用左侧纵轴；折线为各险种同比增速（最右侧轴，%）；"
+            "“×”表示源表未披露该年度数据；同比按相邻有数年度计算。",
+            f"Source: {source_text}. Grouped bars show annual original premium income "
+            "by line of business (RMB 100 mn). Motor uses the right amount axis and all "
+            "other lines use the left amount axis; the lines show YoY growth by line "
+            "(far-right axis, %). “×” marks years not disclosed in the source. "
+            "YoY uses the adjacent year with data.",
+        ),
+    )
+
+    st.caption(
+        t(
+            f"共列示 {len(lines)} 个险种，其中 {len(overview.active_lines)} 个在 "
+            f"{max_year} 年有数；所有险种合并为一张柱线组合图："
+            "左轴为其他险种保费、右轴为车险保费、最右轴为同比增速，"
+            "每个柱位上的“×”表示源表未披露该年度数据。",
+            f"{len(lines)} lines of business are shown, {len(overview.active_lines)} of "
+            f"which report data in {max_year}. All lines are combined into one bar-and-line "
+            "chart: the left axis shows non-motor premium, the right axis shows motor "
+            "premium, and the far-right axis shows YoY growth; “×” marks line-years not "
+            "disclosed in the source.",
+        )
+    )
+
+    st.markdown(
+        f"<div class='s7-uw-year-title'>{t('分险种原保险保费收入与同比增速', 'Original premium income and YoY growth by line')}</div>"
+        f"<div class='s7-uw-year-sub'>{t('横轴：年度　分组：险种　左轴：其他险种保费（亿元）　右轴：车险保费（亿元）　最右轴：同比增速（%）　“×”表示未披露', 'X-axis: year   Groups: line of business   Left axis: non-motor premium (RMB 100 mn)   Right axis: motor premium (RMB 100 mn)   Far-right axis: YoY growth (%)   “×” = not disclosed')}</div>",
+        unsafe_allow_html=True,
+    )
+    legend_items: list[tuple[str, str, str]] = [
+        (
+            LINE_COLORS.get(line_name, "#94A3B8"),
+            line_display_name(line_name),
+            "square",
+        )
+        for line_name in lines
+    ]
+    legend_items.extend(
+        [
+            (
+                "#0C233C",
+                t("折线：各险种同比增速（最右轴）", "Lines: YoY growth by line (far-right axis)"),
+                "line",
+            ),
+            (MISSING_MARK_COLOR, t("× 未披露", "× Not disclosed"), "outline"),
+        ]
+    )
+    render_chart_legend(legend_items, align="left")
+
+    try:
+        chart = build_premium_by_line_chart(frame)
+    except ValueError as exc:
+        st.warning(
+            t(
+                f"“分险种保费收入”暂无法绘制：{exc}",
+                f"“Premium by line of business” cannot be drawn yet: {exc}",
+            )
+        )
+        return
+    render_altair_chart(
+        chart,
+        width="stretch",
+        key=f"{key_prefix}_premium_by_line_chart",
+    )
+    st.caption(
+        t(
+            "“×”表示源表未披露该年度；柱为原保险保费收入（亿元），"
+            "折线为各险种同比增速（最右侧轴，%）；悬浮可查看金额、同比增速、基期年度与披露状态。",
+            "“×” marks years not disclosed in the source. Bars show original premium "
+            "income (RMB 100 mn); lines show YoY growth by line (far-right axis, %). "
+            "Hover for amounts, YoY growth, base year and status.",
+        )
+    )
+
+    with st.expander(t("查看分险种保费收入明细", "View premium-by-line detail")):
+        detail = frame.copy()
+        detail["年度"] = detail["年度"].astype(str)
+        detail = detail.rename(
+            columns={
+                "险种": t("险种", "Line of business"),
+                PREMIUM_BY_LINE_AMOUNT_COLUMN: t(
+                    f"原保险保费收入（{unit}）",
+                    f"Original premium income ({amount_unit})",
+                ),
+                PREMIUM_BY_LINE_GROWTH_COLUMN: t("同比增速（%）", "YoY growth (%)"),
+                PREMIUM_BY_LINE_BASE_COLUMN: t("基期年度", "Base year"),
+            }
+        )
+        detail = detail[
+            [
+                t("年度", "Year"),
+                t("险种", "Line of business"),
+                t(f"原保险保费收入（{unit}）", f"Original premium income ({amount_unit})"),
+                t("同比增速（%）", "YoY growth (%)"),
+                t("基期年度", "Base year"),
+            ]
+        ]
+        st.dataframe(
+            translate_dataframe(detail),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def render_plan_industry_market_share(
