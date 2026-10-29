@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from html import escape
+import json
 
 import pandas as pd
 import streamlit as st
@@ -160,6 +161,32 @@ def _cached_capability_grid(
         panel_width=panel_size,
         panel_height=panel_size,
         label_font_size=9,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _cached_capability_scores(
+    score_frame: pd.DataFrame,
+    axes_config_json: str,
+    periods: tuple[str, ...],
+    score_floor: float,
+    benchmark_groups: tuple[str, ...],
+    group_score_floors_json: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Score the full company universe once, before display filtering."""
+    axes_config = json.loads(axes_config_json)
+    latest_period = str(periods[-1]) if periods else ""
+    baseline = score_frame[
+        score_frame["报告期"].astype(str).eq(latest_period)
+    ].copy()
+    return capability_scores(
+        score_frame,
+        axes_config,
+        list(periods),
+        baseline_frame=baseline,
+        score_floor=score_floor,
+        industry_benchmark_groups=frozenset(benchmark_groups),
+        group_score_floors=json.loads(group_score_floors_json),
     )
 
 
@@ -1757,8 +1784,8 @@ def _split_top10_peer_group(frame: pd.DataFrame) -> pd.DataFrame:
     - 其余原“前十大”公司 → “前4-10”
     - 其他分类原样保留。
 
-    作用于 DataFrame 的“同业分类”列；capability_scores 会按该列从全量
-    基准数据建立同类别打分池。
+    作用于 DataFrame 的“同业分类”列；capability_scores 按原有规则建立
+    全行业池或同类别池。
     """
     if "同业分类" not in frame.columns or frame.empty:
         return frame
@@ -1827,26 +1854,30 @@ def render_plan_capability_radar(
     else:
         group_score_floors = CAPABILITY_GROUP_SCORE_FLOORS
 
-    latest_period_for_anchor = str(periods[-1]) if periods else ""
-    baseline_source = (
+    score_source = (
         industry_frame
         if isinstance(industry_frame, pd.DataFrame) and not industry_frame.empty
         else chart_frame
     )
-    baseline_source = _split_top10_peer_group(baseline_source)
-    baseline_full = baseline_source[
-        baseline_source["报告期"].astype(str).eq(latest_period_for_anchor)
-    ].copy()
+    score_source = _split_top10_peer_group(score_source)
 
-    score_all, raw_all, latest_period = capability_scores(
-        chart_frame,
-        axes_config,
-        periods,
-        baseline_frame=baseline_full,
-        score_floor=score_floor,
-        industry_benchmark_groups=benchmark_groups,
-        group_score_floors=group_score_floors,
+    # 先对全量公司完成一次打分，再根据展示公司筛选结果。切换展示公司时
+    # 直接复用完整评分，只过滤图表行，不改变任何公司的得分或类别基准。
+    score_full, raw_full, latest_period = _cached_capability_scores(
+        score_source,
+        json.dumps(axes_config, ensure_ascii=False, sort_keys=True),
+        tuple(str(period) for period in periods),
+        score_floor,
+        tuple(sorted(benchmark_groups)),
+        json.dumps(group_score_floors, ensure_ascii=False, sort_keys=True),
     )
+    display_companies = set(chart_frame["公司"].dropna().astype(str))
+    score_all = score_full[
+        score_full["公司"].astype(str).isin(display_companies)
+    ].reset_index(drop=True)
+    raw_all = raw_full[
+        raw_full["公司"].astype(str).isin(display_companies)
+    ].reset_index(drop=True)
 
     if score_all.empty:
         # ---------- 诊断：定位打分池为空的具体原因 ----------
@@ -1893,10 +1924,10 @@ def render_plan_capability_radar(
         return
 
     # ---------- 取得每家公司的同业分类（此时已是拆分后的“前三大”/“前4-10”） ----------
-    category_column = "同业分类" if "同业分类" in chart_frame.columns else None
+    category_column = "同业分类" if "同业分类" in score_source.columns else None
     if category_column:
         cat_map = (
-            chart_frame[["公司", category_column]]
+            score_source[["公司", category_column]]
             .dropna()
             .assign(**{category_column: lambda d: d[category_column].astype(str).str.strip()})
             .drop_duplicates(subset=["公司"], keep="last")
@@ -1905,6 +1936,9 @@ def render_plan_capability_radar(
         )
     else:
         cat_map = {}
+    score_full["_分类"] = (
+        score_full["公司"].astype(str).map(cat_map).fillna("未分类")
+    )
     score_all["_分类"] = score_all["公司"].astype(str).map(cat_map).fillna("未分类")
 
     # ---------- 分类顺序：固定业务分组顺序，未列入的（未分类等）排最后 ----------
@@ -1933,7 +1967,9 @@ def render_plan_capability_radar(
     company_avg = score_matrix.mean(axis=1, skipna=True)
     category_reference: dict[str, list[float]] = {}
     for category in ordered_categories:
-        cat_scores_for_ref = score_all[score_all["_分类"].astype(str).eq(category)]
+        cat_scores_for_ref = score_full[
+            score_full["_分类"].astype(str).eq(category)
+        ]
         reference: list[float] = []
         for column in score_columns:
             values = pd.to_numeric(cat_scores_for_ref[column], errors="coerce").dropna()
@@ -2004,10 +2040,10 @@ def render_plan_capability_radar(
         )
     bullets.append(
         t(
-            "承保风控能力按同类别综合成本率平均值打分：同类别平均=60 分，"
+            "承保风控能力按综合成本率相对行业平均值打分：行业平均=60 分，"
             "综合成本率越低得分越高。",
-            "Underwriting risk control is scored against the peer-category average "
-            "combined ratio (peer-category average = 60; lower is better).",
+            "Underwriting risk control is scored against the industry-average "
+            "combined ratio (industry average = 60; lower is better).",
         )
     )
 
@@ -2046,18 +2082,21 @@ def render_plan_capability_radar(
         bullets=bullets,
         footnote=t(
             "五个顶点依次对应资本实力、偿付能力、盈利能力、承保风控能力和业务拓展；"
-            "资本实力、盈利能力、业务拓展按公司所在同业类别内的全量样本相对位次打分，"
-            "承保风控能力按同类别综合成本率平均值打分（同类别平均=60 分，越低越优），"
+            "资本实力、盈利能力、业务拓展按行业相对位次打分，"
+            "承保风控能力按综合成本率相对行业平均值打分（行业平均=60 分，越低越优），"
             "偿付能力按绝对档位打分。"
             f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展单独映射到 70–100 分。"
+            "评分先对全量公司完成并缓存，展示公司筛选只过滤雷达图；"
             "灰色虚线为本组各顶点中位数。",
             "The five vertices are capital strength, solvency, profitability, underwriting "
             "risk control and business expansion. Capital strength, profitability and business "
-            "expansion are rank-scored against the company's full peer category; underwriting "
-            "risk control is scored against the peer-category-average combined ratio "
+            "expansion are rank-scored against the industry; underwriting "
+            "risk control is scored against the industry-average combined ratio "
             "(average = 60; lower is better); solvency "
             f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
-            "expansion axis uses 70–100. The grey dashed pentagon is the group median for each axis.",
+            "expansion axis uses 70–100. The full company universe is scored and cached first; "
+            "the display-company filter only hides radar charts. The grey dashed pentagon is the "
+            "group median for each axis.",
         ),
     )
 
@@ -2067,21 +2106,21 @@ def render_plan_capability_radar(
             f"展示 {latest_period}；每家公司单独一张能力五边形，"
             "按“同业分类”分组排列。"
             "五个顶点依次为：" + "、".join(axes_labels) + "。"
-            "资本实力、盈利能力、业务拓展按公司所在同业类别的全量样本相对位次；"
-            "承保风控能力按综合成本率相对同类别平均（60 分）打分；"
+            "资本实力、盈利能力、业务拓展按行业相对位次；"
+            "承保风控能力按综合成本率相对行业平均（60 分）打分；"
             "偿付能力按绝对档位打分。"
             f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展按 70–100 分映射。"
-            "评分池包含全量数据中的同类别公司，不受展示公司筛选影响；"
+            "评分先对全量公司完成并缓存，展示公司筛选只改变显示的雷达图；"
             "灰色虚线为本组各顶点中位数。",
             f"Showing {latest_period}; one capability pentagon per company, grouped by peer group. "
             f"Vertices: {', '.join(axes_labels)}. "
             "Capital strength, profitability and business expansion are rank-scored against the "
-            "company's full peer category; underwriting risk control is scored against the "
-            "peer-category-average combined ratio (60); solvency "
+            "industry; underwriting risk control is scored against the industry-average combined "
+            "ratio (60); solvency "
             f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
-            "expansion axis uses a 70–100 scale. Scoring peers include every company in the same "
-            "category from the full dataset, regardless of the display-company filter. The grey "
-            "dashed pentagon is the group median for each axis.",
+            "expansion axis uses a 70–100 scale. The full company universe is scored and cached "
+            "first; the display filter only changes which radar charts are shown. The grey dashed "
+            "pentagon is the group median for each axis.",
         )
     )
 
