@@ -56,9 +56,41 @@ LINE_COLORS: dict[str, str] = {
     "工程保险": "#63EBB2",
 }
 FALLBACK_LINE_COLOR = "#94A3B8"
+# 同比增速折线使用与柱体不同的深橙色，避免同色导致柱线走势难以区分。
+GROWTH_LINE_COLOR = "#C2410C"
 MISSING_MARK_COLOR = "#94A3B8"
+
+
+def _readable_text_color(background: str) -> str:
+    """Return a legible label colour for a filled bar."""
+    value = str(background or "").strip().lstrip("#")
+    if len(value) != 6:
+        return "#FFFFFF"
+    try:
+        channels = [int(value[index : index + 2], 16) / 255 for index in (0, 2, 4)]
+    except ValueError:
+        return "#FFFFFF"
+    linear = [
+        channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    return "#0C233C" if luminance > 0.45 else "#FFFFFF"
+
+
 DISCLOSED = "已披露"
+
 NOT_DISCLOSED = "未披露"
+
+# 展示口径：只列示五个主要险种，并且只展示最近四个年度。
+DISPLAY_LINES: tuple[str, ...] = (
+    "机动车辆保险",
+    "健康险",
+    "农业保险",
+    "责任险",
+    "意外险",
+)
+DISPLAY_YEARS = 4
 
 # 与根目录《分险种保费收入.xlsx》完全一致的内置副本（单位：亿元）。
 # 仅在源文件缺失时使用。
@@ -364,18 +396,65 @@ def premium_line_frame(frame: pd.DataFrame, line_name: str) -> pd.DataFrame:
     return selected.sort_values("年度").reset_index(drop=True)
 
 
-def premium_by_line_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return long rows for the grouped bar chart, including missing slots.
+def premium_by_line_window_years(
+    frame: pd.DataFrame,
+    count: int = DISPLAY_YEARS,
+) -> list[int]:
+    """Return the latest count years available in the frame."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    years = sorted(int(year) for year in frame["年度"].dropna().unique())
+    return years[-count:] if count > 0 else years
 
-    Every line is expanded to every year so a missing year keeps its place in
-    the grouped bar chart and can be marked with an explicit “×”.
+
+def premium_by_line_display_frame(
+    frame: pd.DataFrame,
+    *,
+    lines: tuple[str, ...] = DISPLAY_LINES,
+    years: list[int] | None = None,
+) -> pd.DataFrame:
+    """Restrict the source frame to the presented lines and latest years.
+
+    Growth is calculated on the full history before this filter, so the first
+    visible year still carries its year-on-year growth and base year.
+    """
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    if years is None:
+        years = premium_by_line_window_years(frame)
+    selected = frame[
+        frame["险种"].astype(str).isin(lines)
+        & frame["年度"].astype(int).isin(years)
+    ].copy()
+    return selected.sort_values(
+        ["年度", "险种"], kind="mergesort"
+    ).reset_index(drop=True)
+
+
+def premium_by_line_chart_frame(
+    frame: pd.DataFrame,
+    *,
+    line_name: str | None = None,
+    years: list[int] | None = None,
+) -> pd.DataFrame:
+    """Return long rows for the per-line charts, including missing slots.
+
+    A missing line-year combination keeps its place on the year axis and is
+    marked with an explicit “×”. Pass line_name to build a single line frame;
+    omit it to build every line.
     """
     columns = ["年度", "险种", AMOUNT_COLUMN, GROWTH_COLUMN, BASE_COLUMN, "披露状态"]
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.DataFrame(columns=columns)
-    years = sorted(int(year) for year in frame["年度"].dropna().unique())
+    if years is None:
+        years = sorted(int(year) for year in frame["年度"].dropna().unique())
+    else:
+        years = sorted(int(year) for year in years)
+    lines = [str(line_name)] if line_name is not None else ordered_premium_lines(frame)
+    if line_name is not None and str(line_name) not in set(frame["险种"].astype(str)):
+        lines = []
     rows: list[dict[str, object]] = []
-    for line_name in ordered_premium_lines(frame):
+    for line_name in lines:
         line_frame = premium_line_frame(frame, line_name)
         by_year = {
             int(row.年度): row
@@ -409,128 +488,112 @@ def premium_by_line_chart_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def _line_color_scale(lines: list[str]) -> alt.Scale:
-    return alt.Scale(
-        domain=lines,
-        range=[LINE_COLORS.get(line, FALLBACK_LINE_COLOR) for line in lines],
-    )
-
-
-def build_premium_by_line_chart(
-    frame: pd.DataFrame,
-    *,
-    width: int | str = "container",
-) -> alt.Chart:
-    """Grouped bars with dual amount axes plus one YoY growth line per line.
-
-    Motor vehicle insurance uses the right amount axis because its premium is
-    roughly four times the next-largest line; every other line uses the left
-    amount axis so their differences stay readable. Growth lines use a separate
-    right-hand percentage axis. Missing line-year combinations keep their bar
-    slot and are marked with “×”.
-    """
-    chart_frame = premium_by_line_chart_frame(frame)
-    if chart_frame.empty:
-        raise ValueError("没有可绘制的分险种保费收入数据。")
-    lines = ordered_premium_lines(frame)
-    years = sorted(chart_frame["年度"].unique().tolist())
-    disclosed = chart_frame[chart_frame["披露状态"].eq(DISCLOSED)].copy()
-    missing = chart_frame[chart_frame["披露状态"].eq(NOT_DISCLOSED)].copy()
-
-    motor = disclosed[disclosed["险种"].astype(str).eq(MOTOR_LINE)].copy()
-    others = disclosed[~disclosed["险种"].astype(str).eq(MOTOR_LINE)].copy()
-    growth = disclosed.dropna(subset=[GROWTH_COLUMN]).copy()
-
-    other_max = float(pd.to_numeric(others[AMOUNT_COLUMN], errors="coerce").max())
-    motor_max = float(pd.to_numeric(motor[AMOUNT_COLUMN], errors="coerce").max())
-    other_scale = alt.Scale(
-        domain=[0, other_max * 1.18 if other_max > 0 else 1],
-        zero=True,
-        nice=False,
-    )
-    motor_scale = alt.Scale(
-        domain=[0, motor_max * 1.18 if motor_max > 0 else 1],
-        zero=True,
-        nice=False,
-    )
-    if growth.empty:
-        growth_scale = alt.Scale(domain=[0, 1], zero=False)
-    else:
-        growth_min = min(0.0, float(growth[GROWTH_COLUMN].min()))
-        growth_max = max(0.0, float(growth[GROWTH_COLUMN].max()))
-        growth_pad = max(6.0, (growth_max - growth_min) * 0.16)
-        growth_scale = alt.Scale(
-            domain=[growth_min - growth_pad, growth_max + growth_pad],
-            zero=False,
-            nice=False,
-        )
-
-    color_scale = _line_color_scale(lines)
-    x_axis = alt.Axis(
+def _premium_year_axis(years: list[str]) -> alt.Axis:
+    return alt.Axis(
         values=years,
         labels=True,
         labelAngle=0,
-        labelFontSize=11,
-        labelPadding=9,
+        labelFontSize=10,
+        labelPadding=6,
         domain=True,
         ticks=True,
         tickSize=4,
         grid=False,
     )
 
-    def x_encoding() -> alt.X:
-        return alt.X(
-            "年度:O",
-            sort=years,
-            title=t("年份", "Year"),
-            scale=alt.Scale(paddingInner=0.18, paddingOuter=0.28),
-            axis=x_axis,
-        )
 
-    def bar_tooltips(amount_title: str) -> list[alt.Tooltip]:
-        return [
-            alt.Tooltip("年度:N", title=t("年度", "Year")),
-            alt.Tooltip("险种:N", title=t("险种", "Line of business")),
-            alt.Tooltip(
-                f"{AMOUNT_COLUMN}:Q",
-                title=amount_title,
-                format=",.1f",
-            ),
-            alt.Tooltip(
-                f"{GROWTH_COLUMN}:Q",
-                title=t("同比增速", "YoY growth"),
-                format="+.1f",
-            ),
-            alt.Tooltip(
-                f"{BASE_COLUMN}:N",
-                title=t("基期年度", "Base year"),
-            ),
-            alt.Tooltip("披露状态:N", title=t("披露状态", "Status")),
-        ]
+def _premium_year_encoding(years: list[str]) -> alt.X:
+    return alt.X(
+        "年度:O",
+        sort=years,
+        title=None,
+        scale=alt.Scale(paddingInner=0.22, paddingOuter=0.3),
+        axis=_premium_year_axis(years),
+    )
 
+
+def _premium_amount_tooltip(amount_title: str) -> list[alt.Tooltip]:
+    return [
+        alt.Tooltip("年度:N", title=t("年度", "Year")),
+        alt.Tooltip("险种:N", title=t("险种", "Line of business")),
+        alt.Tooltip(f"{AMOUNT_COLUMN}:Q", title=amount_title, format=",.1f"),
+        alt.Tooltip(
+            f"{GROWTH_COLUMN}:Q",
+            title=t("同比增速", "YoY growth"),
+            format="+.1f",
+        ),
+        alt.Tooltip(f"{BASE_COLUMN}:N", title=t("基期年度", "Base year")),
+        alt.Tooltip("披露状态:N", title=t("披露状态", "Status")),
+    ]
+
+
+def build_premium_by_line_combo_chart(
+    frame: pd.DataFrame,
+    line_name: str,
+    *,
+    years: list[int] | None = None,
+    width: int | str = "container",
+    height: int = 300,
+) -> alt.Chart:
+    """One line of business: premium bars and YoY growth in one chart.
+
+    The bars use the left axis (RMB 100 mn) and the growth line uses an
+    independent right axis (%), so a single chart carries both series.
+    """
+    chart_frame = premium_by_line_chart_frame(
+        frame, line_name=line_name, years=years
+    )
+    if chart_frame.empty:
+        raise ValueError(f"没有可绘制的险种数据：{line_name}")
+    year_labels = chart_frame["年度"].astype(str).tolist()
+    disclosed = chart_frame[chart_frame["披露状态"].eq(DISCLOSED)].copy()
+    missing = chart_frame[chart_frame["披露状态"].eq(NOT_DISCLOSED)].copy()
+    growth = disclosed.dropna(subset=[GROWTH_COLUMN]).copy()
+    if growth.empty:
+        raise ValueError(f"没有可用的同比增速数据：{line_name}")
+    growth["增速标签"] = growth[GROWTH_COLUMN].map(
+        lambda value: f"{float(value):+.1f}%"
+    )
+    color = LINE_COLORS.get(str(line_name), FALLBACK_LINE_COLOR)
+    growth_color = GROWTH_LINE_COLOR
     amount_title = t(
         "原保险保费收入（亿元）",
         "Original premium income (RMB 100 mn)",
     )
-    motor_amount_title = t(
-        "车险保费（亿元）",
-        "Motor premium (RMB 100 mn)",
-    )
     growth_title = t("同比增速（%）", "YoY growth (%)")
-
-    bars_other = (
-        alt.Chart(others)
+    max_value = float(
+        pd.to_numeric(disclosed[AMOUNT_COLUMN], errors="coerce").max() or 0.0
+    )
+    amount_scale = alt.Scale(
+        domain=[0, max_value * 1.26 if max_value > 0 else 1],
+        zero=True,
+        nice=False,
+    )
+    values = pd.to_numeric(growth[GROWTH_COLUMN], errors="coerce")
+    lower = min(0.0, float(values.min()))
+    upper = max(0.0, float(values.max()))
+    pad = max(4.0, (upper - lower) * 0.2)
+    growth_scale = alt.Scale(
+        domain=[lower - pad, upper + pad],
+        zero=False,
+        nice=False,
+    )
+    # Keep growth annotations in a clear band above the bars and line.
+    growth["标签位置"] = upper + pad * 0.45
+    bars = (
+        alt.Chart(disclosed)
         .mark_bar(
+            size=34,
+            color=color,
             cornerRadiusTopLeft=2,
             cornerRadiusTopRight=2,
         )
         .encode(
-            x=x_encoding(),
-            xOffset=alt.XOffset("险种:N", sort=lines),
+            x=_premium_year_encoding(year_labels),
             y=alt.Y(
                 f"{AMOUNT_COLUMN}:Q",
                 title=amount_title,
-                scale=other_scale,
+                scale=amount_scale,
                 axis=alt.Axis(
                     orient="left",
                     format=",.0f",
@@ -541,115 +604,112 @@ def build_premium_by_line_chart(
                     grid=True,
                 ),
             ),
-            color=alt.Color("险种:N", scale=color_scale, legend=None),
-            tooltip=bar_tooltips(amount_title),
+            tooltip=_premium_amount_tooltip(amount_title),
         )
     )
-    bars_motor = (
-        alt.Chart(motor)
-        .mark_bar(
-            cornerRadiusTopLeft=2,
-            cornerRadiusTopRight=2,
+    # Place amount labels at the bar base so they never collide with the growth
+    # labels, which sit above the line points near the top of the plot.
+    amount_labels = (
+        alt.Chart(disclosed.assign(金额标签位置=0.0))
+        .mark_text(
+            dy=-8,
+            baseline="bottom",
+            fontSize=9,
+            fontWeight=600,
+            color=_readable_text_color(color),
         )
         .encode(
-            x=x_encoding(),
-            xOffset=alt.XOffset("险种:N", sort=lines),
+            x=alt.X("年度:O", sort=year_labels, axis=None),
+            y=alt.Y("金额标签位置:Q", scale=amount_scale, axis=None),
+            text=alt.Text(f"{AMOUNT_COLUMN}:Q", format=",.0f"),
+        )
+    )
+    zero_rule = (
+        alt.Chart(pd.DataFrame({GROWTH_COLUMN: [0.0]}))
+        .mark_rule(color="#94A3B8", strokeDash=[4, 4], strokeWidth=1)
+        .encode(y=alt.Y(f"{GROWTH_COLUMN}:Q", scale=growth_scale, axis=None))
+    )
+    growth_line = (
+        alt.Chart(growth)
+        .mark_line(
+            strokeWidth=2.1,
+            color=growth_color,
+            point=alt.OverlayMarkDef(
+                size=52,
+                filled=True,
+                color=growth_color,
+                stroke="#FFFFFF",
+                strokeWidth=1.2,
+            ),
+        )
+        .encode(
+            x=alt.X("年度:O", sort=year_labels, axis=None),
             y=alt.Y(
-                f"{AMOUNT_COLUMN}:Q",
-                title=motor_amount_title,
-                scale=motor_scale,
+                f"{GROWTH_COLUMN}:Q",
+                title=growth_title,
+                scale=growth_scale,
                 axis=alt.Axis(
+                    format=".0f",
+                    labelExpr="datum.label + '%'",
                     orient="right",
-                    format=",.0f",
                     tickCount=5,
-                    titlePadding=6,
                     domain=True,
                     ticks=True,
                     tickSize=4,
                     grid=False,
                 ),
             ),
-            color=alt.Color("险种:N", scale=color_scale, legend=None),
-            tooltip=bar_tooltips(motor_amount_title),
-        )
-    )
-
-    layers: list[alt.Chart] = [bars_other, bars_motor]
-    if not growth.empty:
-        layers.append(
-            alt.Chart(pd.DataFrame({GROWTH_COLUMN: [0.0]}))
-            .mark_rule(color="#94A3B8", strokeDash=[4, 4], strokeWidth=1)
-            .encode(
-                y=alt.Y(
-                    f"{GROWTH_COLUMN}:Q",
-                    scale=growth_scale,
-                    axis=None,
-                )
-            )
-        )
-        layers.append(
-            alt.Chart(growth)
-            .mark_line(
-                strokeWidth=1.9,
-                opacity=0.9,
-                point=alt.OverlayMarkDef(
-                    size=32,
-                    filled=True,
-                    stroke="#FFFFFF",
-                    strokeWidth=0.8,
+            tooltip=[
+                alt.Tooltip("年度:N", title=t("年度", "Year")),
+                alt.Tooltip("险种:N", title=t("险种", "Line of business")),
+                alt.Tooltip(
+                    f"{AMOUNT_COLUMN}:Q",
+                    title=amount_title,
+                    format=",.1f",
                 ),
-            )
-            .encode(
-                x=x_encoding(),
-                y=alt.Y(
+                alt.Tooltip(
                     f"{GROWTH_COLUMN}:Q",
                     title=growth_title,
-                    scale=growth_scale,
-                    axis=alt.Axis(
-                        orient="right",
-                        offset=58,
-                        format=".0f",
-                        labelExpr="datum.label + '%'",
-                        tickCount=5,
-                        titlePadding=6,
-                        domain=True,
-                        ticks=True,
-                        tickSize=4,
-                        grid=False,
-                    ),
+                    format="+.1f",
                 ),
-                color=alt.Color("险种:N", scale=color_scale, legend=None),
-                tooltip=[
-                    alt.Tooltip("年度:N", title=t("年度", "Year")),
-                    alt.Tooltip("险种:N", title=t("险种", "Line of business")),
-                    alt.Tooltip(
-                        f"{GROWTH_COLUMN}:Q",
-                        title=growth_title,
-                        format="+.1f",
-                    ),
-                    alt.Tooltip(
-                        f"{BASE_COLUMN}:N",
-                        title=t("基期年度", "Base year"),
-                    ),
-                ],
-            )
+                alt.Tooltip(f"{BASE_COLUMN}:N", title=t("基期年度", "Base year")),
+            ],
         )
-
+    )
+    growth_labels = (
+        alt.Chart(growth)
+        .mark_text(
+            fontSize=9,
+            fontWeight=600,
+            color="#0C233C",
+        )
+        .encode(
+            x=alt.X("年度:O", sort=year_labels, axis=None),
+            y=alt.Y("标签位置:Q", scale=growth_scale, axis=None),
+            text=alt.Text("增速标签:N"),
+        )
+    )
+    layers: list[alt.Chart] = [
+        bars,
+        amount_labels,
+        zero_rule,
+        growth_line,
+        growth_labels,
+    ]
     if not missing.empty:
         missing = missing.assign(标记位置=0.0)
         layers.append(
             alt.Chart(missing)
             .mark_text(
                 text="×",
-                dy=-5,
+                dy=-6,
                 fontSize=12,
                 fontWeight="bold",
                 color=MISSING_MARK_COLOR,
             )
             .encode(
-                x=x_encoding(),
-                xOffset=alt.XOffset("险种:N", sort=lines),
-                y=alt.Y("标记位置:Q", scale=other_scale, axis=None),
+                x=alt.X("年度:O", sort=year_labels, axis=None),
+                y=alt.Y("标记位置:Q", scale=growth_scale, axis=None),
                 tooltip=[
                     alt.Tooltip("年度:N", title=t("年度", "Year")),
                     alt.Tooltip("险种:N", title=t("险种", "Line of business")),
@@ -657,13 +717,14 @@ def build_premium_by_line_chart(
                 ],
             )
         )
-
-    chart = alt.layer(*layers).resolve_scale(y="independent").properties(width=width)
-    chart = apply_industry_chart_theme(chart, height=480)
-    return chart.properties(
-        padding={"top": 12, "right": 96, "bottom": 30, "left": 6}
+    chart = (
+        alt.layer(*layers)
+        .resolve_scale(y="independent")
+        .properties(width=width)
     )
-
+    return apply_industry_chart_theme(chart, height=height).properties(
+        padding={"top": 10, "right": 12, "bottom": 8, "left": 4}
+    )
 
 def prepare_premium_by_line_overview(
     frame: pd.DataFrame,

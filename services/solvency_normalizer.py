@@ -1561,7 +1561,8 @@ def standardize_uploaded_frame(frame: pd.DataFrame) -> pd.DataFrame:
     for column in STANDARD_COLUMNS:
         if column not in result.columns:
             result[column] = ""
-    return apply_navigation_labels(result[STANDARD_COLUMNS])
+    standard = result[STANDARD_COLUMNS]
+    return apply_navigation_labels(standard)
 
 
 def narrow_table_view(frame: pd.DataFrame | None) -> pd.DataFrame:

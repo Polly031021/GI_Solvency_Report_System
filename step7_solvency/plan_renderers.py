@@ -70,11 +70,13 @@ from services.solvency_step7_charts import (
     prepare_premium_by_line_overview,
     load_premium_by_line_data,
     premium_by_line_chart_frame,
+    premium_by_line_display_frame,
     premium_by_line_source_text,
-    build_premium_by_line_chart,
+    premium_by_line_window_years,
+    build_premium_by_line_combo_chart,
     line_display_name,
     ordered_premium_lines,
-    premium_line_frame,
+    DISPLAY_LINES,
     LINE_COLORS,
     MISSING_MARK_COLOR,
     AMOUNT_COLUMN as PREMIUM_BY_LINE_AMOUNT_COLUMN,
@@ -2734,10 +2736,11 @@ def render_plan_industry_premium_structure(
         if anomaly_count:
             st.caption(
                 t(
-                    f"检测到 {anomaly_count} 条公司年度值疑似单位/量级异常，"
-                    "图表未自动改写原始数值；请核对明细。",
-                    f"Detected {anomaly_count} company-year values with suspected unit/scale anomalies; "
-                    "charts do not overwrite the source values. Please review the detail.",
+                    f"检测到 {anomaly_count} 条公司年度记录存在结构性异常（如车险大于合计）；"
+                    "图表按原始数值直接汇总，不做量级改写。请核对明细。",
+                    f"Detected {anomaly_count} company-year records with structural anomalies "
+                    "(for example motor premium exceeding the total); the chart aggregates the "
+                    "reported values directly and does not rescale them. Please review the detail.",
                 )
             )
         display = detail.copy()
@@ -2761,8 +2764,10 @@ def render_plan_industry_premium_by_line(
     key_prefix,
     module_override=None,
 ):
-    """行业概览：各险种年度保费合并为一张分组柱状图，缺失年度以“×”标出。"""
-    frame = load_premium_by_line_data()
+    """行业概览：每个险种一张“保费柱状图+同比增速折线图”双轴组合图，每行两个险种。"""
+    source_frame = load_premium_by_line_data()
+    years = premium_by_line_window_years(source_frame)
+    frame = premium_by_line_display_frame(source_frame, years=years)
     overview = prepare_premium_by_line_overview(frame)
     chart_frame = premium_by_line_chart_frame(frame)
     if overview is None or chart_frame.empty:
@@ -2776,10 +2781,12 @@ def render_plan_industry_premium_by_line(
 
     unit = "亿元"
     amount_unit = unit_name(unit)
-    max_year = int(frame["年度"].max())
     amount_text = f"{overview.total:,.0f} {amount_unit}"
     source_text = premium_by_line_source_text()
-    lines = ordered_premium_lines(frame)
+    lines = [
+        line for line in DISPLAY_LINES
+        if line in set(frame["险种"].astype(str))
+    ]
 
     if overview.growth is None:
         growth_delta = t("同比不可比", "YoY not comparable")
@@ -2851,80 +2858,57 @@ def render_plan_industry_premium_by_line(
         delta_tone=growth_tone,
         bullets=bullets,
         footnote=t(
-            f"数据来源：{source_text}；分组柱为各险种年度原保险保费收入（亿元），"
-            "车险使用右侧纵轴、其他险种使用左侧纵轴；折线为各险种同比增速（最右侧轴，%）；"
-            "“×”表示源表未披露该年度数据；同比按相邻有数年度计算。",
-            f"Source: {source_text}. Grouped bars show annual original premium income "
-            "by line of business (RMB 100 mn). Motor uses the right amount axis and all "
-            "other lines use the left amount axis; the lines show YoY growth by line "
-            "(far-right axis, %). “×” marks years not disclosed in the source. "
-            "YoY uses the adjacent year with data.",
+            f"数据来源：{source_text}；仅列示机动车辆保险、健康险、农业保险、责任险和意外险五个险种，"
+            f"并保留最近 {len(years)} 个年度（{years[0]}–{years[-1]}）；"
+            "保费与同比增速合并为一张双轴组合图，每行两个险种，同比按相邻有数年度计算。",
+            f"Source: {source_text}. Five major lines only (motor, health, agriculture, "
+            f"liability and accident), for the latest {len(years)} years "
+            f"({years[0]}–{years[-1]}). Premium bars and YoY growth share one dual-axis "
+            "chart, two lines per row; YoY uses the adjacent year with data.",
         ),
     )
 
     st.caption(
         t(
-            f"共列示 {len(lines)} 个险种，其中 {len(overview.active_lines)} 个在 "
-            f"{max_year} 年有数；所有险种合并为一张柱线组合图："
-            "左轴为其他险种保费、右轴为车险保费、最右轴为同比增速，"
-            "每个柱位上的“×”表示源表未披露该年度数据。",
-            f"{len(lines)} lines of business are shown, {len(overview.active_lines)} of "
-            f"which report data in {max_year}. All lines are combined into one bar-and-line "
-            "chart: the left axis shows non-motor premium, the right axis shows motor "
-            "premium, and the far-right axis shows YoY growth; “×” marks line-years not "
-            "disclosed in the source.",
+            f"共列示 {len(lines)} 个险种、{len(years)} 个年度（{years[0]}–{years[-1]}）："
+            "每个险种一张组合图，柱状图为原保险保费收入（左轴，亿元），"
+            "折线为同比增速（右轴，%），每行两个险种；"
+            "同比按相邻有数年度计算，“×”表示源表未披露该年度数据。",
+            f"{len(lines)} lines of business across {len(years)} years "
+            f"({years[0]}–{years[-1]}). One combo chart per line: premium bars "
+            "(left axis, RMB 100 mn) and YoY growth (right axis, %), two lines per row. "
+            "YoY uses the adjacent year with data; “×” marks years not disclosed in the source.",
         )
     )
 
     st.markdown(
         f"<div class='s7-uw-year-title'>{t('分险种原保险保费收入与同比增速', 'Original premium income and YoY growth by line')}</div>"
-        f"<div class='s7-uw-year-sub'>{t('横轴：年度　分组：险种　左轴：其他险种保费（亿元）　右轴：车险保费（亿元）　最右轴：同比增速（%）　“×”表示未披露', 'X-axis: year   Groups: line of business   Left axis: non-motor premium (RMB 100 mn)   Right axis: motor premium (RMB 100 mn)   Far-right axis: YoY growth (%)   “×” = not disclosed')}</div>",
+        f"<div class='s7-uw-year-sub'>{t(f'每行两个险种，每个险种一张组合图：柱状图为原保险保费收入（左轴，亿元），折线为同比增速（右轴，%）；展示 {years[0]}–{years[-1]} 年', f'Two lines per row, one combo chart each: premium bars (left axis, RMB 100 mn) and YoY growth (right axis, %); {years[0]}–{years[-1]}')}</div>",
         unsafe_allow_html=True,
     )
-    legend_items: list[tuple[str, str, str]] = [
-        (
-            LINE_COLORS.get(line_name, "#94A3B8"),
-            line_display_name(line_name),
-            "square",
-        )
-        for line_name in lines
-    ]
-    legend_items.extend(
-        [
-            (
-                "#0C233C",
-                t("折线：各险种同比增速（最右轴）", "Lines: YoY growth by line (far-right axis)"),
-                "line",
-            ),
-            (MISSING_MARK_COLOR, t("× 未披露", "× Not disclosed"), "outline"),
-        ]
-    )
-    render_chart_legend(legend_items, align="left")
-
-    try:
-        chart = build_premium_by_line_chart(frame)
-    except ValueError as exc:
-        st.warning(
-            t(
-                f"“分险种保费收入”暂无法绘制：{exc}",
-                f"“Premium by line of business” cannot be drawn yet: {exc}",
-            )
-        )
-        return
-    render_altair_chart(
-        chart,
-        width="stretch",
-        key=f"{key_prefix}_premium_by_line_chart",
-    )
-    st.caption(
-        t(
-            "“×”表示源表未披露该年度；柱为原保险保费收入（亿元），"
-            "折线为各险种同比增速（最右侧轴，%）；悬浮可查看金额、同比增速、基期年度与披露状态。",
-            "“×” marks years not disclosed in the source. Bars show original premium "
-            "income (RMB 100 mn); lines show YoY growth by line (far-right axis, %). "
-            "Hover for amounts, YoY growth, base year and status.",
-        )
-    )
+    for start in range(0, len(lines), 2):
+        pair = lines[start:start + 2]
+        columns = st.columns(2, gap="medium")
+        for offset, line_name in enumerate(pair):
+            color = LINE_COLORS.get(line_name, "#94A3B8")
+            with columns[offset]:
+                st.markdown(
+                    f"<div class='s7-uw-year-title' style='margin-top:16px'>"
+                    f"<span style='color:{color}'>■</span> {escape(line_display_name(line_name))}</div>",
+                    unsafe_allow_html=True,
+                )
+                try:
+                    chart = build_premium_by_line_combo_chart(
+                        frame, line_name, years=years
+                    )
+                except ValueError as exc:
+                    st.info(str(exc))
+                else:
+                    render_altair_chart(
+                        chart,
+                        width="stretch",
+                        key=f"{key_prefix}_premium_by_line_{start + offset}",
+                    )
 
     with st.expander(t("查看分险种保费收入明细", "View premium-by-line detail")):
         detail = frame.copy()

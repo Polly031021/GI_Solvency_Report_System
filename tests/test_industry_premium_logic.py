@@ -348,20 +348,20 @@ def _scale_error_rows() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_unit_scale_errors_are_repaired_before_aggregation() -> None:
+def test_reported_unit_scale_values_are_aggregated_as_is() -> None:
     annual, detail, _ = prepare_industry_premium_annual(
         _scale_error_rows(),
         years=None,
         include_historical=False,
     )
     latest = annual[annual["年度"].eq("2025")].iloc[0]
-    # 甲 605,000 + 乙 800,000: neither the 10,000x-too-large nor the
-    # 10,000x-too-small record may leak into the industry total.
-    assert latest["合计"] == 1_405_000.0
-    assert latest["异常数"] == 2
+    # No automatic scale repair: the source numeric column is summed exactly.
+    # 甲 6,050,000,000 + 乙 80.
+    assert latest["合计"] == 6_050_000_080.0
+    assert latest["异常数"] == 0
     assert set(
         detail.loc[detail["年度"].eq("2025"), "状态"].astype(str)
-    ) == {"异常（量级异常，已自动校正）"}
+    ) == {"缺车险拆分"}
 
 
 def test_company_disclosure_suffix_keeps_total_and_motor_split_together() -> None:
@@ -423,6 +423,58 @@ def test_display_range_switches_between_five_ten_and_all_years() -> None:
     assert mix_spec["layer"][0]["encoding"]["x"]["sort"] == expected
 
 
+def test_source_review_flag_does_not_change_raw_value() -> None:
+    rows = [
+        {
+            "公司": "利宝保险",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本年累计数",
+            "数值": 33.4421,
+            "单位": "万元",
+            "数据校验状态": "待复核",
+            "校验说明": "疑似单位/量级异常（待复核_信号分歧），未自动修正，请人工核对",
+        },
+        {
+            "公司": "利宝保险",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM_MOTOR",
+            "期间口径": "本年累计数",
+            "数值": 175_466.85,
+            "单位": "万元",
+        },
+        {
+            "公司": "己公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM",
+            "期间口径": "本年累计数",
+            "数值": 500_000.0,
+            "单位": "万元",
+        },
+        {
+            "公司": "己公司",
+            "报告期": "2025Q4",
+            "指标编码": "SIGNED_PREMIUM_MOTOR",
+            "期间口径": "本年累计数",
+            "数值": 300_000.0,
+            "单位": "万元",
+        },
+    ]
+    annual, detail, _ = prepare_industry_premium_annual(
+        pd.DataFrame(rows),
+        years=None,
+        include_historical=False,
+    )
+    latest = annual[annual["年度"].eq("2025")].iloc[0]
+    # The validation status is ignored for calculation: the reported numeric
+    # value is summed as-is, so the industry total stays the raw sum.
+    assert latest["合计"] == 500_033.4421
+    assert latest["异常数"] == 1
+    flagged = detail[detail["公司"].eq("利宝保险")].iloc[0]
+    assert flagged["合计"] == 33.4421
+    assert flagged["状态"] == "异常（车险大于合计）"
+
+
 if __name__ == "__main__":
     test_industry_premium_uses_q4_annual_cumulative()
     test_industry_premium_total_chart_has_bars_and_growth_line()
@@ -431,7 +483,8 @@ if __name__ == "__main__":
     test_industry_premium_handles_2022_2026_window()
     test_industry_premium_still_renders_partial_year()
     test_historical_baseline_fills_missing_years_and_upload_wins()
-    test_unit_scale_errors_are_repaired_before_aggregation()
+    test_reported_unit_scale_values_are_aggregated_as_is()
     test_company_disclosure_suffix_keeps_total_and_motor_split_together()
+    test_source_review_flag_does_not_change_raw_value()
     test_display_range_switches_between_five_ten_and_all_years()
     print("PASS 行业保费结构：固定历史、上传覆盖、Q4 累计与 5/10/全部窗口")
