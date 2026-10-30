@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 import unicodedata
 
@@ -88,106 +87,6 @@ def _quarter_from_period(value: object) -> int:
     return chinese.get(match.group(1), 0) if match else 0
 
 
-def _repair_scale_anomalies(
-    annual: pd.DataFrame,
-    quarter_map: dict[tuple[str, int], float],
-) -> pd.DataFrame:
-    """Repair per-company annual amounts that carry a unit-scale mistake.
-
-    Uploaded workbooks mix 万元, 亿元 and 元 values under the same ``万元``
-    label, so a single record can be 10,000x off while its neighbours are
-    fine.  Corrections are made per company:
-
-    1. Compare the annual total with that year's Q4 single-quarter amount.
-       The annual figure should be roughly 1-10x the quarter.
-    2. Cluster the company's remaining years to their dominant order of
-       magnitude, so a lone 亿元 record beside 万元 records is repaired.
-
-    A value is only rewritten when the adjusted amount lands in a plausible
-    range; genuine growth is left untouched.
-    """
-    result = annual.copy()
-    result["量级异常"] = False
-    result["校正说明"] = ""
-    for company, group in result.groupby("公司", sort=False):
-        indices = list(group.index)
-        raw = [float(value) for value in group["数值"]]
-        years = [int(year) for year in group["年度"]]
-        corrected = list(raw)
-        reasons: list[tuple[str, float] | None] = [None] * len(raw)
-
-        # 1) Annual vs. Q4 single-quarter sanity check.
-        for position, (year, value) in enumerate(zip(years, raw)):
-            quarter = quarter_map.get((str(company), year))
-            if quarter is None or not math.isfinite(quarter) or quarter <= 0:
-                continue
-            if value <= 0 or not math.isfinite(value):
-                continue
-            ratio = value / quarter
-            if ratio > 100:
-                for factor in (10_000, 1_000, 100, 10):
-                    if 0.5 <= (value / factor) / quarter <= 10:
-                        corrected[position] = value / factor
-                        reasons[position] = ("偏大", float(factor))
-                        break
-            elif ratio < 0.01:
-                others = [
-                    other for other_position, other in enumerate(raw)
-                    if other_position != position and other > 0
-                ]
-                reference = float(pd.Series(others).median()) if others else None
-                # If the annual figure agrees with the company's other years,
-                # the quarter value is the bad record; leave it alone.
-                if reference is None or value < reference / 100:
-                    for factor in (10, 100, 1_000, 10_000):
-                        if 0.5 <= (value * factor) / quarter <= 10:
-                            corrected[position] = value * factor
-                            reasons[position] = ("偏小", float(factor))
-                            break
-
-        # 2) Cluster the company's annual history to its dominant scale.
-        positive = [value for value in corrected if value > 0]
-        if len(positive) >= 3:
-            reference_log = float(
-                pd.Series([math.log10(value) for value in positive]).median()
-            )
-            for position, value in enumerate(corrected):
-                if value <= 0 or reasons[position] is not None:
-                    continue
-                difference = math.log10(value) - reference_log
-                if abs(difference) >= 1.5:
-                    exponent = int(round(difference))
-                    corrected[position] = value / (10**exponent)
-                    if reasons[position] is None:
-                        reasons[position] = (
-                            "偏大" if exponent > 0 else "偏小",
-                            float(10 ** abs(exponent)),
-                        )
-        elif len(positive) == 2:
-            small, large = sorted(positive)
-            if small > 0 and large / small >= 100:
-                exponent = int(round(math.log10(large / small)))
-                for position, value in enumerate(corrected):
-                    if reasons[position] is not None:
-                        continue
-                    if math.isclose(value, small, rel_tol=1e-12):
-                        corrected[position] = value * (10**exponent)
-                        if reasons[position] is None:
-                            reasons[position] = ("偏小", float(10**exponent))
-
-        for position, index in enumerate(indices):
-            reason = reasons[position]
-            if reason is None:
-                continue
-            direction, magnitude = reason
-            result.at[index, "数值"] = corrected[position]
-            result.at[index, "量级异常"] = True
-            result.at[index, "校正说明"] = (
-                f"检测到约 {magnitude:,.0f} 倍量级{direction}，已自动校正"
-            )
-    return result
-
-
 def _annual_rows(
     frame: pd.DataFrame,
     code: str,
@@ -202,6 +101,9 @@ def _annual_rows(
     元 instead of 万元, or a ``（偿付能力）`` suffix that keeps the total and
     motor split on two rows, would otherwise multiply the chart axis by
     10,000x.
+
+    No unit-scale anomaly correction is applied: the value reported for the
+    company-year is kept as-is and only explicit ``单位`` conversion is done.
     """
     empty = pd.DataFrame(columns=["公司", "年度", "数值", "单位"])
     if frame.empty or code not in set(frame["指标编码"].astype(str)):
@@ -227,19 +129,6 @@ def _annual_rows(
 
     work["_季度"] = work["报告期"].map(_quarter_from_period)
     scope = work["期间口径"].fillna("").astype(str).str.strip()
-    # Q4 single-quarter amounts are a reliable anchor for spotting annual
-    # totals that are orders of magnitude too large.
-    quarter_rows = work[scope.eq("本季度数") & work["_季度"].eq(4)]
-    quarter_map: dict[tuple[str, int], float] = {}
-    if not quarter_rows.empty:
-        quarter_rows = quarter_rows.sort_values(["公司", "年度"]).drop_duplicates(
-            ["公司", "年度"],
-            keep="last",
-        )
-        quarter_map = {
-            (str(row.公司), int(row.年度)): float(row.数值)
-            for row in quarter_rows.itertuples(index=False)
-        }
 
     is_annual = scope.isin(scopes)
     if not is_annual.any():
@@ -257,9 +146,11 @@ def _annual_rows(
         ["公司", "年度"],
         keep="last",
     )
-    work = _repair_scale_anomalies(work, quarter_map)
-    columns = ["公司", "年度", "数值", "单位", "量级异常", "校正说明"]
-    return work[columns]
+    # Use the reported numeric value exactly as supplied.  The source table
+    # may carry its own 数据校验状态/校验说明, but the chart must not rewrite
+    # the amount: an automatic 10,000x repair would make the total disagree
+    # with the original workbook.
+    return work[["公司", "年度", "数值", "单位"]]
 
 
 def _historical_annual() -> pd.DataFrame:
@@ -298,6 +189,8 @@ def prepare_industry_premium_annual(
     number is never presented as a full-year total.  When ``include_historical``
     is enabled, 2017-2024 industry history is appended to the uploaded annual
     series; uploaded records replace the fixed value for the same year.
+    Reported amounts are aggregated directly, without automatic unit-scale
+    correction, so the annual total reconciles to the source workbook.
     """
     uploaded = pd.DataFrame(columns=ANNUAL_COLUMNS)
     detail = pd.DataFrame()
@@ -325,8 +218,6 @@ def prepare_industry_premium_annual(
     available_years: list[int] = []
     total_map: dict[tuple[str, int], float] = {}
     motor_map: dict[tuple[str, int], float] = {}
-    total_anomaly: dict[tuple[str, int], bool] = {}
-    motor_anomaly: dict[tuple[str, int], bool] = {}
     if not work.empty:
         premium_rows = work[
             work["指标编码"].astype(str).isin((TOTAL_PREMIUM_CODE, MOTOR_PREMIUM_CODE))
@@ -373,16 +264,6 @@ def prepare_industry_premium_annual(
                 if not motor.empty
                 else {}
             )
-            total_anomaly = (
-                total.set_index(["公司", "年度"])["量级异常"].to_dict()
-                if not total.empty
-                else {}
-            )
-            motor_anomaly = (
-                motor.set_index(["公司", "年度"])["量级异常"].to_dict()
-                if not motor.empty
-                else {}
-            )
             companies = sorted(work["公司"].unique().tolist())
 
     annual_rows: list[dict[str, object]] = []
@@ -408,10 +289,6 @@ def prepare_industry_premium_annual(
                 status = "缺合计保费"
             else:
                 status = "缺年度累计"
-            if total_anomaly.get((company, year), False) or motor_anomaly.get(
-                (company, year), False
-            ):
-                status = "异常（量级异常，已自动校正）"
             year_detail.append(
                 {
                     "年度": str(year),

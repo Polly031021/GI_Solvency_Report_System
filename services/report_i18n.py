@@ -537,7 +537,7 @@ FIELD_NAMES_EN["类型"] = "Type"
 DEFAULT_ANALYSIS_EN: dict[str, str] = {
     "近五年行业保费合计及车险/非车险结构变化": "Industry premium and motor/non-motor mix over the past five years",
     "最新年度按公司类别的保费、净利润、承保利润市场份额": "Latest-year market share by company category for premium, net profit and underwriting profit",
-    "分险种展示原保险保费收入与同比增速（单位：亿元），合并为一张柱线组合图（车险用右轴、其他险种用左轴）并标注缺失年度。": "Original premium income and YoY growth by line of business (RMB 100 mn), combined into one bar-and-line chart (motor on the right axis, other lines on the left axis) with missing years marked.",
+    "分险种展示原保险保费收入与同比增速（单位：亿元），仅列示机动车辆保险、健康险、农业保险、责任险和意外险，保留最近四个年度；每个险种一张保费柱状图与同比增速折线图的组合图，每行两个险种，同比按相邻有数年度计算。": "Original premium income and YoY growth by line of business (RMB 100 mn), limited to motor, health, agricultural, liability and accident insurance for the latest four years; each line has one combo chart with premium bars and a YoY growth line, two lines per row, with YoY calculated from the nearest year with data.",
     "近五年综合成本率与签单保费排名散点图（100% 盈亏平衡线），并汇总盈利/亏损公司数": "Five-year scatter of combined ratio against signed premium rank (100% break-even line), with profitable/loss-making company counts",
     "按行业合计口径计算综合/核心偿付能力充足率，并展示实际资本与最低资本": "Industry aggregate combined/core solvency ratios, with actual and minimum capital",
     "上方 KPMG Pink 折线展示综合偿付能力充足率，下方堆叠柱展示实际资本与最低资本；按年度口径展示。": "The KPMG Pink line shows the combined solvency ratio; stacked bars below show actual and minimum capital (annual basis).",

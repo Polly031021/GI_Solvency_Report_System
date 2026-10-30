@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""分险种保费收入：集成表读取、同比增速、合并分组柱状图与中英文渲染回归。"""
+"""分险种保费收入：集成表读取、同比增速、分行柱状/折线图与中英文渲染回归。"""
 
 from __future__ import annotations
 
@@ -16,15 +16,17 @@ sys.path.insert(0, str(ROOT / "tests"))
 from openpyxl import load_workbook  # noqa: E402
 
 from services.solvency_step7_charts import (  # noqa: E402
+    DISPLAY_LINES,
     INTEGRATED_SHEET_NAME,
     INTEGRATED_WORKBOOK_PATH,
     PREMIUM_BY_LINE_PATH,
-    build_premium_by_line_chart,
+    build_premium_by_line_combo_chart,
     load_premium_by_line_data,
-    ordered_premium_lines,
     prepare_premium_by_line_overview,
     premium_by_line_chart_frame,
+    premium_by_line_display_frame,
     premium_by_line_source_key,
+    premium_by_line_window_years,
     premium_line_frame,
 )
 from services.report_i18n import localize_chart  # noqa: E402
@@ -72,89 +74,98 @@ def test_growth_uses_adjacent_year_with_data() -> None:
     assert engineering.iloc[-1]["同比增速"] is not None
 
 
-def test_chart_frame_marks_missing_years() -> None:
+def test_display_frame_keeps_five_lines_and_latest_four_years() -> None:
     frame = load_premium_by_line_data()
-    chart_frame = premium_by_line_chart_frame(frame)
-    assert len(chart_frame) == 9 * 7  # 每个险种都补齐到 2019–2025
-    missing = chart_frame[chart_frame["披露状态"].eq("未披露")]
-    assert len(missing) == 4 * 3  # 4 个停报险种 × 2023–2025
-    engineering = chart_frame[chart_frame["险种"].eq("工程保险")]
-    assert engineering[engineering["年度"].eq("2022")]["原保险保费收入"].iloc[0] == 145.0
-    assert set(engineering[engineering["披露状态"].eq("未披露")]["年度"]) == {
-        "2023",
-        "2024",
-        "2025",
-    }
+    years = premium_by_line_window_years(frame)
+    assert years == [2022, 2023, 2024, 2025]
+    display = premium_by_line_display_frame(frame, years=years)
+    assert len(display) == 5 * 4
+    assert set(display["险种"].astype(str)) == set(DISPLAY_LINES)
+    assert sorted(display["年度"].unique().tolist()) == years
+    # 过滤后第一年仍保留按完整历史计算的同比与基期。
+    motor_2022 = display[
+        display["险种"].eq("机动车辆保险") & display["年度"].eq(2022)
+    ].iloc[0]
+    assert motor_2022["基期年度"] == "2021"
+    assert round(float(motor_2022["同比增速"]), 2) == round((8210 / 7773 - 1) * 100, 2)
 
 
-def test_chart_is_one_grouped_bar_chart_with_missing_marks() -> None:
+def test_chart_frame_marks_missing_years_for_retired_lines() -> None:
     frame = load_premium_by_line_data()
-    lines = ordered_premium_lines(frame)
-    chart = build_premium_by_line_chart(frame)
+    display = premium_by_line_display_frame(frame)
+    chart_frame = premium_by_line_chart_frame(display)
+    assert len(chart_frame) == 5 * 4
+    assert chart_frame["披露状态"].eq("未披露").sum() == 0
+
+    engineering = premium_by_line_chart_frame(frame, line_name="工程保险")
+    assert len(engineering) == 7  # 2019–2025
+    missing = engineering[engineering["披露状态"].eq("未披露")]
+    assert set(missing["年度"]) == {"2023", "2024", "2025"}
+
+
+def test_combo_chart_layers_premium_bars_and_growth_line() -> None:
+    frame = load_premium_by_line_data()
+    years = premium_by_line_window_years(frame)
+    chart = build_premium_by_line_combo_chart(
+        premium_by_line_display_frame(frame, years=years),
+        "机动车辆保险",
+        years=years,
+    )
     spec = chart.to_dict()
     assert spec["width"] == "container"
+    assert spec["resolve"]["scale"]["y"] == "independent"
     assert [layer["mark"]["type"] for layer in spec["layer"]] == [
         "bar",
-        "bar",
+        "text",
         "rule",
         "line",
         "text",
     ]
-
-    bars_other = spec["layer"][0]
-    assert bars_other["encoding"]["x"]["field"] == "年度"
-    assert bars_other["encoding"]["xOffset"]["field"] == "险种"
-    assert bars_other["encoding"]["xOffset"]["sort"] == lines
-    assert bars_other["encoding"]["y"]["field"] == "原保险保费收入"
-    assert bars_other["encoding"]["y"]["axis"]["orient"] == "left"
-
-    bars_motor = spec["layer"][1]
-    assert bars_motor["encoding"]["y"]["field"] == "原保险保费收入"
-    assert bars_motor["encoding"]["y"]["axis"]["orient"] == "right"
-    assert bars_motor["encoding"]["y"]["title"] == "车险保费（亿元）"
-
-    growth_line = spec["layer"][3]
-    assert growth_line["encoding"]["y"]["field"] == "同比增速"
-    assert growth_line["encoding"]["y"]["axis"]["orient"] == "right"
-    assert growth_line["encoding"]["y"]["axis"]["offset"] == 58
-    assert growth_line["encoding"]["y"]["axis"]["labelExpr"] == "datum.label + '%'"
-
-    missing_marks = spec["layer"][4]
-    assert missing_marks["mark"]["text"] == "×"
-    assert missing_marks["encoding"]["xOffset"]["field"] == "险种"
-    assert missing_marks["encoding"]["y"]["field"] == "标记位置"
-
-    # The shared year axis must survive the layered independent y scales.
-    vega_spec = chart.to_dict(format="vega")
-    assert any(
-        axis.get("scale") == "x" and axis.get("orient") == "bottom"
-        for axis in vega_spec.get("axes", [])
-    )
+    bars = spec["layer"][0]
+    assert bars["encoding"]["x"]["field"] == "年度"
+    assert "xOffset" not in bars["encoding"]
+    assert bars["encoding"]["y"]["field"] == "原保险保费收入"
+    assert bars["encoding"]["y"]["title"] == "原保险保费收入（亿元）"
+    line = spec["layer"][3]
+    assert line["encoding"]["y"]["field"] == "同比增速"
+    assert line["encoding"]["y"]["title"] == "同比增速（%）"
+    assert line["encoding"]["y"]["axis"]["labelExpr"] == "datum.label + '%'"
+    assert line["encoding"]["y"]["axis"]["format"] == ".0f"
+    assert line["encoding"]["y"]["axis"]["orient"] == "right"
+    assert line["mark"]["point"]["filled"] is True
+    assert bars["encoding"]["y"]["axis"]["orient"] == "left"
+    # 辅助文本层不能再生成第二条金额/增速轴，否则右轴会出现两条刻度重叠。
+    y_axes = [layer["encoding"]["y"].get("axis") for layer in spec["layer"]]
+    assert y_axes[1] is None and y_axes[2] is None and y_axes[4] is None
+    assert sum(axis is not None for axis in y_axes) == 2
+    # 折线与柱体使用不同颜色，避免同色导致走势看不清。
+    assert line["mark"]["color"] != bars["mark"]["color"]
+    assert line["mark"]["color"] == "#C2410C"
 
 
 def test_english_localisation_has_no_chinese() -> None:
     frame = load_premium_by_line_data()
-    spec = localize_chart(build_premium_by_line_chart(frame), "en").to_dict()
+    years = premium_by_line_window_years(frame)
+    display = premium_by_line_display_frame(frame, years=years)
+    chart = build_premium_by_line_combo_chart(
+        display, "机动车辆保险", years=years
+    )
+    spec = localize_chart(chart, "en").to_dict()
     text = str(spec)
     assert "Motor vehicle insurance" in text
-    assert "Original premium income (RMB 100 mn)" in text
-    assert "Not disclosed" in text
-
     rows: list[dict] = []
     for dataset_rows in spec.get("datasets", {}).values():
         if isinstance(dataset_rows, list):
             rows.extend(row for row in dataset_rows if isinstance(row, dict))
     assert any(row.get("险种") == "Motor vehicle insurance" for row in rows)
-    assert any(row.get("披露状态") == "Not disclosed" for row in rows)
-    assert not any(row.get("披露状态") == "未披露" for row in rows)
+    assert "Original premium income (RMB 100 mn)" in text
+    assert "YoY growth (%)" in text
 
 
-def test_overview_and_ordering() -> None:
+def test_overview_uses_filtered_lines() -> None:
     frame = load_premium_by_line_data()
-    lines = ordered_premium_lines(frame)
-    assert lines[0] == "机动车辆保险"
-    assert lines[:5] == ["机动车辆保险", "健康险", "农业保险", "责任险", "意外险"]
-    overview = prepare_premium_by_line_overview(frame)
+    display = premium_by_line_display_frame(frame)
+    overview = prepare_premium_by_line_overview(display)
     assert overview is not None
     assert overview.year == 2025
     assert overview.total == 15259.0
@@ -162,12 +173,7 @@ def test_overview_and_ordering() -> None:
     assert round(overview.growth, 2) == round((15259 / 14570 - 1) * 100, 2)
     assert overview.top_line == "机动车辆保险"
     assert overview.fastest_line == "健康险"
-    assert set(overview.legacy_lines) == {
-        "企业财产保险",
-        "家庭财产保险",
-        "工程保险",
-        "保证保险",
-    }
+    assert overview.legacy_lines == ()
 
 
 def test_template_places_section_between_scale_and_market_share() -> None:
@@ -211,15 +217,7 @@ def _app(level_two: str, language: str):
     return at
 
 
-def _dataset_text(at) -> str:
-    return "\n".join(
-        str(dataset.data)
-        for chart in at.get("vega_lite_chart")
-        for dataset in chart.proto.datasets
-    )
-
-
-def test_chinese_page_renders_one_grouped_chart_with_missing_marks() -> None:
+def test_chinese_page_renders_five_combo_charts() -> None:
     at = _app("分险种保费收入", "zh")
     at.run()
     assert not at.exception, [e.value for e in at.exception]
@@ -227,10 +225,13 @@ def test_chinese_page_renders_one_grouped_chart_with_missing_marks() -> None:
     caption_text = "\n".join(item.value for item in at.caption)
     combined = markdown_text + "\n" + caption_text
     assert "分险种原保险保费收入与同比增速" in markdown_text
-    assert "×" in combined
-    assert "未披露" in combined
-    assert len(at.get("vega_lite_chart")) == 1
-    print("PASS 分险种保费收入：中文页面单张分组柱状图与缺失标记正常")
+    assert "每行两个险种" in markdown_text
+    for name in ("机动车辆保险", "健康险", "农业保险", "责任险", "意外险"):
+        assert name in markdown_text
+    assert "原保险保费收入（左轴，亿元）" in combined
+    assert "同比增速（右轴，%）" in combined
+    assert len(at.get("vega_lite_chart")) == 5
+    print("PASS 分险种保费收入：中文页面五个险种各一张组合图正常")
 
 
 def test_english_page_has_no_chinese_leak() -> None:
@@ -240,9 +241,16 @@ def test_english_page_has_no_chinese_leak() -> None:
     markdown_text = "\n".join(item.value for item in at.markdown)
     caption_text = "\n".join(item.value for item in at.caption)
     combined = markdown_text + "\n" + caption_text
-    assert "Original premium income by line" in combined
-    assert "× Not disclosed" in combined
-    assert len(at.get("vega_lite_chart")) == 1
+    assert "Original premium income and YoY growth by line" in combined
+    for name in (
+        "Motor vehicle insurance",
+        "Health insurance",
+        "Agricultural insurance",
+        "Liability insurance",
+        "Accident insurance",
+    ):
+        assert name in combined
+    assert len(at.get("vega_lite_chart")) == 5
 
     chart_text = ""
     for chart in at.get("vega_lite_chart"):
@@ -282,11 +290,12 @@ if __name__ == "__main__":
     test_integrated_workbook_contains_sheet()
     test_source_data_is_loaded()
     test_growth_uses_adjacent_year_with_data()
-    test_chart_frame_marks_missing_years()
-    test_chart_is_one_grouped_bar_chart_with_missing_marks()
+    test_display_frame_keeps_five_lines_and_latest_four_years()
+    test_chart_frame_marks_missing_years_for_retired_lines()
+    test_combo_chart_layers_premium_bars_and_growth_line()
     test_english_localisation_has_no_chinese()
-    test_overview_and_ordering()
+    test_overview_uses_filtered_lines()
     test_template_places_section_between_scale_and_market_share()
-    test_chinese_page_renders_one_grouped_chart_with_missing_marks()
+    test_chinese_page_renders_five_combo_charts()
     test_english_page_has_no_chinese_leak()
     print("全部通过")
