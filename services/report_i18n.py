@@ -1,7 +1,8 @@
 """STEP7 报告的中英文展示层。
 
-本模块只负责“展示文案”，不改动任何指标编码、公司名称或底层数据：
+本模块只负责“展示文案”，不改动任何指标编码或底层数据：
 - 中文/英文语言状态与切换；
+- 公司中文名到英文展示名的映射；
 - 指标、图表、模块、期间口径、单位、同业分类的英文名称；
 - Altair / Plotly 图表的标题、坐标轴、图例、悬浮提示翻译；
 - 表格列名与常见枚举值翻译；
@@ -31,6 +32,7 @@ LANG_EN = "en"
 LANGUAGE_LABELS = {"中文": LANG_ZH, "English": LANG_EN}
 LANGUAGE_OPTIONS = ("中文", "English")
 LANGUAGE_STATE_KEY = "s7_language"
+LANGUAGE_DISPLAY_KEY = "s7_language_display"
 
 
 # ---------------------------------------------------------------------------
@@ -53,13 +55,33 @@ def set_language(language: str) -> None:
     st.session_state[LANGUAGE_STATE_KEY] = value
 
 
+def sync_language_from_display_control() -> None:
+    """Apply the persisted display-language control before the page paints.
+
+    Streamlit executes widget callbacks before the next script run, but the
+    sidebar in app.py is rendered before show_step_7_solvency(). Syncing at
+    the application entry point keeps the sidebar and the report title in the
+    same language during that rerun, including English -> Chinese switches.
+    """
+    if st is None:
+        return
+    try:
+        selected = st.session_state.get(LANGUAGE_DISPLAY_KEY)
+    except Exception:
+        return
+    if selected:
+        set_language(LANGUAGE_LABELS.get(str(selected), LANG_ZH))
+
+
 def is_english(language: str | None = None) -> bool:
     return (language or get_language()) == LANG_EN
 
 
 def t(zh: str, en: str, language: str | None = None) -> str:
     """Return the English text when English display is active."""
-    return en if is_english(language) else zh
+    if not is_english(language):
+        return zh
+    return _replace_company_names(en)
 
 
 def language_label(language: str | None = None) -> str:
@@ -227,6 +249,124 @@ def translate_metric_frame(frame: pd.DataFrame, language: str | None = None) -> 
 # ---------------------------------------------------------------------------
 # 图表、模块、分类名称
 # ---------------------------------------------------------------------------
+# 公司中文名 -> 英文展示名。
+# 英文模式优先使用市场通用品牌简称（例如 PICC P&C、CPIC P&C、Ping An P&C），
+# 未收录的名称回退为原始名称，保证不会因为映射缺失而隐藏公司。
+COMPANY_NAMES_EN: dict[str, str] = {
+    "三井住友海上": "Mitsui Sumitomo",
+    "三星财险": "Samsung F&C",
+    "东京海上日动": "Tokio Marine & Nichido",
+    "东吴财险": "Soochow",
+    "东海航运": "Donghai Shipping",
+    "中华财险": "China United",
+    "中原农险": "Zhongyuan Agricultural",
+    "中国渔业互保": "China Fisheries Mutual",
+    "中意财险": "Generali China",
+    "中煤财险": "China Coal",
+    "中石油自保": "CNPC Captive",
+    "中路财险": "China Road",
+    "中远海自保": "COSCO Shipping Captive",
+    "中银保险": "BOC Insurance",
+    "久隆财险": "Jiulong",
+    "亚太财险": "Asia-Pacific",
+    "京东安联": "JD Allianz",
+    "人保财险": "PICC P&C",
+    "众安保险": "ZhongAn",
+    "众惠相互": "Zhonghui Mutual",
+    "众诚保险": "Zhongcheng",
+    "凯本财险": "KB Insurance",
+    "利宝保险": "Liberty",
+    "前海财险": "Qianhai",
+    "劳合社": "Lloyd's",
+    "北部湾财险": "Beibu Gulf",
+    "华农财险": "Huanong",
+    "华安财险": "Sinosafe",
+    "华泰财险": "Huatai P&C",
+    "华海财险": "Huahai",
+    "史带财险": "Starr",
+    "合众财险": "Hezhong",
+    "国任财险": "Guoren",
+    "国元农险": "Guoyuan Agricultural",
+    "国寿财险": "China Life P&C",
+    "国泰财险": "Cathay",
+    "大地财险": "China Continent",
+    "大家财险": "Dajia",
+    "太保产险": "CPIC P&C",
+    "太平科技": "Taiping Technology",
+    "太平财险": "Taiping P&C",
+    "安信农险": "Anxin Agricultural",
+    "安华农险": "Anhua Agricultural",
+    "安心财险": "Anxin",
+    "安盛天平": "AXA Tianping",
+    "安盟财险": "Allianz P&C",
+    "安诚财险": "Ancheng",
+    "富德财险": "Fude",
+    "富邦财险": "Fubon",
+    "平安产险": "Ping An P&C",
+    "广东能源自保": "Guangdong Energy Captive",
+    "建信财险": "CCB Insurance",
+    "恒邦财险": "Hengbang",
+    "日本兴亚": "Sompo Japan",
+    "日本财险": "Sompo Japan",
+    "比亚迪财险": "BYD Insurance",
+    "永安财险": "Yong'an",
+    "永诚财险": "Yongcheng",
+    "汇友相互": "Huiyou Mutual",
+    "法巴天星": "BNP Paribas Tianxing",
+    "泰山财险": "Taishan",
+    "泰康在线": "Taikang Online",
+    "浙商财险": "Zheshang",
+    "海峡金桥": "Haixia Jinqiao",
+    "渤海财险": "Bohai",
+    "燕赵财险": "Yanzhao",
+    "爱和谊日生同和": "Aioi Nissay Dowa",
+    "现代财险": "Hyundai",
+    "珠峰财险": "Everest",
+    "瑞再企商": "Swiss Re Corporate Solutions",
+    "申能财险": "Shenergy",
+    "紫金财险": "Zijin",
+    "美亚财险": "AIG",
+    "苏黎世财险": "Zurich",
+    "英大财险": "Yingda",
+    "融盛财险": "Rongsheng",
+    "融通财险": "Rongtong",
+    "诚泰财险": "Chengtai",
+    "都邦财险": "Dubon",
+    "鑫安汽车": "Xin'an Auto",
+    "铁路自保": "Railway Captive",
+    "锦泰财险": "Jintai",
+    "长安责任保险": "Chang'an",
+    "长江财险": "Changjiang",
+    "阳光信保": "Sunshine Credit",
+    "阳光农业相互": "Sunshine Agricultural Mutual",
+    "阳光财险": "Sunshine P&C",
+    "黄河财险": "Yellow River",
+    "鼎和财险": "Dinghe",
+}
+
+
+def company_name(name: Any, language: str | None = None) -> Any:
+    """Return the English display name for a company when English is active."""
+    if not is_english(language) or not isinstance(name, str):
+        return name
+    value = name.strip()
+    if value in COMPANY_NAMES_EN:
+        return COMPANY_NAMES_EN[value]
+    # 兼容历史数据中的“平安产险（偿付能力）”等带后缀写法。
+    base = re.sub(r"[（(][^）)]*[）)]\s*$", "", value).strip()
+    return COMPANY_NAMES_EN.get(base, name)
+
+
+def _replace_company_names(text: str) -> str:
+    """Replace known Chinese company names inside an English display string."""
+    if not isinstance(text, str) or not text:
+        return text
+    result = text
+    for source in sorted(COMPANY_NAMES_EN, key=len, reverse=True):
+        if source and source in result:
+            result = result.replace(source, COMPANY_NAMES_EN[source])
+    return result
+
 CHART_NAMES_EN: dict[str, str] = {
     "行业整体保费规模与结构": "Industry premium scale and structure",
     "分险种保费收入": "Premium by line of business",
@@ -674,14 +814,19 @@ PHRASE_EN: dict[str, str] = {
     "每家公司一个年度折线小图，按公司类型分组分节展示。": "One annual line chart per company, grouped by company type.",
     "当前筛选范围没有可绘制的数据。": "No plottable data in the current selection.",
     "规模与结构": "Scale and structure",
-    "行业签单保费": "industry signed premium",
+    "行业原保费收入": "industry Direct Premium Written",
+    "原保费收入": "Direct Premium Written",
     "保费规模与同比增速": "Premium scale and year-on-year growth",
-    "左：签单保费规模与同比增速　右：车险 / 非车险占比与同比增速": "Left: signed premium scale and YoY growth   Right: motor / non-motor mix and YoY growth",
-    "签单保费规模与同比增速": "Signed premium scale and YoY growth",
-    "柱：年度签单保费　折线：同比增速（右轴，%）": "Bars: annual signed premium   Line: YoY growth (right axis, %)",
+    "左：原保费收入规模与同比增速　右：车险 / 非车险占比与同比增速": "Left: Direct Premium Written scale and YoY growth   Right: motor / non-motor mix and YoY growth",
+    "原保费收入规模与同比增速": "Direct Premium Written scale and YoY growth",
+    "柱：年度原保费收入　折线：同比增速（右轴，%）": "Bars: annual Direct Premium Written   Line: YoY growth (right axis, %)",
     "车险 / 非车险占比与同比增速": "Motor / non-motor mix and YoY growth",
     "柱：100% 堆叠占比　折线：车险 / 非车险同比增速（右轴，%）": "Bars: 100% stacked mix   Lines: motor / non-motor YoY growth (right axis, %)",
-    "签单保费（柱）": "Signed premium (bars)",
+    "原保费收入（柱）": "Direct Premium Written (bars)",
+    "原保费收入同比增速": "Direct Premium Written YoY growth",
+    "当年原保费收入": "Current-year Direct Premium Written",
+    "上年原保费收入": "Prior-year Direct Premium Written",
+    "占原保费收入": "Share of Direct Premium Written",
     "车险（占比）": "Motor (share)",
     "非车险（占比）": "Non-motor (share)",
     "保费规模与结构": "Premium scale and structure",
@@ -853,6 +998,8 @@ def translate_text(text: str, language: str | None = None) -> str:
     """Translate a display string with exact and phrase-level lookup."""
     if not is_english(language) or not isinstance(text, str) or not text:
         return text
+    if text in COMPANY_NAMES_EN:
+        return COMPANY_NAMES_EN[text]
     if text in PHRASE_EN:
         return PHRASE_EN[text]
     if text in DEFAULT_ANALYSIS_EN:
@@ -884,6 +1031,9 @@ def translate_text(text: str, language: str | None = None) -> str:
             f" ({unit_name(unit_suffix.group(2), language)})"
         )
     result = text
+    for source in sorted(COMPANY_NAMES_EN, key=len, reverse=True):
+        if source and source in result:
+            result = result.replace(source, COMPANY_NAMES_EN[source])
     for source in sorted(PHRASE_EN, key=len, reverse=True):
         if source and source in result:
             result = result.replace(source, PHRASE_EN[source])
@@ -1047,6 +1197,13 @@ def translate_dataframe(
                 result[column].dtype
             ) or pd.api.types.is_object_dtype(result[column].dtype):
                 if str(column) in {"Company", "公司", "公司名称"}:
+                    result[column] = result[column].map(
+                        lambda value: (
+                            company_name(value, language)
+                            if isinstance(value, str)
+                            else value
+                        )
+                    )
                     continue
                 result[column] = result[column].map(
                     lambda value: (
@@ -1073,6 +1230,8 @@ def _field_display_name(field: str, language: str | None) -> str:
 def _translate_value(value: Any, language: str | None) -> Any:
     if not is_english(language) or not isinstance(value, str):
         return value
+    if value in COMPANY_NAMES_EN:
+        return COMPANY_NAMES_EN[value]
     if value in DISCLOSURE_NAMES_EN:
         return DISCLOSURE_NAMES_EN[value]
     if value in CATEGORY_NAMES_EN:

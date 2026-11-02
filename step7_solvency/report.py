@@ -44,11 +44,13 @@ from services.report_i18n import (
     LANGUAGE_LABELS,
     LANGUAGE_OPTIONS,
     category_name,
+    company_name as localized_company_name,
     chart_name as localized_chart_name,
     get_language,
     is_english,
     level_name,
     set_language,
+    sync_language_from_display_control,
     t,
     translate_dataframe,
     translate_default_analysis,
@@ -124,6 +126,19 @@ def configured_chart_periods(
     return ordered
 
 
+def _company_option_label(value: object) -> str:
+    """Show company labels in the active language while keeping raw values."""
+    text = str(value)
+    if text == "无":
+        return t("无", "None")
+    return str(localized_company_name(text))
+
+
+def _sync_language_from_control() -> None:
+    """Apply the language widget before the next script run repaints the page."""
+    sync_language_from_display_control()
+
+
 def show_step_7_solvency(
     data: pd.DataFrame,
     financing_data: pd.DataFrame | None = None,
@@ -134,6 +149,7 @@ def show_step_7_solvency(
     图表清单、顺序、类型、指标编码全部来自 Step7 Excel 注释表（step7_modules）；
     未提供时回退到 COMPANY_NAVIGATION 的内置配置。
     """
+    _sync_language_from_control()
     render_report_style()
     st.markdown(
         "<div class='solvency-report-title'>"
@@ -147,6 +163,7 @@ def show_step_7_solvency(
         list(LANGUAGE_OPTIONS),
         default=current_label,
         key="s7_language_display",
+        on_change=_sync_language_from_control,
         label_visibility="collapsed",
     )
     if selected_label:
@@ -250,6 +267,7 @@ def show_step_7_solvency(
                 all_companies,
                 key=company_selection_key,
                 default=all_companies,
+                format_func=_company_option_label,
             )
         with c2:
             unit_options = ["十亿元", "亿元", "百万元", "十万元"]
@@ -267,6 +285,7 @@ def show_step_7_solvency(
                 t("特定追踪", "Track company"),
                 highlight_options,
                 key="s7_highlight_company",
+                format_func=_company_option_label,
             )
         with c4:
             enable_ai = st.toggle(

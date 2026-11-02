@@ -26,6 +26,7 @@ from services.solvency_step7_charts import (
 )
 
 from services.report_i18n import (
+    company_name as localized_company_name,
     is_english,
     localize_chart,
     t,
@@ -516,7 +517,7 @@ def render_company_chart_grid(
         ):
             st.markdown(
                 "<div class='annual-company-title' "
-                f"style='font-size:{title_font_size}px'>{escape(company_name)}</div>",
+                f"style='font-size:{title_font_size}px'>{escape(str(localized_company_name(company_name)))}</div>",
                 unsafe_allow_html=True,
             )
             # ★ 把 try/except 移进容器内：图表失败时，公司标题列依然保留

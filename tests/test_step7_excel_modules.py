@@ -241,7 +241,8 @@ def test_industry_premium_template_module() -> None:
     at.session_state["s7_unit_mode"] = "亿元"
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.metric) >= 4, "行业保费结构页的四个指标卡未渲染"
+    default_markdown = "\n".join(item.value for item in at.markdown)
+    assert "规模与结构" in default_markdown, "行业保费结构的解读卡未渲染"
     range_widget = next(
         widget
         for widget in at.segmented_control
@@ -251,10 +252,9 @@ def test_industry_premium_template_module() -> None:
     assert range_widget.value == "全部"
     range_caption = "\n".join(item.value for item in at.caption)
     assert "固定行业数据" in range_caption
-    default_markdown = "\n".join(item.value for item in at.markdown)
     assert "历年保费规模与同比增速" in default_markdown
     assert "justify-content:flex-start" in default_markdown
-    assert "签单保费规模与同比增速" in default_markdown
+    assert "原保费收入规模与同比增速" in default_markdown
     assert "车险 / 非车险占比与同比增速" in default_markdown
 
     range_widget.set_value("近5年").run()

@@ -2370,7 +2370,7 @@ def render_plan_industry_premium_structure(
         vertical_alignment="center",
     )
     with toolbar_left:
-        st.caption(t("指标：签单保费 · 行业全量口径", "Metric: signed premium · full industry"))
+        st.caption(t("指标：原保费收入 · 行业全量口径", "Metric: Direct Premium Written · full industry"))
     with toolbar_right:
         selected_range = st.segmented_control(
             t("显示范围", "Display range"),
@@ -2564,7 +2564,7 @@ def render_plan_industry_premium_structure(
     summary_unit_label = t("百亿元", "RMB 10bn")
     render_insight_card(
         title=t("规模与结构", "Scale and structure"),
-        headline=t(f"{latest_year} 行业签单保费", f"{latest_year} industry signed premium"),
+        headline=t(f"{latest_year} 行业原保费收入", f"{latest_year} industry Direct Premium Written"),
         value=(
             "—"
             if summary_total is None
@@ -2601,19 +2601,19 @@ def render_plan_industry_premium_structure(
         st.markdown(
             f"<div class='s7-uw-year-title'>{range_titles[selected_range]}{chart_title}</div>"
             f"<div class='s7-uw-year-sub'>"
-            f"{t('左：签单保费规模与同比增速　右：车险 / 非车险占比与同比增速', 'Left: signed premium scale and YoY growth   Right: motor / non-motor mix and YoY growth')}"
+            f"{t('左：原保费收入规模与同比增速　右：车险 / 非车险占比与同比增速', 'Left: Direct Premium Written scale and YoY growth   Right: motor / non-motor mix and YoY growth')}"
             f" · {year_span}</div>",
             unsafe_allow_html=True,
         )
         left_column, right_column = st.columns(2, gap="large")
         with left_column:
             st.markdown(
-                f"<div class='s7-premium-panel-title'>{t('签单保费规模与同比增速', 'Signed premium scale and YoY growth')}</div>"
-                f"<div class='s7-premium-panel-sub'>{t('柱：年度签单保费　折线：同比增速（右轴，%）', 'Bars: annual signed premium   Line: YoY growth (right axis, %)')}</div>",
+                f"<div class='s7-premium-panel-title'>{t('原保费收入规模与同比增速', 'Direct Premium Written scale and YoY growth')}</div>"
+                f"<div class='s7-premium-panel-sub'>{t('柱：年度原保费收入　折线：同比增速（右轴，%）', 'Bars: annual Direct Premium Written   Line: YoY growth (right axis, %)')}</div>",
                 unsafe_allow_html=True,
             )
             left_legend = [
-                (COBALT_BLUE, t("签单保费（柱）", "Signed premium (bars)"), "square"),
+                (COBALT_BLUE, t("原保费收入（柱）", "Direct Premium Written (bars)"), "square"),
             ]
             if has_growth:
                 left_legend.extend(

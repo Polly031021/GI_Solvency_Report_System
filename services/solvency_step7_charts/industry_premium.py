@@ -1,4 +1,4 @@
-"""行业整体保费规模与结构：签单保费柱线图 + 车险/非车险 100% 占比柱线图。"""
+"""行业整体保费规模与结构：原保费收入柱线图 + 车险/非车险 100% 占比柱线图。"""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ INDUSTRY_PREMIUM_WINDOWS = {
     "全部": None,
 }
 
-# 2017-2024 行业签单保费历史基准（保费单位：亿元；车险百分比用于拆分）。
+# 2017-2024 行业原保费收入历史基准（保费单位：亿元；车险百分比用于拆分）。
 # 上传数据在相同年度出现时优先，历史基准只补齐上传数据未覆盖的年度。
 HISTORICAL_INDUSTRY_PREMIUM = (
     (2017, 10_541.0, 0.71),
@@ -639,7 +639,7 @@ def build_industry_premium_total_chart(
             x=_year_axis(years),
             y=alt.Y(
                 "合计:Q",
-                title=f"签单保费（{unit}）",
+                title=f"原保费收入（{unit}）",
                 scale=y_scale,
                 axis=alt.Axis(
                     orient="left",
@@ -653,7 +653,7 @@ def build_industry_premium_total_chart(
             ),
             tooltip=[
                 alt.Tooltip("年度:N", title="年度"),
-                alt.Tooltip("合计:Q", title=f"签单保费（{unit}）", format=",.1f"),
+                alt.Tooltip("合计:Q", title=f"原保费收入（{unit}）", format=",.1f"),
                 alt.Tooltip("车险:Q", title=f"其中：车险（{unit}）", format=",.1f"),
                 alt.Tooltip("非车险:Q", title=f"其中：非车险（{unit}）", format=",.1f"),
                 alt.Tooltip("来源:N", title="数据来源"),
@@ -700,9 +700,9 @@ def build_industry_premium_total_chart(
                 ),
                 tooltip=[
                     alt.Tooltip("年度:N", title="年度"),
-                    alt.Tooltip("增长率:Q", title="签单保费同比增速", format="+.1f"),
-                    alt.Tooltip("当年金额:Q", title=f"当年签单保费（{unit}）", format=",.1f"),
-                    alt.Tooltip("上年金额:Q", title=f"上年签单保费（{unit}）", format=",.1f"),
+                    alt.Tooltip("增长率:Q", title="原保费收入同比增速", format="+.1f"),
+                    alt.Tooltip("当年金额:Q", title=f"当年原保费收入（{unit}）", format=",.1f"),
+                    alt.Tooltip("上年金额:Q", title=f"上年原保费收入（{unit}）", format=",.1f"),
                     alt.Tooltip("基期年度:N", title="基期年度"),
                 ],
             )
@@ -791,7 +791,7 @@ def build_industry_premium_mix_chart(
             tooltip=[
                 alt.Tooltip("年度:N", title="年度"),
                 alt.Tooltip("类别:N", title="构成"),
-                alt.Tooltip("占比:Q", title="占签单保费", format=".1%"),
+                alt.Tooltip("占比:Q", title="占原保费收入", format=".1%"),
                 alt.Tooltip("金额:Q", title=f"金额（{unit}）", format=",.1f"),
                 alt.Tooltip("来源:N", title="数据来源"),
             ],

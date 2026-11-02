@@ -46,6 +46,7 @@ def test_step7_english_display() -> None:
     assert "Company Solvency Benchmarking Report" in combined
     assert "公司级偿付能力对标报告" not in combined
     assert "companies" in combined
+    assert "Direct Premium Written" in combined
     print("PASS STEP7 英文模式：报告标题与模块文案切换为英文")
 
 
@@ -113,8 +114,27 @@ def test_step7_english_all_modules_have_no_chinese_ui_text() -> None:
     assert not leaked, "\n".join(leaked[:40])
 
 
+def test_switch_back_to_chinese_repaints_title_and_sidebar() -> None:
+    # 模拟用户在语言控件中选择“中文”：控件状态已变，但旧的 s7_language
+    # 仍是 en。页面必须在首次绘制前根据控件状态重新同步语言，标题和侧边栏
+    # 才能在同一次重跑中恢复中文。
+    at = _app_with_modules("en")
+    at.session_state["s7_language_display"] = "中文"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    markdown_text = "\n".join(item.value for item in at.markdown)
+    assert "公司级偿付能力对标报告" in markdown_text
+    assert "Company Solvency Benchmarking Report" not in markdown_text
+    sidebar_text = "\n".join(item.value for item in at.sidebar.markdown)
+    assert "行业分析导航" in sidebar_text
+    assert "Company report navigation" not in sidebar_text
+    assert at.session_state["s7_language"] == "zh"
+    print("PASS 英文切回中文：标题与左侧导航在同一次重跑中恢复中文")
+
+
 if __name__ == "__main__":
     test_step7_english_display()
     test_step7_chinese_display_by_default()
     test_step7_english_all_modules_have_no_chinese_ui_text()
+    test_switch_back_to_chinese_repaints_title_and_sidebar()
     print("全部通过")

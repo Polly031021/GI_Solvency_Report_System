@@ -506,7 +506,7 @@ def _premium_year_encoding(years: list[str]) -> alt.X:
     return alt.X(
         "年度:O",
         sort=years,
-        title=None,
+        title=t("年份", "Year"),
         scale=alt.Scale(paddingInner=0.22, paddingOuter=0.3),
         axis=_premium_year_axis(years),
     )
@@ -619,7 +619,7 @@ def build_premium_by_line_combo_chart(
             color=_readable_text_color(color),
         )
         .encode(
-            x=alt.X("年度:O", sort=year_labels, axis=None),
+            x=_premium_year_encoding(year_labels),
             y=alt.Y("金额标签位置:Q", scale=amount_scale, axis=None),
             text=alt.Text(f"{AMOUNT_COLUMN}:Q", format=",.0f"),
         )
@@ -643,7 +643,7 @@ def build_premium_by_line_combo_chart(
             ),
         )
         .encode(
-            x=alt.X("年度:O", sort=year_labels, axis=None),
+            x=_premium_year_encoding(year_labels),
             y=alt.Y(
                 f"{GROWTH_COLUMN}:Q",
                 title=growth_title,
@@ -684,7 +684,7 @@ def build_premium_by_line_combo_chart(
             color="#0C233C",
         )
         .encode(
-            x=alt.X("年度:O", sort=year_labels, axis=None),
+            x=_premium_year_encoding(year_labels),
             y=alt.Y("标签位置:Q", scale=growth_scale, axis=None),
             text=alt.Text("增速标签:N"),
         )
@@ -708,7 +708,7 @@ def build_premium_by_line_combo_chart(
                 color=MISSING_MARK_COLOR,
             )
             .encode(
-                x=alt.X("年度:O", sort=year_labels, axis=None),
+                x=_premium_year_encoding(year_labels),
                 y=alt.Y("标记位置:Q", scale=growth_scale, axis=None),
                 tooltip=[
                     alt.Tooltip("年度:N", title=t("年度", "Year")),
@@ -723,7 +723,7 @@ def build_premium_by_line_combo_chart(
         .properties(width=width)
     )
     return apply_industry_chart_theme(chart, height=height).properties(
-        padding={"top": 10, "right": 12, "bottom": 8, "left": 4}
+        padding={"top": 10, "right": 12, "bottom": 42, "left": 4}
     )
 
 def prepare_premium_by_line_overview(

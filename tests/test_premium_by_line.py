@@ -141,6 +141,11 @@ def test_combo_chart_layers_premium_bars_and_growth_line() -> None:
     # 折线与柱体使用不同颜色，避免同色导致走势看不清。
     assert line["mark"]["color"] != bars["mark"]["color"]
     assert line["mark"]["color"] == "#C2410C"
+    # 柱状图底部必须显示年份：所有图层共享同一条 x 轴，且图表底部留出空间。
+    x_channels = [layer["encoding"].get("x") for layer in spec["layer"]]
+    assert all(item is None or item.get("axis") is not None for item in x_channels)
+    assert x_channels[0]["title"] == "年份"
+    assert spec["padding"]["bottom"] >= 40
 
 
 def test_english_localisation_has_no_chinese() -> None:
