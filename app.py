@@ -36,10 +36,23 @@ from ui.step4_validation import render_validation_tab
 from ui.step5_integration import render_step5_review, render_integration_tab
 from ui.step6_analysis import render_analysis_sidebar, render_analysis_tab
 from ui.theme import render_analysis_tab_styles, render_app_styles
-from services.report_i18n import sync_language_from_display_control
+from services import report_i18n
 
 
 st.set_page_config(page_title="保险公司报告分析处理平台", page_icon="🛡️", layout="wide")
+
+
+def _sync_language_before_paint() -> None:
+    """Apply the persisted language control before sidebar and title render.
+
+    Kept inline (instead of importing a report_i18n helper) so a stale
+    Streamlit Cloud module cache cannot break the whole app import.
+    """
+    selected = st.session_state.get("s7_language_display")
+    if selected:
+        report_i18n.set_language(
+            report_i18n.LANGUAGE_LABELS.get(str(selected), report_i18n.LANG_ZH)
+        )
 
 
 def main() -> None:
@@ -53,7 +66,7 @@ def main() -> None:
     initialize_state()
     # 语言控件状态必须早于侧边栏和标题绘制，否则从英文切回中文时
     # 左侧导航与页面标题会沿用到下一次重跑才刷新。
-    sync_language_from_display_control()
+    _sync_language_before_paint()
     is_project_member = st.session_state.user_role == PROJECT_MEMBER_ROLE
     with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
         st.caption(
