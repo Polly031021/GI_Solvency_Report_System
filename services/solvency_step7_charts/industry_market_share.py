@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from ..report_i18n import t, unit_name
 from ..solvency_company_identity import (
     CompanyMaster,
     load_company_master_workbook,
@@ -70,6 +71,9 @@ CATEGORY_COLORS = {
     "农业保险": "#F1C44D",
     "其他": "#9AA6B2",
 }
+# Loss-making underwriting categories use a single warning colour and a
+# white hatch, so they remain distinguishable from the profit categories.
+LOSS_SECTOR_COLOR = "#C2410C"
 FALLBACK_COLORS = (
     LIGHT_PURPLE,
     LIGHT_GREEN,
@@ -373,10 +377,14 @@ def prepare_market_share_data(
 
     year, category, detail, coverage, company_count = best
     for metric in ("保费", "净利润", "承保利润"):
-        positive = pd.to_numeric(category[metric], errors="coerce").clip(lower=0)
-        total = float(positive.sum())
+        numeric = pd.to_numeric(category[metric], errors="coerce")
+        # Premium and net profit shares keep the usual positive-value basis.
+        # Underwriting profit uses absolute values so loss-making categories
+        # remain visible in the pie instead of being dropped.
+        magnitude = numeric.abs() if metric == "承保利润" else numeric.clip(lower=0)
+        total = float(magnitude.sum())
         category[f"{metric}占比"] = (
-            positive / total if total > 0 else pd.Series(0.0, index=category.index)
+            magnitude / total if total > 0 else pd.Series(0.0, index=category.index)
         )
     return MarketShareData(
         year=str(year),
@@ -386,6 +394,13 @@ def prepare_market_share_data(
         coverage=coverage,
         top_grouping=top_grouping,
     )
+
+
+def _signed_amount_label(value: float) -> str:
+    """Format a signed amount with an explicit sign for pie hover data."""
+    if value < 0:
+        return f"−{abs(value):,.1f}"
+    return f"+{value:,.1f}"
 
 
 def build_market_share_pies(
@@ -406,10 +421,17 @@ def build_market_share_pies(
         horizontal_spacing=0.08,
     )
     for index, metric in enumerate(("保费", "净利润", "承保利润")):
-        values = pd.to_numeric(categories[metric], errors="coerce").fillna(0).clip(lower=0)
-        plot = categories.loc[values.gt(0), ["公司类别"]].copy()
-        plot["金额"] = values.loc[values.gt(0)] / divisor
-        if float(plot["金额"].sum()) <= 0:
+        is_underwriting = metric == "承保利润"
+        raw = pd.to_numeric(categories[metric], errors="coerce").fillna(0)
+        # Premium and net profit keep the usual positive-value shares.  For
+        # underwriting profit, loss-making categories are included at their
+        # absolute value so the pie shows both profitable and loss categories.
+        magnitudes = raw.abs() if is_underwriting else raw.clip(lower=0)
+        mask = magnitudes.gt(0)
+        plot = categories.loc[mask, ["公司类别"]].copy()
+        plot["金额"] = raw.loc[mask] / divisor
+        plot["扇区值"] = magnitudes.loc[mask] / divisor
+        if float(plot["扇区值"].sum()) <= 0:
             fig.add_trace(
                 go.Pie(
                     labels=["无正值"],
@@ -422,18 +444,45 @@ def build_market_share_pies(
                 col=index + 1,
             )
             continue
-        total = float(plot["金额"].sum())
+        total = float(plot["扇区值"].sum())
         shares = [
             float(value) / total if total > 0 else 0.0
-            for value in plot["金额"]
+            for value in plot["扇区值"]
         ]
         # Keep labels inside the slices and show only percentages; category
         # names stay in the legend.  Outside labels with category names can
         # overlap the subplot title when the figure is placed in a report.
-        labels = [
-            f"{share:.1%}" if share >= 0.03 else ""
-            for share in shares
+        # Loss slices are sized by absolute value but are usually too narrow
+        # for inside text, which Plotly would clip into a misleading fragment;
+        # the renderer lists their amounts and shares below the chart instead.
+        labels: list[str] = []
+        for amount, share in zip(plot["金额"], shares):
+            if is_underwriting and float(amount) < 0:
+                labels.append("")
+            elif share < 0.03:
+                labels.append("")
+            else:
+                labels.append(f"{share:.1%}")
+        loss_flags = [
+            is_underwriting and float(amount) < 0 for amount in plot["金额"]
         ]
+        sector_colors = [
+            LOSS_SECTOR_COLOR if loss else color_map.get(category, "#9AA6B2")
+            for category, loss in zip(plot["公司类别"], loss_flags)
+        ]
+        if is_underwriting:
+            hover_template = (
+                "<b>%{label}</b><br>"
+                "承保利润：%{customdata} "
+                f"{unit}<br>"
+                "绝对值占比：%{percent:.1%}<extra></extra>"
+            )
+        else:
+            hover_template = (
+                "<b>%{label}</b><br>"
+                f"{metric}：%{{value:,.1f}} {unit}<br>"
+                "占比：%{percent:.1%}<extra></extra>"
+            )
         top_share = max(shares) if shares else 0.0
         # Rotate a dominant slice so the small remainder sits in the
         # bottom-right quadrant instead of crowding the upper-left labels.
@@ -445,14 +494,27 @@ def build_market_share_pies(
         fig.add_trace(
             go.Pie(
                 labels=plot["公司类别"],
-                values=plot["金额"],
+                values=plot["扇区值"],
+                customdata=(
+                    [
+                        _signed_amount_label(float(amount))
+                        for amount in plot["金额"]
+                    ]
+                    if is_underwriting
+                    else plot["金额"].tolist()
+                ),
                 hole=0,
                 sort=False,
                 direction="clockwise",
                 rotation=rotation,
                 marker=dict(
-                    colors=[color_map.get(value, "#9AA6B2") for value in plot["公司类别"]],
+                    colors=sector_colors,
                     line=dict(color="#FFFFFF", width=2),
+                    pattern=dict(
+                        shape=["/" if loss else "" for loss in loss_flags],
+                        fgcolor="#FFFFFF",
+                        bgcolor=sector_colors,
+                    ),
                 ),
                 text=labels,
                 textinfo="text",
@@ -466,11 +528,7 @@ def build_market_share_pies(
                 automargin=False,
                 showlegend=showlegend and index == 0,
                 name=metric,
-                hovertemplate=(
-                    "<b>%{label}</b><br>"
-                    f"{metric}：%{{value:,.1f}} {unit}<br>"
-                    "占比：%{percent:.1%}<extra></extra>"
-                ),
+                hovertemplate=hover_template,
             ),
             row=1,
             col=index + 1,
@@ -501,6 +559,356 @@ def build_market_share_pies(
     return fig
 
 
+def build_market_share_premium_pie(
+    data: MarketShareData,
+    *,
+    unit_mode: str = DEFAULT_DISPLAY_UNIT,
+) -> go.Figure:
+    """Render the premium market-share pie as a single full-width donut."""
+    unit = unit_mode if unit_mode in DISPLAY_UNITS else DEFAULT_DISPLAY_UNIT
+    divisor = DIVISOR_BY_UNIT[unit]
+    categories = data.categories.copy()
+    color_map = _category_color_map(categories["公司类别"].tolist())
+    raw = pd.to_numeric(categories["保费"], errors="coerce").fillna(0)
+    mask = raw.gt(0)
+    plot = categories.loc[mask, ["公司类别"]].copy()
+    plot["金额"] = raw.loc[mask] / divisor
+    total = float(plot["金额"].sum())
+    if total <= 0:
+        return go.Figure()
+
+    shares = [float(value) / total for value in plot["金额"]]
+    labels = [
+        f"{share:.1%}" if share >= 0.025 else ""
+        for share in shares
+    ]
+    top_share = max(shares) if shares else 0.0
+    rotation = (
+        (315.0 + top_share * 360.0 - 90.0) % 360.0
+        if top_share >= 0.5
+        else 0.0
+    )
+    fig = go.Figure(
+        go.Pie(
+            labels=plot["公司类别"],
+            values=plot["金额"],
+            hole=0.46,
+            sort=False,
+            direction="clockwise",
+            rotation=rotation,
+            marker=dict(
+                colors=[
+                    color_map.get(category, "#9AA6B2")
+                    for category in plot["公司类别"]
+                ],
+                line=dict(color="#FFFFFF", width=3),
+            ),
+            text=labels,
+            textinfo="text",
+            textposition="inside",
+            insidetextorientation="horizontal",
+            textfont=dict(
+                family=REPORT_FONT,
+                size=11,
+                color="#FFFFFF",
+            ),
+            hovertemplate=(
+                "<b>%{label}</b><br>"
+                f"{t('保费', 'Premium')}：%{{value:,.1f}} "
+                f"{unit_name(unit)}<br>"
+                f"{t('占比', 'Share')}：%{{percent:.1%}}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        height=440,
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        margin=dict(t=8, b=8, l=8, r=8),
+        showlegend=False,
+        annotations=[
+            dict(
+                text=t("保费合计", "Total premium"),
+                x=0.5,
+                y=0.545,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(
+                    family=REPORT_FONT,
+                    size=12,
+                    color=REPORT_AXIS_COLOR,
+                ),
+            ),
+            dict(
+                text=f"{total:,.1f}",
+                x=0.5,
+                y=0.485,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(
+                    family=REPORT_FONT,
+                    size=25,
+                    color=PRIMARY_BLUE,
+                ),
+            ),
+            dict(
+                text=unit_name(unit),
+                x=0.5,
+                y=0.425,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(
+                    family=REPORT_FONT,
+                    size=12,
+                    color=REPORT_AXIS_COLOR,
+                ),
+            ),
+        ],
+        font=dict(family=REPORT_FONT, color=REPORT_TEXT_COLOR, size=11),
+        hoverlabel=dict(
+            bgcolor="#FFFFFF",
+            bordercolor=REPORT_DOMAIN_COLOR,
+            font=dict(family=REPORT_FONT, size=11, color=REPORT_TEXT_COLOR),
+        ),
+    )
+    return fig
+
+
+def build_market_share_profit_bars(
+    data: MarketShareData,
+    *,
+    unit_mode: str = DEFAULT_DISPLAY_UNIT,
+) -> go.Figure:
+    """Render premium, net profit and underwriting profit with share labels.
+
+    The first row keeps the signed-premium amount bars and uses the right-hand
+    axis for each category's share of total signed premium.  The second row
+    keeps net profit and underwriting profit together as grouped bars; the
+    percentage above each bar is the category's share of that metric's
+    absolute-value total, so loss-making categories stay negative.
+    """
+    unit = unit_mode if unit_mode in DISPLAY_UNITS else DEFAULT_DISPLAY_UNIT
+    divisor = DIVISOR_BY_UNIT[unit]
+    categories = data.categories.copy()
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.16,
+        row_heights=[0.45, 0.55],
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
+        subplot_titles=(
+            t("签单保费", "Signed premium"),
+            t("净利润 / 承保利润", "Net profit / Underwriting profit"),
+        ),
+    )
+    x_values = categories["公司类别"].tolist()
+    premium_values = (
+        pd.to_numeric(categories["保费"], errors="coerce").fillna(0) / divisor
+    ).tolist()
+    premium_total = float(sum(abs(value) for value in premium_values))
+    premium_shares = [
+        (float(value) / premium_total if premium_total else 0.0)
+        for value in premium_values
+    ]
+    premium_high = max([0.0, *premium_values])
+    premium_pad = max(premium_high * 0.14, 1.0)
+    premium_high_pad = premium_high + premium_pad
+    fig.add_trace(
+        go.Bar(
+            x=x_values,
+            y=premium_values,
+            name=t("签单保费", "Signed premium"),
+            marker_color=PRIMARY_BLUE,
+            customdata=premium_shares,
+            text=[f"{share:.1%}" for share in premium_shares],
+            textposition="outside",
+            textfont=dict(family=REPORT_FONT, size=8.5, color="#0C233C"),
+            cliponaxis=False,
+            showlegend=False,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                f"{t('签单保费', 'Signed premium')}"
+                f"{t('：', ': ')}%{{y:,.1f}} {unit_name(unit)}<br>"
+                f"{t('占签单保费合计', 'Share of total signed premium')}"
+                f"{t('：', ': ')}%{{customdata:.1%}}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    # An invisible point keeps the right-hand percentage axis visible even
+    # though the bars themselves are plotted against the amount axis.
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=[0.0] * len(x_values),
+            mode="markers",
+            marker=dict(opacity=0.0, size=1),
+            showlegend=False,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+    fig.update_yaxes(
+        title_text=t(
+            f"签单保费（{unit}）",
+            f"Signed premium ({unit_name(unit)})",
+        ),
+        row=1,
+        col=1,
+        secondary_y=False,
+        showgrid=True,
+        gridcolor=REPORT_GRID_COLOR,
+        gridwidth=1,
+        range=[0.0, premium_high_pad],
+        zeroline=False,
+        tickfont=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+        title_font=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+    )
+    if premium_total:
+        premium_share_max = max(0.8, premium_high_pad / premium_total)
+        fig.update_yaxes(
+            title_text=t("占比（%）", "Share (%)"),
+            row=1,
+            col=1,
+            secondary_y=True,
+            side="right",
+            showgrid=False,
+            range=[0.0, premium_share_max],
+            tickformat=".0%",
+            dtick=0.2,
+            zeroline=False,
+            tickfont=dict(family=REPORT_FONT, size=9, color=REPORT_AXIS_COLOR),
+            title_font=dict(
+                family=REPORT_FONT,
+                size=10,
+                color=REPORT_AXIS_COLOR,
+            ),
+        )
+    profit_metrics = (
+        ("净利润", PACIFIC_BLUE, t("净利润", "Net profit")),
+        ("承保利润", PINK, t("承保利润", "Underwriting profit")),
+    )
+    profit_low = 0.0
+    profit_high = 0.0
+    for metric, color, english_name in profit_metrics:
+        values = (
+            pd.to_numeric(categories[metric], errors="coerce").fillna(0) / divisor
+        ).tolist()
+        # Shares use the absolute-value total so positive and loss-making
+        # categories add up to 100% while loss categories stay negative.
+        denominator = float(sum(abs(value) for value in values))
+        shares = [
+            (float(value) / denominator if denominator else 0.0)
+            for value in values
+        ]
+        low = min([0.0, *values])
+        high = max([0.0, *values])
+        profit_low = min(profit_low, low)
+        profit_high = max(profit_high, high)
+        fig.add_trace(
+            go.Bar(
+                x=x_values,
+                y=values,
+                name=english_name,
+                marker_color=color,
+                customdata=shares,
+                text=[f"{share:.1%}" for share in shares],
+                textposition="outside",
+                textfont=dict(
+                    family=REPORT_FONT,
+                    size=8.5,
+                    color="#0C233C",
+                ),
+                cliponaxis=False,
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    f"{english_name}"
+                    f"{t('：', ': ')}%{{y:,.1f}} {unit_name(unit)}<br>"
+                    f"{t('占该指标绝对值合计', 'Share of the metric absolute-value total')}"
+                    f"{t('：', ': ')}%{{customdata:.1%}}<extra></extra>"
+                ),
+            ),
+            row=2,
+            col=1,
+            secondary_y=False,
+        )
+    profit_span = profit_high - profit_low
+    profit_pad = profit_span * 0.18 if profit_span > 0 else max(abs(profit_high), 1.0) * 0.15
+    fig.update_yaxes(
+        title_text=t(
+            f"净利润 / 承保利润（{unit}）",
+            f"Net profit / Underwriting profit ({unit_name(unit)})",
+        ),
+        row=2,
+        col=1,
+        secondary_y=False,
+        showgrid=True,
+        gridcolor=REPORT_GRID_COLOR,
+        gridwidth=1,
+        range=[profit_low - profit_pad, profit_high + profit_pad],
+        zeroline=True,
+        zerolinecolor="#9AA6B2",
+        tickfont=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+        title_font=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+    )
+    fig.update_xaxes(
+        title=None,
+        row=1,
+        col=1,
+        showticklabels=False,
+        showline=True,
+        linecolor=REPORT_DOMAIN_COLOR,
+        linewidth=1,
+        ticks="",
+    )
+    fig.update_xaxes(
+        title=None,
+        row=2,
+        col=1,
+        showline=True,
+        linecolor=REPORT_DOMAIN_COLOR,
+        linewidth=1,
+        ticks="",
+        tickfont=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+    )
+    fig.update_layout(
+        height=640,
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        margin=dict(t=58, b=76, l=76, r=68),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.13,
+            x=0.5,
+            xanchor="center",
+            font=dict(family=REPORT_FONT, size=10, color=REPORT_TEXT_COLOR),
+            bgcolor="rgba(0,0,0,0)",
+            borderwidth=0,
+        ),
+        barmode="group",
+        bargap=0.34,
+        bargroupgap=0.06,
+        font=dict(family=REPORT_FONT, color=REPORT_TEXT_COLOR, size=11),
+        hoverlabel=dict(
+            bgcolor="#FFFFFF",
+            bordercolor=REPORT_DOMAIN_COLOR,
+            font=dict(family=REPORT_FONT, size=11, color=REPORT_TEXT_COLOR),
+        ),
+    )
+    fig.update_annotations(
+        font=dict(family=REPORT_FONT, size=11.5, color=PRIMARY_BLUE)
+    )
+    return fig
 def build_market_share_amount_bars(
     data: MarketShareData,
     *,

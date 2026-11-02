@@ -55,9 +55,32 @@ def build_metric_trend_group(
     group_index: int = 1,
     group_count: int = 1,
     show_average: bool = False,
+    average_frame: pd.DataFrame | None = None,
 ) -> alt.Chart:
     companies = list(dict.fromkeys(metric["公司"].astype(str)))
     scale = company_scale(companies, company_colors)
+    average_data: pd.DataFrame | None = None
+    if show_average and code == "INVESTMENT_RETURN":
+        if isinstance(average_frame, pd.DataFrame) and not average_frame.empty:
+            average_data = average_frame.copy()
+            average_data["公司"] = "全行业平均"
+        else:
+            # 兼容直接调用本函数的旧路径：没有单独传入全行业数据时，
+            # 退回到当前绘图范围的平均值。
+            average_data = (
+                metric.groupby("报告期", as_index=False)["数值"]
+                .mean()
+                .assign(公司="所选公司平均")
+            )
+        average_data["_报告期顺序"] = average_data["报告期"].astype(str).map(
+            {str(period): index for index, period in enumerate(periods)}
+        )
+        average_data = average_data.sort_values("_报告期顺序")
+        # 全行业均线可能落在展示公司数值范围之外，纵轴需要同时容纳均线。
+        combined_values = pd.concat(
+            [metric[["数值"]], average_data[["数值"]]], ignore_index=True
+        )
+        y_domain = trend_y_domain(combined_values, code)
     label_format = TREND_LABEL_FORMATS.get(code, ",.2f")
     if code in COMPACT_TREND_SCALE_CODES:
         y_axis = alt.Axis(format=".5f", tickCount=6)
@@ -169,15 +192,7 @@ def build_metric_trend_group(
             )
         )
     if show_average and code == "INVESTMENT_RETURN":
-        average = (
-            metric.groupby("报告期", as_index=False)["数值"]
-            .mean()
-            .assign(公司="所选公司平均")
-        )
-        average["_报告期顺序"] = average["报告期"].astype(str).map(
-            {str(period): index for index, period in enumerate(periods)}
-        )
-        average = average.sort_values("_报告期顺序")
+        average = average_data
         average_line = (
             alt.Chart(average)
             .mark_line(
@@ -205,7 +220,7 @@ def build_metric_trend_group(
                 ),
                 tooltip=[
                     alt.Tooltip("报告期:N", title="报告期"),
-                    alt.Tooltip("数值:Q", title="所选公司平均投资收益率（%）", format=",.2f"),
+                    alt.Tooltip("数值:Q", title="全行业平均投资收益率（%）", format=",.2f"),
                 ],
             )
         )
@@ -404,6 +419,7 @@ def build_single_metric_trend_chart(
     company_colors: Mapping[str, str],
     highlight_company: str = "",
     show_average: bool = False,
+    average_frame: pd.DataFrame | None = None,
 ) -> alt.Chart:
     """Return one point-line trend chart (kept for small selections and callers)."""
     metric, periods, name, y_domain = prepare_metric_trend(
@@ -418,6 +434,7 @@ def build_single_metric_trend_chart(
         highlight_company,
         y_domain,
         show_average=show_average,
+        average_frame=average_frame,
     )
 
 
@@ -428,6 +445,7 @@ def build_single_metric_trend_charts(
     company_colors: Mapping[str, str],
     highlight_company: str = "",
     show_average: bool = False,
+    average_frame: pd.DataFrame | None = None,
 ) -> list[alt.Chart]:
     """Return one trend chart containing every selected company."""
     return [
@@ -438,6 +456,7 @@ def build_single_metric_trend_charts(
             company_colors,
             highlight_company,
             show_average=show_average,
+            average_frame=average_frame,
         )
     ]
 

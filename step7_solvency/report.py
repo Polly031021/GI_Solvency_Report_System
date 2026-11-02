@@ -50,7 +50,6 @@ from services.report_i18n import (
     is_english,
     level_name,
     set_language,
-    sync_language_from_display_control,
     t,
     translate_dataframe,
     translate_default_analysis,
@@ -135,8 +134,15 @@ def _company_option_label(value: object) -> str:
 
 
 def _sync_language_from_control() -> None:
-    """Apply the language widget before the next script run repaints the page."""
-    sync_language_from_display_control()
+    """Apply the language widget before the next script run repaints the page.
+
+    Kept local to this module so app.py does not depend on a helper that may be
+    missing from an older cached deploy of services.report_i18n.
+    """
+    control_key = "s7_language_display"
+    selected = st.session_state.get(control_key)
+    if selected:
+        set_language(LANGUAGE_LABELS.get(str(selected), LANG_ZH))
 
 
 def show_step_7_solvency(
@@ -569,6 +575,7 @@ def show_step_7_solvency(
                                         if module
                                         else False
                                     ),
+                                    industry_frame=frame,
                                 )
                         else:
                             try:

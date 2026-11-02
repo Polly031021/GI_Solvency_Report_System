@@ -182,6 +182,8 @@ from .industry_market_share import (
     TOP4_10_CATEGORY,
     build_market_share_amount_bars,
     build_market_share_pies,
+    build_market_share_premium_pie,
+    build_market_share_profit_bars,
     market_share_category_colors,
     prepare_market_share_data,
 )
@@ -304,6 +306,8 @@ __all__ = [
     "MarketShareData",
     "build_market_share_amount_bars",
     "build_market_share_pies",
+    "build_market_share_premium_pie",
+    "build_market_share_profit_bars",
     "market_share_category_colors",
     "prepare_market_share_data",
     "TOP10_CATEGORY",

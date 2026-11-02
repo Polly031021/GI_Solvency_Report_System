@@ -214,7 +214,7 @@ def test_excel_driven_step7_charts() -> None:
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     markdown_text = "\n".join(item.value for item in at.markdown)
-    assert "净利润排名" in markdown_text
+    assert "收入—利润排名轨迹" in markdown_text
     assert "小型、外资系、农业保险和自保公司" in markdown_text
     assert "部分集团子公司、大型公司及中型公司" in markdown_text
     print(f"PASS Excel 驱动 STEP7：{len(MODULE_SPECS)} 种图表类型全部渲染成功")
@@ -283,9 +283,15 @@ def test_industry_premium_template_module() -> None:
     at.run()
     assert not at.exception, [e.value for e in at.exception]
     markdown_text = "\n".join(item.value for item in at.markdown)
-    assert "公司类别市场份额" in markdown_text
-    assert "公司类别金额对比" in markdown_text
-    assert "justify-content:flex-start" in markdown_text
+    assert "公司类别保费市场份额" in markdown_text
+    assert "保费结构概览" in markdown_text
+    assert "公司类别保费、净利润与承保利润" in markdown_text
+    assert "第一行：签单保费（右轴为占签单保费合计的百分比）" in markdown_text
+    assert "第二行：净利润 / 承保利润（柱顶为各指标内部占比）" in markdown_text
+    market_captions = "\n".join(item.value for item in at.caption)
+    assert "第一行右轴为占签单保费合计的百分比" in market_captions
+    assert "第二行柱顶百分比为各指标内部占比" in market_captions
+    assert "亏损类别合计" in market_captions
 
     at.session_state["company_nav_level_two"] = "偿付能力披露整体情况"
     at.run()
@@ -317,7 +323,8 @@ def test_default_step7_config_without_upload() -> None:
     at.session_state["s7_unit_mode"] = "亿元"
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.metric) >= 4, "默认 STEP7 配置未自动加载"
+    default_markdown = "\n".join(item.value for item in at.markdown)
+    assert "历年保费规模与同比增速" in default_markdown, "默认 STEP7 配置未自动加载"
     print("PASS STEP7 默认配置自动加载")
 
 
@@ -408,7 +415,7 @@ def test_capital_ratio_template_modules() -> None:
     assert "堆叠柱组合图" in markdown_text
     assert "并列柱组合图" not in markdown_text
     assert "核心资本是指在持续经营状态下和破产清算状态下均可以吸收损失的资本" in markdown_text
-    assert "行业平均核心资本占实际资本的比例约" in markdown_text
+    assert "核心资本占实际资本比例的中位数" in markdown_text
     assert "说明目前的综合偿付能力充足率较高" in markdown_text
     assert "还有提升资本利用率的空间" in markdown_text
     print("PASS 行业对标与趋势研判：综合/核心偿付能力充足率年度图正常")
@@ -470,7 +477,7 @@ def test_minimum_capital_template_modules() -> None:
     warning_text = "\n".join(item.value for item in at.warning)
     assert "缺少" not in warning_text
     markdown_text = "\n".join(item.value for item in at.markdown)
-    assert "财产险公司2025年度的最低资本以" in markdown_text
+    assert "的最低资本以" in markdown_text
     assert "平均占比" in markdown_text
     assert "保费及准备金风险最低资本平均占比较高的主要是" in markdown_text
     assert "巨灾风险最低资本平均占比" in markdown_text

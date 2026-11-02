@@ -166,6 +166,7 @@ def render_report_metric(
     company_panels: bool = False,
     company_period_bars: bool = False,
     annual_labels: bool = False,
+    industry_frame: pd.DataFrame | None = None,
 ) -> None:
     metric_frame = filter_analysis_frame(frame, metric_code=code, periods=periods)
     if metric_frame.empty:
@@ -196,6 +197,33 @@ def render_report_metric(
             return
     else:
         ordered_periods = sort_report_periods(metric_frame["报告期"])
+
+    # 投资收益率图中的平均虚线使用全行业所有公司，而不是仅当前展示公司，
+    # 因此单独从完整的行业明细中重算，保持与展示筛选无关。
+    industry_average: pd.DataFrame | None = None
+    if (
+        code == "INVESTMENT_RETURN"
+        and show_average
+        and isinstance(industry_frame, pd.DataFrame)
+        and not industry_frame.empty
+    ):
+        industry_metric = filter_analysis_frame(
+            industry_frame, metric_code=code, periods=periods
+        )
+        if not industry_metric.empty:
+            industry_metric = convert_unit(industry_metric, unit_mode)
+            industry_metric = convert_multiple_units_to_percent(industry_metric)
+            if annual_labels:
+                industry_metric, _ = prepare_annual_metric_frame(industry_metric)
+            industry_metric = industry_metric.drop_duplicates(
+                subset=["公司", "报告期", "指标编码"], keep="last"
+            )
+            if not industry_metric.empty:
+                industry_average = (
+                    industry_metric.groupby("报告期", as_index=False)["数值"]
+                    .mean()
+                )
+
     if code == "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES":
         risk_pressure_text = insurance_risk_liability_pressure_sentence(
             metric_frame,
@@ -370,7 +398,7 @@ def render_report_metric(
             external_legend.append(
                 (
                     "#94A3B8",
-                    t("所选公司平均投资收益率", "Selected-company average return"),
+                    t("全行业平均投资收益率", "Industry average return"),
                     "dash",
                 )
             )
@@ -383,6 +411,7 @@ def render_report_metric(
             company_color_map(metric_frame["公司"], highlight_company),
             highlight_company,
             show_average=show_average,
+            average_frame=industry_average,
         )
         if len(charts) > 1:
             st.markdown(

@@ -103,14 +103,14 @@ def test_plotly_pie_labels_and_layout_are_english() -> None:
     assert list(bars.data[0].x) == ["Top 3", "Large companies"]
 
 
-def test_company_names_are_not_mangled() -> None:
+def test_company_names_are_localised_in_english() -> None:
     chart = alt.Chart(pd.DataFrame({"公司": ["国元农险"], "数值": [1]})).mark_bar().encode(
         x="公司:N",
         y="数值:Q",
     )
     spec = localize_chart(chart, "en").to_dict()
     dataset = next(iter(spec["datasets"].values()))
-    assert dataset[0]["公司"] == "国元农险"
+    assert dataset[0]["公司"] == "Guoyuan Agricultural"
     assert translate_text("类型", "en") == "Type"
     table = translate_dataframe(
         pd.DataFrame(
@@ -122,7 +122,7 @@ def test_company_names_are_not_mangled() -> None:
         ),
         "en",
     )
-    assert table.loc[0, "Company"] == "国元农险"
+    assert table.loc[0, "Company"] == "Guoyuan Agricultural"
 
 
 def test_bundled_module_notes_are_translated() -> None:
@@ -152,6 +152,6 @@ def test_bundled_module_notes_are_translated() -> None:
 if __name__ == "__main__":
     test_altair_domain_and_values_are_translated()
     test_plotly_pie_labels_and_layout_are_english()
-    test_company_names_are_not_mangled()
+    test_company_names_are_localised_in_english()
     test_bundled_module_notes_are_translated()
     print("全部通过")

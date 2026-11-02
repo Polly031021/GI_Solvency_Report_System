@@ -36,8 +36,8 @@ from services.solvency_step7_charts import (
     build_company_line_trend_chart,
     build_industry_premium_mix_chart,
     build_industry_premium_total_chart,
-    build_market_share_amount_bars,
-    build_market_share_pies,
+    build_market_share_premium_pie,
+    build_market_share_profit_bars,
     market_share_category_colors,
     build_structure_change_chart,
     build_premium_growth_structure_chart,
@@ -128,8 +128,6 @@ from .specs import (
     RISK_SCATTER_DUAL_VIEW_CHARTS,
     DEFAULT_CAPABILITY_AXES,
     CAPABILITY_PERCENTILE_FLOOR,
-    CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
-    CAPABILITY_GROUP_SCORE_FLOORS,
 )
 from .underwriting import render_underwriting_efficiency_scatter
 from .insight_cards import render_insight_card
@@ -172,8 +170,6 @@ def _cached_capability_scores(
     axes_config_json: str,
     periods: tuple[str, ...],
     score_floor: float,
-    benchmark_groups: tuple[str, ...],
-    group_score_floors_json: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """Score the full company universe once, before display filtering."""
     axes_config = json.loads(axes_config_json)
@@ -187,8 +183,6 @@ def _cached_capability_scores(
         list(periods),
         baseline_frame=baseline,
         score_floor=score_floor,
-        industry_benchmark_groups=frozenset(benchmark_groups),
-        group_score_floors=json.loads(group_score_floors_json),
     )
 
 
@@ -1834,28 +1828,6 @@ def render_plan_capability_radar(
         score_floor = CAPABILITY_PERCENTILE_FLOOR
     score_floor = min(100.0, max(0.0, score_floor))
 
-    configured_groups = cfg.get("industry_benchmark_groups")
-    if isinstance(configured_groups, (list, tuple, set)):
-        benchmark_groups = frozenset(
-            str(name).strip() for name in configured_groups if str(name).strip()
-        )
-    else:
-        benchmark_groups = CAPABILITY_INDUSTRY_BENCHMARK_GROUPS
-
-    configured_floors = cfg.get("group_score_floors")
-    if isinstance(configured_floors, dict):
-        group_score_floors = {
-            str(group): {
-                str(axis): float(value)
-                for axis, value in mapping.items()
-                if isinstance(mapping, dict)
-            }
-            for group, mapping in configured_floors.items()
-            if isinstance(mapping, dict)
-        }
-    else:
-        group_score_floors = CAPABILITY_GROUP_SCORE_FLOORS
-
     score_source = (
         industry_frame
         if isinstance(industry_frame, pd.DataFrame) and not industry_frame.empty
@@ -1870,8 +1842,6 @@ def render_plan_capability_radar(
         json.dumps(axes_config, ensure_ascii=False, sort_keys=True),
         tuple(str(period) for period in periods),
         score_floor,
-        tuple(sorted(benchmark_groups)),
-        json.dumps(group_score_floors, ensure_ascii=False, sort_keys=True),
     )
     display_companies = set(chart_frame["公司"].dropna().astype(str))
     score_all = score_full[
@@ -1963,20 +1933,17 @@ def render_plan_capability_radar(
         if c not in ordered_categories:
             ordered_categories.append(c)
 
-    # ---------- 组内参考五边形：各顶点得分中位数 ----------
+    # ---------- 全行业参考五边形：各顶点得分中位数 ----------
+    # 所有分类共用同一参考线，避免“前三大”与“中小公司”各自与组内中位数比较。
     score_columns = [f"{label}_得分" for label in axes_labels]
     score_matrix = score_all[score_columns].apply(pd.to_numeric, errors="coerce")
     company_avg = score_matrix.mean(axis=1, skipna=True)
-    category_reference: dict[str, list[float]] = {}
-    for category in ordered_categories:
-        cat_scores_for_ref = score_full[
-            score_full["_分类"].astype(str).eq(category)
-        ]
-        reference: list[float] = []
-        for column in score_columns:
-            values = pd.to_numeric(cat_scores_for_ref[column], errors="coerce").dropna()
-            reference.append(float(values.median()) if not values.empty else float("nan"))
-        category_reference[category] = reference
+    industry_reference: list[float] = []
+    for column in score_columns:
+        values = pd.to_numeric(score_full[column], errors="coerce").dropna()
+        industry_reference.append(
+            float(values.median()) if not values.empty else float("nan")
+        )
 
     # ---------- 图表上方的总结性解读 ----------
     overall_avg = float(company_avg.mean()) if company_avg.notna().any() else None
@@ -2087,18 +2054,18 @@ def render_plan_capability_radar(
             "资本实力、盈利能力、业务拓展按行业相对位次打分，"
             "承保风控能力按综合成本率相对行业平均值打分（行业平均=60 分，越低越优），"
             "偿付能力按绝对档位打分。"
-            f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展单独映射到 70–100 分。"
-            "评分先对全量公司完成并缓存，展示公司筛选只过滤雷达图；"
-            "灰色虚线为本组各顶点中位数。",
+            f"排名得分映射到 {score_floor:.0f}–100 分。"
+            "所有公司统一以全行业为基准；评分先对全量公司完成并缓存，"
+            "展示公司筛选只过滤雷达图；灰色虚线为全行业各顶点中位数。",
             "The five vertices are capital strength, solvency, profitability, underwriting "
             "risk control and business expansion. Capital strength, profitability and business "
             "expansion are rank-scored against the industry; underwriting "
             "risk control is scored against the industry-average combined ratio "
             "(average = 60; lower is better); solvency "
-            f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
-            "expansion axis uses 70–100. The full company universe is scored and cached first; "
-            "the display-company filter only hides radar charts. The grey dashed pentagon is the "
-            "group median for each axis.",
+            f"uses absolute bands. Rank scores map to {score_floor:.0f}–100. All companies are "
+            "benchmarked against the full industry. The full company universe is scored and "
+            "cached first; the display-company filter only hides radar charts. The grey dashed "
+            "pentagon is the industry median for each axis.",
         ),
     )
 
@@ -2111,18 +2078,18 @@ def render_plan_capability_radar(
             "资本实力、盈利能力、业务拓展按行业相对位次；"
             "承保风控能力按综合成本率相对行业平均（60 分）打分；"
             "偿付能力按绝对档位打分。"
-            f"排名得分映射到 {score_floor:.0f}–100 分；前三大业务拓展按 70–100 分映射。"
-            "评分先对全量公司完成并缓存，展示公司筛选只改变显示的雷达图；"
-            "灰色虚线为本组各顶点中位数。",
+            f"排名得分映射到 {score_floor:.0f}–100 分。"
+            "所有公司统一以全行业为基准；评分先对全量公司完成并缓存，"
+            "展示公司筛选只改变显示的雷达图；灰色虚线为全行业各顶点中位数。",
             f"Showing {latest_period}; one capability pentagon per company, grouped by peer group. "
             f"Vertices: {', '.join(axes_labels)}. "
             "Capital strength, profitability and business expansion are rank-scored against the "
             "industry; underwriting risk control is scored against the industry-average combined "
             "ratio (60); solvency "
-            f"uses absolute bands. Rank scores map to {score_floor:.0f}–100; the Top 3 business-"
-            "expansion axis uses a 70–100 scale. The full company universe is scored and cached "
-            "first; the display filter only changes which radar charts are shown. The grey dashed "
-            "pentagon is the group median for each axis.",
+            f"uses absolute bands. Rank scores map to {score_floor:.0f}–100. All companies are "
+            "benchmarked against the full industry. The full company universe is scored and "
+            "cached first; the display filter only changes which radar charts are shown. The grey "
+            "dashed pentagon is the industry median for each axis.",
         )
     )
 
@@ -2178,7 +2145,7 @@ def render_plan_capability_radar(
                     ["公司", *score_columns_for_grid]
                 ].itertuples(index=False, name=None)
             )
-            reference = tuple(category_reference.get(category) or ())
+            reference = tuple(industry_reference)
             try:
                 chart = _cached_capability_grid(
                     score_rows,
@@ -3104,61 +3071,132 @@ def render_plan_industry_market_share(
         ),
     )
 
+    net_amounts = (
+        pd.to_numeric(data.categories["净利润"], errors="coerce").fillna(0)
+        / divisor
+    )
+    underwriting_amounts = (
+        pd.to_numeric(data.categories["承保利润"], errors="coerce").fillna(0)
+        / divisor
+    )
+    net_total = float(net_amounts.sum())
+    underwriting_profit = float(
+        underwriting_amounts[underwriting_amounts > 0].sum()
+    )
+    underwriting_loss = float(
+        underwriting_amounts[underwriting_amounts < 0].sum()
+    )
+    underwriting_net = float(underwriting_amounts.sum())
+
     st.markdown(
         t(
-            f"<div class='s7-uw-year-title'>公司类别市场份额（{data.year} 年）</div>"
-            f"<div class='s7-uw-year-sub'>保费 / 净利润 / 承保利润占比 · {grouping_note}</div>",
-            f"<div class='s7-uw-year-title'>Company category market share ({data.year})</div>"
-            f"<div class='s7-uw-year-sub'>Premium / net profit / underwriting profit share · {grouping_note}</div>",
+            f"<div class='s7-uw-year-title'>公司类别保费市场份额（{data.year} 年）</div>"
+            f"<div class='s7-uw-year-sub'>保费 · {grouping_note}</div>",
+            f"<div class='s7-uw-year-title'>Company category premium market share ({data.year})</div>"
+            f"<div class='s7-uw-year-sub'>Premium · {grouping_note}</div>",
         ),
         unsafe_allow_html=True,
     )
     category_colors = market_share_category_colors(
         data.categories["公司类别"].astype(str).tolist()
     )
-    render_chart_legend(
-        [
-            (category_colors.get(category, "#9AA6B2"), category, "square")
-            for category in data.categories["公司类别"].astype(str).tolist()
-        ],
-        align="left",
-    )
-    pie_chart = build_market_share_pies(
-        data,
-        unit_mode=unit_mode,
-        showlegend=False,
-    )
-    st.plotly_chart(
-        localize_plotly(pie_chart),
-        width="stretch",
-        key=f"{key_prefix}_market_share_pies",
-    )
-    st.caption(
-        t(
-            "饼图展示各指标正值占比，负值不计入占比。",
-            "Pies show positive values only; negative values are excluded from shares.",
+    side_rows = []
+    for _, category_row in data.categories.sort_values(
+        "保费", ascending=False
+    ).iterrows():
+        category_label_zh = str(category_row["公司类别"])
+        category_color = category_colors.get(category_label_zh, "#9AA6B2")
+        category_share = float(
+            pd.to_numeric(
+                pd.Series([category_row["保费占比"]]), errors="coerce"
+            ).fillna(0).iloc[0]
         )
+        side_rows.append(
+            "<div class='s7-market-side__row'>"
+            f"<i style='background:{escape(category_color)}'></i>"
+            f"<span>{escape(category_name(category_label_zh))}</span>"
+            f"<b>{category_share:.1%}</b>"
+            "</div>"
+        )
+    lead_category = data.categories.sort_values(
+        "保费", ascending=False
+    ).iloc[0]
+    lead_name = str(lead_category["公司类别"])
+    lead_name_en = category_name(lead_name)
+    lead_premium_share = float(lead_category["保费占比"])
+    lead_net_share = float(lead_category["净利润占比"])
+    lead_underwriting_share = float(lead_category["承保利润占比"])
+    side_panel = (
+        "<div class='s7-market-side'>"
+        f"<div class='s7-market-side__title'>"
+        f"{t('保费结构概览', 'Premium structure')}</div>"
+        "<div class='s7-market-side__stats'>"
+        "<div class='s7-market-side__stat'>"
+        f"<span>{t('签单保费合计', 'Total signed premium')}</span>"
+        f"<strong>{premium_total:,.1f}<small>{unit_name(unit)}</small></strong>"
+        "</div>"
+        "<div class='s7-market-side__stat'>"
+        f"<span>{t('净利润合计', 'Total net profit')}</span>"
+        f"<strong>{net_total:+,.1f}<small>{unit_name(unit)}</small></strong>"
+        "</div>"
+        "<div class='s7-market-side__stat'>"
+        f"<span>{t('承保利润净额', 'Net underwriting profit')}</span>"
+        f"<strong>{underwriting_net:+,.1f}<small>{unit_name(unit)}</small></strong>"
+        "</div>"
+        "</div>"
+        f"<div class='s7-market-side__label'>"
+        f"{t('类别保费占比', 'Premium share by category')}</div>"
+        "<div class='s7-market-side__list'>"
+        f"{''.join(side_rows)}"
+        "</div>"
+        f"<div class='s7-market-side__insight'>"
+        f"{t(f'{lead_name} 贡献 {lead_premium_share:.1%} 的签单保费；净利润占比 {lead_net_share:.1%}，承保利润占比 {lead_underwriting_share:.1%}。', f'{lead_name_en} accounts for {lead_premium_share:.1%} of signed premium; its net profit share is {lead_net_share:.1%} and underwriting profit share is {lead_underwriting_share:.1%}.')}"
+        "</div>"
+        f"<div class='s7-market-side__note'>"
+        f"{t('占比按签单保费合计计算；承保利润含亏损类别。', 'Shares are based on total signed premium; underwriting profit includes loss-making categories.')}"
+        "</div>"
+        "</div>"
     )
-
+    left_column, right_column = st.columns([0.58, 0.42], gap="medium")
+    with left_column:
+        premium_pie = build_market_share_premium_pie(data, unit_mode=unit_mode)
+        st.plotly_chart(
+            localize_plotly(premium_pie),
+            width="stretch",
+            key=f"{key_prefix}_market_share_premium_pie",
+        )
+    with right_column:
+        st.markdown(side_panel, unsafe_allow_html=True)
     st.markdown(
         t(
-            f"<div class='s7-uw-year-title'>公司类别金额对比（{data.year} 年）</div>"
-            f"<div class='s7-uw-year-sub'>按公司类别汇总（{unit}） · {grouping_note}</div>",
-            f"<div class='s7-uw-year-title'>Company category amounts ({data.year})</div>"
-            f"<div class='s7-uw-year-sub'>Aggregated by company category ({unit_name(unit)}) · {grouping_note}</div>",
+            f"<div class='s7-uw-year-title'>公司类别保费、净利润与承保利润（{data.year} 年）</div>"
+            f"<div class='s7-uw-year-sub'>第一行：签单保费（右轴为占签单保费合计的百分比）；第二行：净利润 / 承保利润（柱顶为各指标内部占比） · 左轴金额（{unit}） · {grouping_note}</div>",
+            f"<div class='s7-uw-year-title'>Company category premium, net profit and underwriting profit ({data.year})</div>"
+            f"<div class='s7-uw-year-sub'>Row 1: signed premium (right axis: share of total signed premium); Row 2: net profit / underwriting profit (labels: share within each metric) · left axis amount ({unit_name(unit)}) · {grouping_note}</div>",
         ),
         unsafe_allow_html=True,
     )
-    bar_chart = build_market_share_amount_bars(data, unit_mode=unit_mode)
+    profit_chart = build_market_share_profit_bars(data, unit_mode=unit_mode)
     st.plotly_chart(
-        localize_plotly(bar_chart),
+        localize_plotly(profit_chart),
         width="stretch",
-        key=f"{key_prefix}_market_share_bars",
+        key=f"{key_prefix}_market_share_profit_bars",
     )
     st.caption(
         t(
-            "利润面板以灰色零轴区分正值与负值。",
-            "The profit panel uses a grey zero axis to separate positive and negative values.",
+            "第一行右轴为占签单保费合计的百分比；第二行柱顶百分比为各指标内部占比（净利润、承保利润分别除以自身绝对值合计），负值表示该类别亏损。"
+            f"{data.year} 年净利润合计 {net_total:+,.1f} {unit_name(unit)}；"
+            f"承保利润净额 {underwriting_net:+,.1f} {unit_name(unit)}，"
+            f"盈利类别合计 {underwriting_profit:+,.1f} {unit_name(unit)}、"
+            f"亏损类别合计 {underwriting_loss:+,.1f} {unit_name(unit)}。",
+            "The right axis in row 1 shows each category's share of total signed premium; "
+            "labels in row 2 show each category's share within its metric "
+            "(net profit and underwriting profit each divided by their own absolute-value total), "
+            "with negative values indicating loss-making categories. "
+            f"{data.year} net profit total {net_total:+,.1f} {unit_name(unit)}; "
+            f"underwriting profit net {underwriting_net:+,.1f} {unit_name(unit)}, "
+            f"profitable categories {underwriting_profit:+,.1f} {unit_name(unit)}, "
+            f"loss categories {underwriting_loss:+,.1f} {unit_name(unit)}.",
         )
     )
     with st.expander(t("查看分类与公司明细", "View category and company detail")):
@@ -3166,6 +3204,14 @@ def render_plan_industry_market_share(
         for column in ("保费", "净利润", "承保利润"):
             category_display[column] = (
                 pd.to_numeric(category_display[column], errors="coerce") / divisor
+            )
+        # The detail table must use the same denominator as the chart:
+        # a loss-making category therefore shows a negative percentage.
+        for metric in ("净利润", "承保利润"):
+            values = pd.to_numeric(category_display[metric], errors="coerce")
+            total = float(values.abs().sum())
+            category_display[f"{metric}占比"] = (
+                values / total if total else pd.Series(0.0, index=values.index)
             )
         category_display = category_display.rename(
             columns={

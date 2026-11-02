@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Capability scores use the original pools and do not change with display filters."""
+"""Capability scores use one full-industry pool and do not change with filters."""
 
 from __future__ import annotations
 
 import pandas as pd
 
 from step7_solvency.plan_inputs import capability_scores
-from step7_solvency.specs import CAPABILITY_INDUSTRY_BENCHMARK_GROUPS
 
 
 def _row(
@@ -33,6 +32,7 @@ def test_original_scoring_is_stable_when_display_filter_changes() -> None:
             _row("乙公司", "TOTAL_ASSETS", 90.0, "前三大"),
             _row("丙公司", "TOTAL_ASSETS", 50.0, "大型公司"),
             _row("丁公司", "TOTAL_ASSETS", 80.0, "大型公司"),
+            _row("戊公司", "TOTAL_ASSETS", 60.0, "中型公司"),
             _row("甲公司", "COMBINED_RATIO", 95.0, "前三大"),
             _row("乙公司", "COMBINED_RATIO", 105.0, "前三大"),
             _row("丙公司", "COMBINED_RATIO", 80.0, "大型公司"),
@@ -61,14 +61,12 @@ def test_original_scoring_is_stable_when_display_filter_changes() -> None:
         axes,
         ["2025Q4"],
         baseline_frame=baseline,
-        industry_benchmark_groups=CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
     )
     selected_scores, _, _ = capability_scores(
         selected,
         axes,
         ["2025Q4"],
         baseline_frame=baseline,
-        industry_benchmark_groups=CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
     )
     full_scores = full_scores.set_index("公司")
     selected_scores = selected_scores.set_index("公司")
@@ -85,10 +83,11 @@ def test_original_scoring_is_stable_when_display_filter_changes() -> None:
             == full_scores.loc[company, "承保_得分"]
         )
 
-    # Top 3 keeps the original full-industry ranking pool.
-    assert abs(float(selected_scores.loc["甲公司", "资产_得分"]) - (30 + 70 / 3)) < 1e-9
-    # Large companies keep their same-category pool.
+    # Every company is ranked against all five peers, regardless of its category.
+    # 甲(70) is 3rd of 5, 丙(50) is last, 戊(60) is 2nd.
+    assert abs(float(selected_scores.loc["甲公司", "资产_得分"]) - 65.0) < 1e-9
     assert selected_scores.loc["丙公司", "资产_得分"] == 30.0
+    assert abs(float(full_scores.loc["戊公司", "资产_得分"]) - 47.5) < 1e-9
 
 
 if __name__ == "__main__":

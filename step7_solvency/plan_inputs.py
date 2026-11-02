@@ -10,8 +10,6 @@ from .specs import (
     QUANT_RISK_STACK_RATIO_CODES,
     CAPABILITY_STEP_SCORE_FALLBACK,
     CAPABILITY_PERCENTILE_FLOOR,
-    CAPABILITY_INDUSTRY_BENCHMARK_GROUPS,
-    CAPABILITY_GROUP_SCORE_FLOORS,
 )
 
 
@@ -89,11 +87,8 @@ def capability_scores(
     periods: list[str],
     baseline_frame: pd.DataFrame | None = None,
     *,
-    group_column: str = "同业分类",
     step_score_fallback: dict[str, list[dict]] | None = None,
     score_floor: float = CAPABILITY_PERCENTILE_FLOOR,
-    industry_benchmark_groups: frozenset[str] | set[str] | None = None,
-    group_score_floors: dict[str, dict[str, float]] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """能力五边形打分。
 
@@ -101,14 +96,10 @@ def capability_scores(
     1. 若顶点配置里带 `steps`（或该编码在 step_score_fallback 里），
        则按阶梯打分。例如偿付能力：≥200%=100, 150~200%=70,
        120~150%=50, 100~120%=30, <100%=0。
-    2. 其余顶点按相对位次打分：
-       - 「前三大 / 前4-10」按全行业样本排名（头部公司不与只有 3~7 家的
-         小池子比，避免优秀公司被排成 0 分）；
-       - 其他分组在同分类内排名（大型只跟大型比，中小只跟中小比）。
+    2. 其余顶点统一按全行业样本的相对位次打分。所有公司使用同一基准，
+       不再按「同业分类」拆分成组内排名。
     3. 百分位不再硬映射到 0–100，而是映射到 [score_floor, 100]
-       （默认 30）。组内最后一名仍有 30 分，避免顶点塌陷到圆心。
-    4. 若同分类内有效样本不足 2 家（无法排名），自动回退到全量池，
-       避免出现"整个分类所有公司都是同一分数"的情况。
+       （默认 30）。行业末位仍有 30 分，避免顶点塌陷到圆心。
 
     参数
     ----
@@ -116,13 +107,8 @@ def capability_scores(
     axes_config      : 每个顶点的配置，可含 steps=[{"min":200,"score":100}, ...]
     periods          : 可用报告期，函数内取最后一个作为"最新期"
     baseline_frame   : 用于构建基准池的数据源（默认用 frame 自身）
-    group_column     : 用于分组的列名，默认"同业分类"
     step_score_fallback : 阶梯打分兜底配置，默认用模块级 CAPABILITY_STEP_SCORE_FALLBACK
     score_floor      : 百分位得分下限（默认 30），仅作用于排名类顶点
-    industry_benchmark_groups : 使用全行业池的分组，默认前三大 / 前4-10
-    group_score_floors : 分组×顶点级别的得分下限覆盖，例如
-        {"前三大": {"PREMIUM_GROWTH": 70}}；用于把头部公司的
-        保费增速映射到 70–100 分，而不是统一 30–100 分。
 
     返回
     ----
@@ -165,26 +151,6 @@ def capability_scores(
     if not companies:
         return pd.DataFrame(), pd.DataFrame(), latest_period
 
-    # ---------- 记录每家公司的分类（用于分组排名） ----------
-    group_map: dict[str, str] = {}
-    if group_column and group_column in period_frame.columns:
-        group_series = (
-            period_frame[["公司", group_column]]
-            .assign(
-                **{
-                    group_column: lambda d: (
-                        d[group_column]
-                        .fillna("未分类")
-                        .astype(str)
-                        .str.strip()
-                        .replace("", "未分类")
-                    )
-                }
-            )
-            .drop_duplicates(subset=["公司"], keep="last")
-        )
-        group_map = dict(zip(group_series["公司"], group_series[group_column]))
-
     # ---------- 规范化 axes（含 steps） ----------
     normalized_axes: list[dict] = []
     for ax in axes_config:
@@ -221,17 +187,6 @@ def capability_scores(
         step_score_fallback if step_score_fallback is not None else CAPABILITY_STEP_SCORE_FALLBACK
     )
     floor = max(0.0, min(100.0, float(score_floor)))
-    benchmark_groups = (
-        set(industry_benchmark_groups)
-        if industry_benchmark_groups is not None
-        else set(CAPABILITY_INDUSTRY_BENCHMARK_GROUPS)
-    )
-    configured_group_floors = (
-        group_score_floors
-        if group_score_floors is not None
-        else CAPABILITY_GROUP_SCORE_FLOORS
-    )
-
     def _rank_score(
         value: float,
         pool: list[float],
@@ -303,16 +258,6 @@ def capability_scores(
         )
         return max(0.0, min(100.0, score))
 
-    def _pool_for(label: str, company_group: str) -> list[float]:
-        """选择该公司的对标池：头部群体看全行业，其余看同分类。"""
-        if company_group in benchmark_groups:
-            return baseline_pool_all.get(label, [])
-        pool = baseline_pool_by_group.get((company_group, label), [])
-        if len(pool) < 2:
-            # 组内不足 2 家（无法排名），退回到全量池
-            pool = baseline_pool_all.get(label, [])
-        return pool
-
     # 归一一次，后续所有筛选/排名都基于同一份数值列。
     period_frame["指标编码"] = period_frame["指标编码"].fillna("").astype(str).str.strip()
     period_frame["期间口径"] = period_frame["期间口径"].fillna("").astype(str).str.strip()
@@ -371,28 +316,7 @@ def capability_scores(
         baseline_period_frame["数值"], errors="coerce"
     )
 
-    # baseline 里每家公司的分类
-    baseline_group_map: dict[str, str] = {}
-    if group_column and group_column in baseline_period_frame.columns:
-        bg = (
-            baseline_period_frame[["公司", group_column]]
-            .assign(
-                **{
-                    group_column: lambda d: (
-                        d[group_column]
-                        .fillna("未分类")
-                        .astype(str)
-                        .str.strip()
-                        .replace("", "未分类")
-                    )
-                }
-            )
-            .drop_duplicates(subset=["公司"], keep="last")
-        )
-        baseline_group_map = dict(zip(bg["公司"], bg[group_column]))
-
     baseline_pool_all: dict[str, list[float]] = {}
-    baseline_pool_by_group: dict[tuple[str, str], list[float]] = {}
 
     for ax in normalized_axes:
         label = ax["label"]
@@ -407,16 +331,12 @@ def capability_scores(
             if str(name).strip() and pd.notna(value)
         }
         baseline_pool_all[label] = list(clean_values.values())
-        for name, value in clean_values.items():
-            group_name = baseline_group_map.get(name, "未分类")
-            baseline_pool_by_group.setdefault((group_name, label), []).append(value)
 
     # ---------- 第 2 遍：逐公司逐顶点打分 ----------
     raw_rows: list[dict] = []
     score_rows: list[dict] = []
     for company in companies:
         raw = raw_cache[company]
-        company_group = group_map.get(company, "未分类")
         raw_row: dict = {"公司": company}
         score_row: dict = {"公司": company}
 
@@ -460,24 +380,13 @@ def capability_scores(
                 )
                 continue
 
-            # ③ 其余顶点：按对标池相对位次打分。
-            #    保费增速同样使用该口径；头部群体（前三大 / 前4-10）自动
-            #    切到全行业池，其他分组在同分类内排名。
-            #    位次映射到 [floor, 100]，组内末位不再被判 0 分。
-            pool = _pool_for(label, company_group)
-            axis_floor = floor
-            group_floor_map = configured_group_floors.get(company_group, {})
-            if isinstance(group_floor_map, dict):
-                candidate = group_floor_map.get(code, group_floor_map.get(label))
-                if candidate is not None:
-                    try:
-                        axis_floor = float(candidate)
-                    except (TypeError, ValueError):
-                        axis_floor = floor
+            # ③ 其余顶点：所有公司统一按全行业池的相对位次打分。
+            #    位次映射到 [floor, 100]，行业末位不再被判 0 分。
+            pool = baseline_pool_all.get(label, [])
             score_row[f"{label}_得分"] = _rank_score(
                 value,
                 pool,
-                axis_floor=axis_floor,
+                axis_floor=floor,
             )
 
         raw_rows.append(raw_row)

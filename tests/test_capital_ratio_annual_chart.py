@@ -241,10 +241,21 @@ def test_investment_return_uses_horizontal_year_labels() -> None:
         [f"{year}Q4" for year in range(2021, 2026)],
         {"甲公司": "#00338D"},
         show_average=True,
+        average_frame=pd.DataFrame(
+            [
+                {
+                    "公司": "全行业平均",
+                    "报告期": f"{year}Q4",
+                    "指标编码": "INVESTMENT_RETURN",
+                    "数值": 2.5 + (year - 2021) * 0.1,
+                }
+                for year in range(2021, 2026)
+            ]
+        ),
     )
     spec_text = json.dumps(chart.to_dict(), ensure_ascii=False)
     assert '"labelAngle": 0' in spec_text
-    assert "所选公司平均" in spec_text
+    assert "全行业平均" in spec_text
     assert "#94A3B8" in spec_text
 
 
@@ -320,7 +331,7 @@ def test_investment_return_page_renders_average_legend() -> None:
 
     assert not at.exception, [error.value for error in at.exception]
     page_text = "\n".join(item.value for item in at.markdown)
-    assert "所选公司平均投资收益率" in page_text
+    assert "全行业平均投资收益率" in page_text
     assert at.get("vega_lite_chart")
 
 
