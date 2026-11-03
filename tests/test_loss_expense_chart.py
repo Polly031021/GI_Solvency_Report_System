@@ -77,7 +77,20 @@ def test_loss_expense_grouping_and_chart() -> None:
         panels[1],
         y_domain=loss_expense_axis_domain(panels),
     )
-    spec_text = json.dumps(chart.to_dict(), ensure_ascii=False)
+    spec = chart.to_dict()
+    spec_text = json.dumps(spec, ensure_ascii=False)
+    # Only the bar layer owns the y axis; auxiliary layers must not add their own.
+    axis_layers = [
+        layer
+        for layer in spec["layer"]
+        if layer.get("encoding", {}).get("y", {}).get("axis") is not None
+    ]
+    assert len(axis_layers) == 1
+    assert axis_layers[0]["encoding"]["y"]["title"] == "成本率（%）"
+    for layer in spec["layer"]:
+        y_encoding = layer.get("encoding", {}).get("y")
+        if y_encoding is not None and y_encoding is not axis_layers[0]["encoding"]["y"]:
+            assert y_encoding.get("axis") is None
     assert "91.0%*" in spec_text
     assert "67%" in spec_text
     assert "24%" in spec_text

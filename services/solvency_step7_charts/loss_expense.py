@@ -262,7 +262,7 @@ def build_loss_expense_panel_chart(
         )
         .encode(
             x=alt.X("年度:N", sort=years),
-            y=alt.Y("中点:Q", scale=y_scale),
+            y=alt.Y("中点:Q", scale=y_scale, axis=None),
             text=alt.Text("标签:N"),
         )
     )
@@ -274,7 +274,7 @@ def build_loss_expense_panel_chart(
         color="#0C233C",
     ).encode(
         x=alt.X("年度:N", sort=years),
-        y=alt.Y("综合成本率:Q", scale=y_scale),
+        y=alt.Y("综合成本率:Q", scale=y_scale, axis=None),
         text=alt.Text("综合标签:N"),
     )
     breakeven = (
@@ -284,7 +284,7 @@ def build_loss_expense_panel_chart(
             strokeDash=[5, 4],
             strokeWidth=1.2,
         )
-        .encode(y=alt.Y("盈亏平衡线:Q", scale=y_scale))
+        .encode(y=alt.Y("盈亏平衡线:Q", scale=y_scale, axis=None))
     )
     return apply_report_theme(
         alt.layer(bars, segment_labels, breakeven, total_labels)
