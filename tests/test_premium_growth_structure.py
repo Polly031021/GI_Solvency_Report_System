@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -129,6 +131,48 @@ def test_chart_uses_independent_left_and_right_axes() -> None:
     assert "综合偿付能力充足率" not in spec_text
 
 
+def test_english_chart_has_no_chinese_labels() -> None:
+    frame = _premium_frame()
+    frame["公司"] = "人保财险"
+    panel = prepare_premium_growth_panel(frame, "人保财险")
+    chart = build_premium_growth_structure_chart(
+        panel,
+        growth_domain=premium_growth_axis_domain([panel]),
+        unit_label="RMB 100 mn",
+        language="en",
+    )
+    spec = chart.to_dict()
+    spec_text = json.dumps(spec, ensure_ascii=False)
+
+    assert "Share (%)" in spec_text
+    assert "Growth (%)" in spec_text
+    assert "Total premium growth (%)" in spec_text
+    assert "Prior-year premium (RMB 100 mn)" in spec_text
+    assert "Current-year premium (RMB 100 mn)" in spec_text
+    assert "Motor" in spec_text
+    assert "Non-motor" in spec_text
+    assert "PICC P&C" in spec_text
+    assert spec["layer"][0]["encoding"]["y2"]["title"] is None
+    visible_text: list[str] = []
+
+    def collect_visible(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in {"title", "text", "labelExpr"}:
+                    if isinstance(value, str):
+                        visible_text.append(value)
+                    elif isinstance(value, dict) and isinstance(value.get("text"), str):
+                        visible_text.append(value["text"])
+                else:
+                    collect_visible(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect_visible(item)
+
+    collect_visible(chart.to_dict())
+    assert re.search(r"[\u4e00-\u9fff]", " ".join(visible_text)) is None
+
+
 def test_groups_follow_company_category_order() -> None:
     frame = _premium_frame()
     panels = [
@@ -152,6 +196,7 @@ if __name__ == "__main__":
     test_prepares_five_bars_and_total_premium_growth()
     test_missing_motor_split_uses_unallocated_segment()
     test_chart_uses_independent_left_and_right_axes()
+    test_english_chart_has_no_chinese_labels()
     test_groups_follow_company_category_order()
     test_group_falls_back_to_company_type()
     print("全部通过")

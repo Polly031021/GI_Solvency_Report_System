@@ -479,7 +479,7 @@ def build_capital_ratio_combo_chart(
         ],
     }
     if bar_layout == "stacked":
-        bar_encoding["y2"] = alt.Y2("堆叠起点:Q")
+        bar_encoding["y2"] = alt.Y2("堆叠起点:Q", title=None)
     else:
         bar_encoding["xOffset"] = category_offset
     bars = (
@@ -1574,7 +1574,7 @@ def build_component_stack_chart(
             axis=hidden_value_axis(),
             scale=y_scale,
         ),
-        y2=alt.Y2("堆叠起点:Q"),
+        y2=alt.Y2("堆叠起点:Q", title=None),
         color=alt.Color(
             "组成类别:N",
             scale=alt.Scale(domain=labels, range=colors),
@@ -1725,7 +1725,7 @@ def build_capital_amount_combo(
                 axis=hidden_value_axis(),
                 scale=y_scale,
             ),
-            y2=alt.Y2("堆叠起点:Q"),
+            y2=alt.Y2("堆叠起点:Q", title=None),
             color=alt.Color(
                 "资本类别:N",
                 scale=alt.Scale(

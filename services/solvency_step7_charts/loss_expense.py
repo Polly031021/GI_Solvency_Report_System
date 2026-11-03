@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import altair as alt
 import pandas as pd
 
+from ..report_i18n import category_name, company_name, t
 from .capital import annual_period_order
 from .primitives import apply_report_theme
 from .structure import display_period_label
@@ -217,10 +218,23 @@ def build_loss_expense_panel_chart(
     y_domain: tuple[float, float],
 ) -> alt.Chart:
     if panel.bar_frame.empty:
-        raise ValueError(f"{panel.company} 缺少赔付率或费用率数据。")
+        raise ValueError(
+            t(
+                f"{panel.company} 缺少赔付率或费用率数据。",
+                f"{company_name(panel.company)} has no loss ratio or expense ratio data.",
+            )
+        )
     years = list(panel.years)
     y_scale = alt.Scale(domain=list(y_domain), zero=True, nice=False)
-    base = alt.Chart(panel.bar_frame)
+    axis_title = t("成本率（%）", "Combined ratio (%)")
+    # 辅助图层也要声明同一条纵轴。若写成 axis=None，Vega-Lite 会把整条纵轴
+    # （包括柱体的刻度和标题）一并丢掉；声明相同轴配置后只保留一条合并轴。
+    shared_axis = alt.Axis(title=axis_title, format=".0f", tickCount=6)
+    display_frame = panel.bar_frame.copy()
+    display_frame["类别"] = display_frame["类别"].map(
+        lambda value: category_name(str(value))
+    )
+    base = alt.Chart(display_frame)
     bars = base.mark_bar(size=46).encode(
         x=alt.X(
             "年度:N",
@@ -232,24 +246,29 @@ def build_loss_expense_panel_chart(
             "起点:Q",
             stack=None,
             scale=y_scale,
-            title="成本率（%）",
-            axis=alt.Axis(format=".0f", tickCount=6),
+            title=axis_title,
+            axis=shared_axis,
         ),
-        y2=alt.Y2("终点:Q"),
+        # y2 只是柱体终点，不参与纵轴标题；否则 Vega-Lite 会用字段名“终点”
+        # 作为默认轴标题，英文模式下就会残留中文。
+        y2=alt.Y2("终点:Q", title=None),
         color=alt.Color(
             "类别:N",
             scale=alt.Scale(
-                domain=["赔付率", "费用率"],
+                domain=[
+                    category_name("赔付率"),
+                    category_name("费用率"),
+                ],
                 range=[LOSS_COLOR, EXPENSE_COLOR],
             ),
             legend=None,
         ),
         order=alt.Order("顺序:Q"),
         tooltip=[
-            "公司:N",
-            "年度:N",
-            "类别:N",
-            alt.Tooltip("数值:Q", title="比率（%）", format=".2f"),
+            alt.Tooltip("公司:N", title=t("公司", "Company")),
+            alt.Tooltip("年度:N", title=t("年度", "Year")),
+            alt.Tooltip("类别:N", title=t("类别", "Category")),
+            alt.Tooltip("数值:Q", title=t("比率（%）", "Ratio (%)"), format=".2f"),
         ],
     )
     segment_labels = (
@@ -262,7 +281,7 @@ def build_loss_expense_panel_chart(
         )
         .encode(
             x=alt.X("年度:N", sort=years),
-            y=alt.Y("中点:Q", scale=y_scale, axis=None),
+            y=alt.Y("中点:Q", scale=y_scale, axis=shared_axis),
             text=alt.Text("标签:N"),
         )
     )
@@ -274,7 +293,7 @@ def build_loss_expense_panel_chart(
         color="#0C233C",
     ).encode(
         x=alt.X("年度:N", sort=years),
-        y=alt.Y("综合成本率:Q", scale=y_scale, axis=None),
+        y=alt.Y("综合成本率:Q", scale=y_scale, axis=shared_axis),
         text=alt.Text("综合标签:N"),
     )
     breakeven = (
@@ -284,13 +303,13 @@ def build_loss_expense_panel_chart(
             strokeDash=[5, 4],
             strokeWidth=1.2,
         )
-        .encode(y=alt.Y("盈亏平衡线:Q", scale=y_scale, axis=None))
+        .encode(y=alt.Y("盈亏平衡线:Q", scale=y_scale, axis=shared_axis))
     )
     return apply_report_theme(
         alt.layer(bars, segment_labels, breakeven, total_labels)
         .properties(
             title=alt.TitleParams(
-                text=panel.company,
+                text=company_name(panel.company),
                 anchor="middle",
                 fontSize=13,
                 color="#00338D",

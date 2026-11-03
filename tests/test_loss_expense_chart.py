@@ -14,6 +14,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from services.report_i18n import set_language  # noqa: E402
 from services.step7_excel_config import load_step7_config  # noqa: E402
 from services.solvency_step7_charts import (  # noqa: E402
     build_loss_expense_panel_chart,
@@ -79,18 +80,24 @@ def test_loss_expense_grouping_and_chart() -> None:
     )
     spec = chart.to_dict()
     spec_text = json.dumps(spec, ensure_ascii=False)
-    # Only the bar layer owns the y axis; auxiliary layers must not add their own.
+    # 所有图层声明同一条纵轴；Vega-Lite 合并后只保留一条带刻度的轴。
+    # 若辅助层写 axis=None，整条纵轴（含柱体刻度）会被丢掉。
     axis_layers = [
         layer
         for layer in spec["layer"]
         if layer.get("encoding", {}).get("y", {}).get("axis") is not None
     ]
-    assert len(axis_layers) == 1
-    assert axis_layers[0]["encoding"]["y"]["title"] == "成本率（%）"
-    for layer in spec["layer"]:
-        y_encoding = layer.get("encoding", {}).get("y")
-        if y_encoding is not None and y_encoding is not axis_layers[0]["encoding"]["y"]:
-            assert y_encoding.get("axis") is None
+    assert len(axis_layers) == len(spec["layer"])
+    assert {
+        layer["encoding"]["y"]["axis"]["title"] for layer in axis_layers
+    } == {"成本率（%）"}
+    axis_configs = {
+        json.dumps(layer["encoding"]["y"]["axis"], sort_keys=True)
+        for layer in axis_layers
+    }
+    assert len(axis_configs) == 1
+    # y2 仅表示柱体终点，不能把中文字段名“终点”变成第二条纵轴标题。
+    assert axis_layers[0]["encoding"]["y2"]["title"] is None
     assert "91.0%*" in spec_text
     assert "67%" in spec_text
     assert "24%" in spec_text
@@ -131,9 +138,36 @@ def test_axis_domain_includes_stacked_bar_top() -> None:
     assert loss_expense_axis_domain([outlier])[1] >= 5000.0
 
 
+def test_english_axis_does_not_use_chinese_field_name() -> None:
+    """The y2 helper field must not leak “终点” as a default axis title."""
+    set_language("en")
+    try:
+        panel = prepare_loss_expense_panel(_loss_expense_frame(), "甲公司")
+        chart = build_loss_expense_panel_chart(
+            panel, y_domain=loss_expense_axis_domain([panel])
+        )
+        spec = chart.to_dict()
+        bars = spec["layer"][0]
+        assert bars["encoding"]["y2"]["title"] is None
+        assert bars["encoding"]["y"]["axis"]["title"] == "Combined ratio (%)"
+        axis_text = json.dumps(
+            [layer["encoding"]["y"]["axis"] for layer in spec["layer"]],
+            ensure_ascii=False,
+        )
+        assert "成本率" not in axis_text
+        assert "终点" not in axis_text
+        tooltip_text = json.dumps(bars["encoding"]["tooltip"], ensure_ascii=False)
+        assert "Company" in tooltip_text
+        assert "Ratio (%)" in tooltip_text
+        assert "\"title\": \"公司\"" not in tooltip_text
+    finally:
+        set_language("zh")
+
+
 if __name__ == "__main__":
     test_prepare_loss_expense_uses_latest_five_years()
     test_axis_domain_includes_stacked_bar_top()
     test_loss_expense_grouping_and_chart()
     test_template_configures_combined_loss_expense_ratio_chart()
+    test_english_axis_does_not_use_chinese_field_name()
     print("全部通过")

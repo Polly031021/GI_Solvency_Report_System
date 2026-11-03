@@ -345,7 +345,7 @@ def render_plan_premium_growth_structure(
                         chart = build_premium_growth_structure_chart(
                             panel,
                             growth_domain=growth_domain,
-                            unit_label=unit_mode,
+                            unit_label=unit_name(unit_mode),
                         )
                         render_altair_chart(
                             chart,

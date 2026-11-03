@@ -8,7 +8,7 @@ import re
 import altair as alt
 import pandas as pd
 
-from ..report_i18n import t
+from ..report_i18n import category_name, company_name, t
 from .primitives import apply_report_theme, label_color_for_fill
 
 
@@ -348,23 +348,38 @@ def build_premium_growth_structure_chart(
     *,
     growth_domain: tuple[float, float],
     unit_label: str,
+    language: str | None = None,
 ) -> alt.Chart:
     """Build a company panel with a 100% stack and one total-premium growth line."""
     if panel.bar_frame.empty:
-        raise ValueError(f"{panel.company} 没有可绘制的年度保费结构数据。")
+        raise ValueError(
+            t(
+                f"{panel.company} 没有可绘制的年度保费结构数据。",
+                f"{company_name(panel.company, language)} has no annual premium structure data to plot.",
+                language,
+            )
+        )
+
+    display_frame = panel.bar_frame.copy()
+    display_frame["类别"] = display_frame["类别"].map(
+        lambda value: category_name(str(value), language)
+    )
+    category_domain = [
+        category_name(category, language) for category in PREMIUM_CATEGORY_COLORS
+    ]
 
     years = list(panel.years)
     share_scale = alt.Scale(domain=[0, 100], zero=True, nice=False)
     growth_scale = alt.Scale(domain=list(growth_domain), zero=False, nice=False)
     x_axis = alt.Axis(
-        title=t("年份", "Year"),
+        title=t("年份", "Year", language),
         labelAngle=0,
         labelFontSize=9,
         labelPadding=7,
     )
     x = alt.X("年度:N", sort=years, axis=x_axis)
 
-    bar_base = alt.Chart(panel.bar_frame).transform_calculate(
+    bar_base = alt.Chart(display_frame).transform_calculate(
         占比标签 = "datum['占比'] != null && !isNaN(datum['占比']) ? format(datum['占比'], '.0f') + '%' : ''"
     )
     bars = bar_base.mark_bar(size=46).encode(
@@ -373,7 +388,7 @@ def build_premium_growth_structure_chart(
             "占比起点:Q",
             stack=None,
             scale=share_scale,
-            title="占比（%）",
+            title=t("占比（%）", "Share (%)", language),
             axis=alt.Axis(
                 format=".0f",
                 tickCount=6,
@@ -382,21 +397,30 @@ def build_premium_growth_structure_chart(
                 labelFontSize=8,
             ),
         ),
-        y2=alt.Y2("占比终点:Q"),
+        # 终点字段不生成第二个纵轴标题，避免默认标题泄漏中文字段名。
+        y2=alt.Y2("占比终点:Q", title=None),
         color=alt.Color(
             "类别:N",
             scale=alt.Scale(
-                domain=list(PREMIUM_CATEGORY_COLORS),
+                domain=category_domain,
                 range=list(PREMIUM_CATEGORY_COLORS.values()),
             ),
             legend=None,
         ),
         order=alt.Order("排序:Q"),
         tooltip=[
-            alt.Tooltip("年度:N", title="年度"),
-            alt.Tooltip("类别:N", title="结构"),
-            alt.Tooltip("金额:Q", title=f"保费（{unit_label}）", format=",.1f"),
-            alt.Tooltip("占比:Q", title="占比（%）", format=".1f"),
+            alt.Tooltip("年度:N", title=t("年度", "Year", language)),
+            alt.Tooltip("类别:N", title=t("结构", "Structure", language)),
+            alt.Tooltip(
+                "金额:Q",
+                title=f"{t('保费', 'Premium', language)} ({unit_label})",
+                format=",.1f",
+            ),
+            alt.Tooltip(
+                "占比:Q",
+                title=t("占比（%）", "Share (%)", language),
+                format=".1f",
+            ),
         ],
     )
     bar_labels = bar_base.mark_text(
@@ -431,7 +455,7 @@ def build_premium_growth_structure_chart(
             axis=alt.Axis(
                 orient="right",
                 format=".0f",
-                title="增速（%）",
+                title=t("增速（%）", "Growth (%)", language),
                 titlePadding=6,
                 titleFontSize=8,
                 labelFontSize=8,
@@ -457,10 +481,22 @@ def build_premium_growth_structure_chart(
             y=line_y,
             detail=alt.Detail("折线组:N"),
             tooltip=[
-                alt.Tooltip("年度:N", title="年度"),
-                alt.Tooltip("同比增速:Q", title="总保费同比增速（%）", format="+.2f"),
-                alt.Tooltip("上年保费:Q", title=f"上年保费（{unit_label}）", format=",.1f"),
-                alt.Tooltip("本年保费:Q", title=f"本年保费（{unit_label}）", format=",.1f"),
+                alt.Tooltip("年度:N", title=t("年度", "Year", language)),
+                alt.Tooltip(
+                    "同比增速:Q",
+                    title=t("总保费同比增速（%）", "Total premium growth (%)", language),
+                    format="+.2f",
+                ),
+                alt.Tooltip(
+                    "上年保费:Q",
+                    title=f"{t('上年保费', 'Prior-year premium', language)} ({unit_label})",
+                    format=",.1f",
+                ),
+                alt.Tooltip(
+                    "本年保费:Q",
+                    title=f"{t('本年保费', 'Current-year premium', language)} ({unit_label})",
+                    format=",.1f",
+                ),
             ],
         )
         points = line_base.mark_point(
@@ -473,8 +509,12 @@ def build_premium_growth_structure_chart(
             x=line_x,
             y=line_y_without_axis,
             tooltip=[
-                alt.Tooltip("年度:N", title="年度"),
-                alt.Tooltip("同比增速:Q", title="总保费同比增速（%）", format="+.2f"),
+                alt.Tooltip("年度:N", title=t("年度", "Year", language)),
+                alt.Tooltip(
+                    "同比增速:Q",
+                    title=t("总保费同比增速（%）", "Total premium growth (%)", language),
+                    format="+.2f",
+                ),
             ],
         )
         positive_labels = (
@@ -516,7 +556,7 @@ def build_premium_growth_structure_chart(
         .resolve_scale(y="independent", color="independent")
         .properties(
             title=alt.TitleParams(
-                text=panel.company,
+                text=company_name(panel.company, language),
                 anchor="middle",
                 fontSize=12,
                 color="#00338D",
