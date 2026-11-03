@@ -8,6 +8,8 @@ from collections.abc import Iterable, Mapping
 import altair as alt
 import pandas as pd
 
+from services.report_i18n import t
+
 from .primitives import clean_numeric, company_scale, apply_report_theme
 
 
@@ -81,7 +83,12 @@ def build_capital_efficiency_bubble_chart(
     )
     pivot = pivot[finite_mask & pivot["气泡大小"].gt(0)].copy()
     if pivot.empty:
-        raise ValueError(f"{latest_period} 缺少可绘制的完整公司数据。")
+        raise ValueError(
+            t(
+                f"{latest_period} 缺少可绘制的完整公司数据。",
+                f"{latest_period} lacks complete company data for plotting.",
+            )
+        )
     full_sample_x_median = float(pivot["实际资本/注册资本"].median())
     full_sample_y_median = float(pivot["核心资本/注册资本"].median())
     zoom_domain_source = pivot

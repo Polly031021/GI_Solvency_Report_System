@@ -407,6 +407,12 @@ CHART_NAMES_EN: dict[str, str] = {
     "附属资本": "Ancillary capital",
     "风险构成情况": "Risk composition",
     "保险风险": "Insurance risk",
+    "保险风险构成": "Insurance risk composition",
+    "保险风险/认可负债率": "Insurance risk / recognised liabilities",
+    "保险风险／认可负债率": "Insurance risk / recognised liabilities",
+    "资本金额堆叠": "Capital amount stack",
+    "赔付率与费用率": "Loss ratio and expense ratio",
+    "投资收益率": "Investment return",
     "市场风险": "Market risk",
     "信用风险": "Credit risk",
     "重大融资信息": "Major financing",
@@ -443,6 +449,7 @@ LEVEL_NAMES_EN: dict[str, str] = {
     "实际资本/认可资产率": "Actual capital / recognised assets",
     "最低资本变动": "Minimum capital movement",
     "保费增速": "Premium growth",
+    "投资利润": "Investment profit",
     "关键偿付数据概览": "Key solvency data overview",
     "实际资本数据对比-行业资本分级": "Actual capital comparison – industry capital tiers",
     "实际资本数据对比-核心资本": "Actual capital comparison – core capital",
@@ -1039,6 +1046,14 @@ def translate_text(text: str, language: str | None = None) -> str:
     for source in sorted(COMPANY_NAMES_EN, key=len, reverse=True):
         if source and source in result:
             result = result.replace(source, COMPANY_NAMES_EN[source])
+    # 图表/模块名称可能是 “一级模块 - 二级模块 - 图表” 的整句，
+    # 先按完整名称替换，避免被拆成 “资本”+“金额” 后残留“堆叠”等尾词。
+    for source in sorted(CHART_NAMES_EN, key=len, reverse=True):
+        if source and source in result:
+            result = result.replace(source, CHART_NAMES_EN[source])
+    for source in sorted(LEVEL_NAMES_EN, key=len, reverse=True):
+        if source and source in result:
+            result = result.replace(source, LEVEL_NAMES_EN[source])
     for source in sorted(PHRASE_EN, key=len, reverse=True):
         if source and source in result:
             result = result.replace(source, PHRASE_EN[source])

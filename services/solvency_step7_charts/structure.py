@@ -292,30 +292,34 @@ def build_structure_change_chart(
     #   给每个"折线标签"分配一个 dy 偏移：第一个 -14，第二个 -28，第三个 -42……
     _line_labels = list(dict.fromkeys(plot_df["折线标签"].astype(str)))
     _label_dy_map = {_lbl: -(14 + 14 * _i) for _i, _lbl in enumerate(_line_labels)}
-    plot_df["_dy_offset"] = plot_df["折线标签"].map(_label_dy_map).fillna(-14)
-
-    line_text = base.mark_text(
-        fontSize=10,
-        fontWeight="bold",
-        baseline="bottom",
-    ).encode(
-        x=alt.X("显示期:N", sort=_display_period_order),
-        y=alt.Y("同比增速:Q", scale=_growth_scale),
-        # ★ 按类别动态偏移，第一条 -14，第二条 -28，错开两层
-        dy=alt.Y("_dy_offset:Q", scale=None),
-        text=alt.Text("同比增速:Q", format=".1f"),
-        color=alt.Color(
-            "折线标签:N",
-            scale=alt.Scale(domain=_line_domain, range=_line_range),
-            legend=None,
-        ),
-    )
+    # dy 是 mark_text 的图层属性，不能放进 encode()；
+    # 因此按折线类别拆成多个文本层，各自使用固定偏移。
+    line_text_layers = []
+    for _idx, _lbl in enumerate(_line_labels):
+        _label_rows = plot_df[plot_df["折线标签"].astype(str).eq(_lbl)]
+        if _label_rows.empty:
+            continue
+        line_text_layers.append(
+            alt.Chart(_label_rows)
+            .mark_text(
+                dy=_label_dy_map[_lbl],
+                fontSize=10,
+                fontWeight="bold",
+                baseline="bottom",
+            )
+            .encode(
+                x=alt.X("显示期:N", sort=_display_period_order),
+                y=alt.Y("同比增速:Q", scale=_growth_scale),
+                text=alt.Text("同比增速:Q", format=".1f"),
+                color=alt.value(_line_range[_idx]),
+            )
+        )
 
     # ---------- 8. 组合图表 ----------
     #   ★ 关键：color="independent" 让柱子与折线各有独立颜色 scale
     #         （否则折线颜色会被柱子的颜色 scale 覆盖）
     chart = (
-        alt.layer(bars, bar_text, lines, line_text)
+        alt.layer(bars, bar_text, lines, *line_text_layers)
         .resolve_scale(
             y="independent",
             color="independent",

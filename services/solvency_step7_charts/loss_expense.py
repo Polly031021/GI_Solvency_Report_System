@@ -189,6 +189,15 @@ def loss_expense_axis_domain(
 ) -> tuple[float, float]:
     values = [BREAKEVEN]
     for panel in panels:
+        # 柱高由赔付率 + 费用率堆叠而成，必须一并纳入纵轴范围；
+        # 只参考报告的综合成本率时，若两者不一致会把柱顶裁掉。
+        if not panel.bar_frame.empty:
+            values.extend(
+                pd.to_numeric(panel.bar_frame["终点"], errors="coerce")
+                .dropna()
+                .astype(float)
+                .tolist()
+            )
         if not panel.total_frame.empty:
             values.extend(
                 pd.to_numeric(panel.total_frame["综合成本率"], errors="coerce")

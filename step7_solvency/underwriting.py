@@ -29,6 +29,7 @@ from services.report_style import (
 )
 
 from services.report_i18n import (
+    is_english,
     t,
     translate_dataframe,
     translate_text,
@@ -342,7 +343,13 @@ def underwriting_exclusions(
     The returned table names the company and the exact missing/invalid metric,
     so the summary can explain the gap instead of only showing a count.
     """
-    columns = ["公司", "未纳入原因", "综合成本率（%）", "签单保费（万元）"]
+    columns = [
+        "公司",
+        "未纳入原因",
+        "未纳入原因EN",
+        "综合成本率（%）",
+        "签单保费（万元）",
+    ]
     if not isinstance(data, pd.DataFrame) or data.empty or annual.empty:
         return pd.DataFrame(columns=columns)
     df = data.copy()
@@ -371,9 +378,11 @@ def underwriting_exclusions(
             company_rows["指标编码"].isin(("SIGNED_PREMIUM", "PREMIUM_INCOME"))
         ].dropna(subset=["数值"])
         reasons: list[str] = []
+        reasons_en: list[str] = []
         ratio_value = None
         if ratio_rows.empty:
             reasons.append("缺综合成本率")
+            reasons_en.append("missing combined ratio")
         else:
             ratio_work = ratio_rows[["数值", "单位"]].copy()
             ratio_work["年度"] = int(year)
@@ -381,19 +390,26 @@ def underwriting_exclusions(
             ratio_value = float(ratio_work["数值"].iloc[0])
             if not 0.0 < ratio_value < 1000.0:
                 reasons.append(f"综合成本率 {ratio_value:,.1f}%（超出有效区间）")
+                reasons_en.append(
+                    f"combined ratio {ratio_value:,.1f}% (outside the valid range)"
+                )
         premium_value = None
         if premium_rows.empty:
             reasons.append("缺签单保费")
+            reasons_en.append("missing signed premium")
         else:
             premium_value = float(premium_rows["数值"].iloc[0])
             if premium_value <= 0:
                 reasons.append("签单保费为 0")
+                reasons_en.append("signed premium is zero")
         if not reasons:
             reasons.append("有效样本不足")
+            reasons_en.append("insufficient valid sample")
         rows.append(
             {
                 "公司": company,
                 "未纳入原因": "、".join(reasons),
+                "未纳入原因EN": "; ".join(reasons_en),
                 "综合成本率（%）": ratio_value,
                 "签单保费（万元）": premium_value,
             }
@@ -875,6 +891,7 @@ def render_underwriting_efficiency_scatter(
         if latest_year_for_sample is not None
         else pd.DataFrame()
     )
+    english = is_english()
 
     if years:
         latest_year = max(years)
@@ -906,7 +923,11 @@ def render_underwriting_efficiency_scatter(
         )
         if not exclusions.empty:
             exclusion_parts = [
-                f"{str(row['公司'])}（{str(row['未纳入原因'])}）"
+                (
+                    f"{str(row['公司'])} ({str(row['未纳入原因EN'])})"
+                    if english
+                    else f"{str(row['公司'])}（{str(row['未纳入原因'])}）"
+                )
                 for _, row in exclusions.iterrows()
             ]
             sample_note = t(
@@ -995,8 +1016,12 @@ def render_underwriting_efficiency_scatter(
             ),
             expanded=False,
         ):
+            display = exclusions.copy()
+            if english:
+                display["未纳入原因"] = display["未纳入原因EN"]
+            display = display.drop(columns=["未纳入原因EN"])
             st.dataframe(
-                translate_dataframe(exclusions),
+                translate_dataframe(display),
                 width="stretch",
                 hide_index=True,
             )

@@ -180,9 +180,12 @@ def render_report_metric(
     metric_frame = convert_unit(metric_frame, unit_mode)
     metric_frame = convert_multiple_units_to_percent(metric_frame)
     if code == "ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS":
-        insight = (
+        insight = t(
             "实际资本/认可资产率较高的公司，说明目前的综合偿付能力充足率较高，"
-            "但也说明还有提升资本利用率的空间。"
+            "但也说明还有提升资本利用率的空间。",
+            "Companies with a high actual capital to recognised assets ratio show "
+            "a relatively high combined solvency ratio, but this also indicates "
+            "room to improve capital utilisation.",
         )
         st.markdown(
             '<div class="solvency-report-analysis">'
@@ -193,7 +196,12 @@ def render_report_metric(
     if annual_labels:
         metric_frame, ordered_periods = prepare_annual_metric_frame(metric_frame)
         if not ordered_periods:
-            st.caption("当前没有可用于年度趋势图的报告期数据。")
+            st.caption(
+                t(
+                    "当前没有可用于年度趋势图的报告期数据。",
+                    "No reporting periods are available for the annual trend chart.",
+                )
+            )
             return
     else:
         ordered_periods = sort_report_periods(metric_frame["报告期"])

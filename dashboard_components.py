@@ -567,6 +567,22 @@ def _format_key_solvency_overview_display(table: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
+def _translate_overview_column(
+    column: object,
+    language: str,
+    latest_period: str,
+    prior_period: str,
+) -> str:
+    """Translate a period-suffixed table header as a whole phrase."""
+    text = str(column)
+    for period in (latest_period, prior_period, "上年同期", "本期"):
+        if period and text.endswith(period):
+            base = text[: -len(period)].strip()
+            label = translate_text(period, language)
+            return f"{translate_text(base, language)} {label}".strip()
+    return translate_text(text, language)
+
+
 def render_key_solvency_overview(
     data: pd.DataFrame | None,
     *,
@@ -597,6 +613,10 @@ def render_key_solvency_overview(
         )
     display = _format_key_solvency_overview_display(table)
     if is_english(language):
+        display.columns = [
+            _translate_overview_column(column, language, latest_period, prior_period)
+            for column in display.columns
+        ]
         display = translate_dataframe(display, language)
     st.markdown(
         build_key_solvency_overview_html(

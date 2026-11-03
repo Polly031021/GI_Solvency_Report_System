@@ -95,6 +95,7 @@ from .fragments import (
 from services.report_i18n import (
     category_name,
     chart_name as chart_display_name,
+    company_name as localized_company_name,
     get_language,
     is_english,
     localize_plotly,
@@ -232,8 +233,8 @@ def render_plan_structure_change_chart(chart_name, frame):
 
                     st.error(
                         t(
-                            f"❌ {company} 图表渲染失败：{e}",
-                            f"❌ {company} chart failed: {e}",
+                            f"❌ {localized_company_name(company)} 图表渲染失败：{e}",
+                            f"❌ {localized_company_name(company)} chart failed: {e}",
                         )
                     )
                     with st.expander(t("查看详细错误", "View detailed error"), expanded=False):
@@ -292,7 +293,7 @@ def render_plan_premium_growth_structure(
     growth_domain = premium_growth_axis_domain(panels)
     has_growth = any(not panel.line_frame.empty for panel in panels)
     render_chart_summary(
-        premium_growth_summary(panels, unit_label=unit_mode, frame=converted)
+        premium_growth_summary(panels, unit_label=unit_name(unit_mode), frame=converted)
     )
     st.caption(
         t(
@@ -400,17 +401,18 @@ def render_plan_loss_expense_combo(
         )
         return
 
-    y_domain = loss_expense_axis_domain(panels)
     render_chart_summary(loss_expense_summary(panels, frame=frame))
     st.caption(
         t(
             f"每家公司平铺展示最近 {years} 个年度：下方为赔付率，上方为费用率，"
             "柱高合计为综合成本率；红色虚线为 100% 盈亏平衡线。"
-            "柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。",
+            "柱顶数字为综合成本率，*表示按赔付率加费用率测算的值。"
+            "每张小图纵轴按自身数值范围独立缩放。",
             f"Each company displays the latest {years} years side by side. Loss ratio is below "
             "and expense ratio above; their combined height is the combined ratio. The red "
             "dashed line marks 100% break-even. Values above the bars show the combined ratio, "
-            "with * indicating a calculated loss-plus-expense ratio.",
+            "with * indicating a calculated loss-plus-expense ratio. Each chart's y-axis is "
+            "scaled independently to its own value range.",
         )
     )
     render_chart_legend(
@@ -440,7 +442,7 @@ def render_plan_loss_expense_combo(
                     try:
                         chart = build_loss_expense_panel_chart(
                             panel,
-                            y_domain=y_domain,
+                            y_domain=loss_expense_axis_domain([panel]),
                         )
                         render_altair_chart(
                             chart,
@@ -895,7 +897,8 @@ def render_plan_performance_pattern_grid(
                         st.markdown(
                             f"<div class='s7-pattern-panel-head'>"
                             f"<div class='s7-pattern-panel-title' "
-                            f"title='{escape(_company)}'>{escape(_company)}</div>"
+                            f"title='{escape(str(localized_company_name(_company)))}'>"
+                            f"{escape(str(localized_company_name(_company)))}</div>"
                             f"</div>"
                             f"<div class='s7-pattern-panel-meta'>{''.join(_pill_html)}</div>",
                             unsafe_allow_html=True,
@@ -924,7 +927,7 @@ def render_plan_performance_pattern_grid(
                                 ),
                             )
                         except ValueError as _exc:
-                            st.warning(f"{_company}: {_exc}")
+                            st.warning(f"{localized_company_name(_company)}: {_exc}")
 
 
 def render_plan_key_metrics_table(frame, highlight_company):
@@ -2027,9 +2030,9 @@ def render_plan_capability_radar(
                 tracked_rank = int((company_avg > tracked_avg).sum() + 1)
                 bullets.append(
                     t(
-                        f"追踪公司 {tracked_company}：五维均分 {tracked_avg:.0f}，"
+                        f"追踪公司 {localized_company_name(tracked_company)}：五维均分 {tracked_avg:.0f}，"
                         f"展示公司中第 {tracked_rank}/{sample_n}",
-                        f"Tracked {tracked_company}: five-axis average {tracked_avg:.0f}, "
+                        f"Tracked {localized_company_name(tracked_company)}: five-axis average {tracked_avg:.0f}, "
                         f"rank {tracked_rank}/{sample_n} among displayed companies",
                     )
                 )
@@ -2134,7 +2137,8 @@ def render_plan_capability_radar(
                 )
                 batch_colors[company] = "#ED2124" if is_tracked else "#00338D"
                 # 追踪公司用 ★ 前缀标识（分面标题不支持逐值颜色）。
-                batch_titles[company] = f"★ {company}" if is_tracked else company
+                display_company = str(localized_company_name(company))
+                batch_titles[company] = f"★ {display_company}" if is_tracked else display_company
 
             score_columns_for_grid = [
                 f"{label}_得分" for label in axes_labels

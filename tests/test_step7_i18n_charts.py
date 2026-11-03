@@ -15,12 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from services.report_i18n import (  # noqa: E402
+    chart_name,
+    level_name,
     localize_chart,
     localize_plotly,
     translate_dataframe,
     translate_default_analysis,
     translate_text,
 )
+from services.step7_excel_config import load_step7_config  # noqa: E402
 from services.solvency_step7_charts import (  # noqa: E402
     MarketShareData,
     build_market_share_pies,
@@ -149,9 +152,33 @@ def test_bundled_module_notes_are_translated() -> None:
     )
 
 
+def test_every_template_module_title_is_english() -> None:
+    """真实模板中一级/二级模块名与图表名都必须能完整切换为英文。"""
+    modules = load_step7_config(
+        ROOT / "templates" / "Step7-偿付能力公司报告展示模块.xlsx"
+    )
+    assert modules
+
+    def has_chinese(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+    leaked = []
+    for module in modules:
+        parts = {
+            "level_one": level_name(module.level_one, "en"),
+            "level_two": level_name(module.level_two, "en"),
+            "chart_name": chart_name(module.chart_name, "en"),
+        }
+        for field, text in parts.items():
+            if has_chinese(str(text)):
+                leaked.append((module.module_id, field, text))
+    assert not leaked, leaked
+
+
 if __name__ == "__main__":
     test_altair_domain_and_values_are_translated()
     test_plotly_pie_labels_and_layout_are_english()
     test_company_names_are_localised_in_english()
     test_bundled_module_notes_are_translated()
+    test_every_template_module_title_is_english()
     print("全部通过")

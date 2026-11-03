@@ -104,8 +104,23 @@ def test_template_configures_combined_loss_expense_ratio_chart() -> None:
     assert module.chart_config["years"] == 5
 
 
+def test_axis_domain_includes_stacked_bar_top() -> None:
+    """A short reported ratio must not clip a taller loss+expense stack."""
+    panel = prepare_loss_expense_panel(_loss_expense_frame(), "甲公司")
+    panel.bar_frame["终点"] = 500.0
+    assert loss_expense_axis_domain([panel])[1] >= 500.0
+
+    # Each panel gets its own domain, so one extreme company cannot flatten peers.
+    normal = prepare_loss_expense_panel(_loss_expense_frame(), "乙公司")
+    outlier = prepare_loss_expense_panel(_loss_expense_frame(), "甲公司")
+    outlier.bar_frame["终点"] = 5000.0
+    assert loss_expense_axis_domain([normal])[1] <= 120.0
+    assert loss_expense_axis_domain([outlier])[1] >= 5000.0
+
+
 if __name__ == "__main__":
     test_prepare_loss_expense_uses_latest_five_years()
+    test_axis_domain_includes_stacked_bar_top()
     test_loss_expense_grouping_and_chart()
     test_template_configures_combined_loss_expense_ratio_chart()
     print("全部通过")

@@ -219,8 +219,44 @@ def test_step7_underwriting_page_five_year_layout() -> None:
     assert len(charts) >= 6, f"expected 6 charts, got {len(charts)}"
 
 
+def test_exclusion_reasons_have_english_copy() -> None:
+    """Every exclusion reason must have an English variant with no Chinese."""
+    import re
+
+    from services.report_i18n import translate_text
+
+    module = _load_underwriting()
+    frame = pd.DataFrame(
+        [
+            _row("甲公司", "COMBINED_RATIO", "2025Q4", 95.0),
+            _row("甲公司", "SIGNED_PREMIUM", "2025Q4", 1000.0, unit="万元"),
+            _row("乙公司", "COMBINED_RATIO", "2025Q4", 2077.7),
+            _row("乙公司", "SIGNED_PREMIUM", "2025Q4", 1000.0, unit="万元"),
+            _row("丙公司", "ROE", "2025Q4", 5.0),
+        ]
+    )
+    annual = module.prepare_underwriting_annual(frame, years=1)
+    assert set(annual["公司"]) == {"甲公司"}
+
+    exclusions = module.underwriting_exclusions(frame, 2025, annual)
+    reasons = dict(zip(exclusions["公司"], exclusions["未纳入原因EN"]))
+    assert "outside the valid range" in reasons["乙公司"]
+    assert "missing combined ratio" in reasons["丙公司"]
+    assert "missing signed premium" in reasons["丙公司"]
+    for reason in reasons.values():
+        assert not re.search(r"[\u4e00-\u9fff]", reason)
+
+    note = "Sample companies: 1; excluded 3: " + "; ".join(
+        f"{company} ({reason})" for company, reason in reasons.items()
+    )
+    translated = translate_text(note, "en")
+    assert "综合成本率" not in translated
+    assert "Yes效" not in translated
+
+
 if __name__ == "__main__":
     test_five_year_annual_scatter_data()
+    test_exclusion_reasons_have_english_copy()
     test_latest_five_years_and_quarterly_premium_fallback()
     test_symmetric_domain_and_chart_builders()
     test_large_company_pool_axis_and_outliers()

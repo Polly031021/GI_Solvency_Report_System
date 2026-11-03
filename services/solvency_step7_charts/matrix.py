@@ -8,6 +8,8 @@ from collections.abc import Iterable, Mapping
 import altair as alt
 import pandas as pd
 
+from services.report_i18n import t
+
 from .primitives import clean_numeric, company_scale, metric_title, apply_report_theme
 
 
@@ -194,7 +196,12 @@ def build_matrix_chart(
     ).reset_index()
     missing_columns = [code for code in required_codes if code not in pivot.columns]
     if missing_columns:
-        raise ValueError(f"{latest_period} 缺少可绘制的完整公司数据。")
+        raise ValueError(
+            t(
+                f"{latest_period} 缺少可绘制的完整公司数据。",
+                f"{latest_period} lacks complete company data for plotting.",
+            )
+        )
     pivot = pivot.dropna(subset=required_codes).copy()
     if size_code:
         pivot["气泡大小"] = pd.to_numeric(pivot[size_code], errors="coerce").abs()
@@ -212,7 +219,12 @@ def build_matrix_chart(
         pivot[x_code] = pd.to_numeric(pivot[x_code], errors="coerce") * x_multiplier
         pivot[y_code] = pd.to_numeric(pivot[y_code], errors="coerce") * y_multiplier
     if pivot.empty:
-        raise ValueError(f"{latest_period} 缺少可绘制的完整公司数据。")
+        raise ValueError(
+            t(
+                f"{latest_period} 缺少可绘制的完整公司数据。",
+                f"{latest_period} lacks complete company data for plotting.",
+            )
+        )
     full_sample_x_median = float(pivot[x_code].median())
     full_sample_y_median = float(pivot[y_code].median())
     zoom_source, zoom_applied = (
