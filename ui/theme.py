@@ -33,7 +33,9 @@ def render_app_styles() -> None:
           display:none!important;
         }
         @page { size: 13.333in 7.5in; margin: 0.35in; }
+        @page solvency-widescreen { size: 16.667in 9.375in; margin: 0; }
         @media print {
+          html.solvency-print-mode-widescreen { page: solvency-widescreen; }
           [data-testid="stSidebar"],
           [data-testid="stHeader"],
           [data-testid="stToolbar"],
@@ -41,6 +43,7 @@ def render_app_styles() -> None:
           [data-testid="stStatusWidget"],
           [data-testid="stFileUploader"],
           [data-testid="stSegmentedControl"],
+          [data-testid="stButtonGroup"],
           [data-testid="stSelectbox"],
           [data-testid="stMultiSelect"],
           [data-testid="stButton"],
@@ -51,15 +54,30 @@ def render_app_styles() -> None:
           [data-testid="stElementContainer"]:has(.platform-page-heading) {
             display: none !important;
           }
-          html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+          html, body {
             width: 100% !important;
             max-width: none !important;
+            height: auto !important;
+            min-height: 0 !important;
             overflow: visible !important;
+            background: #ffffff !important;
+          }
+          [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            width: 100% !important;
+            max-width: none !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            overflow: visible !important;
+            position: static !important;
             background: #ffffff !important;
           }
           [data-testid="stMainBlockContainer"] {
             width: 100% !important;
             max-width: none !important;
+            height: auto !important;
+            min-height: 0 !important;
+            overflow: visible !important;
             padding: 0 !important;
           }
           [data-testid="stExpander"] details > div { display: block !important; }

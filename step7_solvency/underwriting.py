@@ -417,6 +417,302 @@ def underwriting_exclusions(
     return pd.DataFrame(rows, columns=columns)
 
 
+_AMOUNT_TO_WAN = {
+    "元": 0.0001,
+    "千元": 0.1,
+    "万元": 1.0,
+    "百万元": 100.0,
+    "亿元": 10000.0,
+    "十亿元": 100000.0,
+}
+
+
+def _amount_to_wan(values: pd.Series, units: pd.Series) -> pd.Series:
+    """Convert a source amount column to RMB 10-thousand yuan."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    factors = (
+        units.fillna("")
+        .astype(str)
+        .str.strip()
+        .map(_AMOUNT_TO_WAN)
+        .fillna(1.0)
+    )
+    return numeric * factors
+
+
+def prepare_underwriting_quadrant(
+    data: pd.DataFrame,
+    annual: pd.DataFrame,
+    year: int,
+) -> pd.DataFrame:
+    """Merge the latest-year underwriting margin, investment return and net profit.
+
+    Underwriting margin (%) = 100 - combined ratio (%).
+    Investment return (%) is read directly from INVESTMENT_RETURN.
+    Net profit is retained to colour each company by its final bottom line.
+    """
+    columns = [
+        "公司",
+        "承保利润率",
+        "投资收益率",
+        "净利润",
+        "综合成本率",
+        "保费",
+        "净利润状态",
+        "象限",
+    ]
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return pd.DataFrame(columns=columns)
+    if not isinstance(annual, pd.DataFrame) or annual.empty:
+        return pd.DataFrame(columns=columns)
+    if any(column not in data.columns for column in _REQUIRED_COLUMNS):
+        return pd.DataFrame(columns=columns)
+
+    df = data.copy()
+    df["公司"] = _normalise_company(df["公司"])
+    df["指标编码"] = df["指标编码"].fillna("").astype(str).str.strip()
+    df["报告期"] = df["报告期"].fillna("").astype(str).str.strip()
+    if "单位" not in df.columns:
+        df["单位"] = ""
+    for optional in ("单位", "期间口径"):
+        if optional not in df.columns:
+            df[optional] = ""
+        df[optional] = df[optional].fillna("").astype(str).str.strip()
+    df["数值"] = pd.to_numeric(
+        df["数值"]
+        .astype(str)
+        .str.replace("%", "", regex=False)
+        .str.replace("％", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.replace("，", "", regex=False),
+        errors="coerce",
+    )
+    df = df[df["公司"].ne("") & df["数值"].notna()].copy()
+
+    profit = _metric_rows(df, ("NET_PROFIT",))
+    if profit.empty:
+        return pd.DataFrame(columns=columns)
+    profit = profit.rename(columns={"数值": "净利润", "单位": "净利润单位"})
+    profit["净利润"] = _amount_to_wan(profit["净利润"], profit["净利润单位"]) / 10000.0
+    profit = profit[["年度", "公司", "净利润"]]
+
+    returns = _metric_rows(df, ("INVESTMENT_RETURN",))
+    if returns.empty:
+        return pd.DataFrame(columns=columns)
+    returns = returns.rename(columns={"数值": "投资收益率"})
+    returns["投资收益率"] = pd.to_numeric(returns["投资收益率"], errors="coerce")
+    returns = returns[["年度", "公司", "投资收益率"]]
+
+    latest = annual[annual["年度"].eq(int(year))].copy()
+    latest["综合成本率"] = pd.to_numeric(latest["综合成本率"], errors="coerce")
+    latest["保费"] = (
+        _amount_to_wan(
+            pd.to_numeric(latest["保费"], errors="coerce"),
+            latest.get("保费单位", pd.Series("", index=latest.index)),
+        )
+        / 10000.0
+    )
+    latest = latest.merge(profit, on=["年度", "公司"], how="inner")
+    latest = latest.merge(returns, on=["年度", "公司"], how="inner")
+    latest = latest.dropna(
+        subset=["综合成本率", "保费", "净利润", "投资收益率"]
+    )
+    if latest.empty:
+        return pd.DataFrame(columns=columns)
+    latest = latest[latest["保费"].ge(0)].copy()
+    latest["承保利润率"] = 100.0 - latest["综合成本率"]
+    latest = latest[
+        latest["承保利润率"].between(-200.0, 200.0, inclusive="both")
+        & latest["投资收益率"].between(-200.0, 200.0, inclusive="both")
+    ].copy()
+    if latest.empty:
+        return pd.DataFrame(columns=columns)
+    latest["净利润状态"] = "净利润盈利"
+    latest.loc[latest["净利润"].lt(0), "净利润状态"] = "净利润亏损"
+    latest["象限"] = "双轮驱动盈利模式"
+    latest.loc[
+        latest["承保利润率"].lt(0) & latest["投资收益率"].ge(0), "象限"
+    ] = "投资盈利 / 承保亏损"
+    latest.loc[
+        latest["承保利润率"].ge(0) & latest["投资收益率"].lt(0), "象限"
+    ] = "承保盈利 / 投资亏损"
+    latest.loc[
+        latest["承保利润率"].lt(0) & latest["投资收益率"].lt(0), "象限"
+    ] = "双轮驱动失灵"
+    return latest[columns].reset_index(drop=True)
+
+
+def build_underwriting_quadrant_chart(
+    frame: pd.DataFrame,
+) -> alt.LayerChart | alt.Chart | None:
+    """Build the underwriting-profit / investment-profit quadrant chart."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+    work = frame.dropna(subset=["承保利润率", "投资收益率", "公司"]).copy()
+    if work.empty:
+        return None
+
+    x_abs = work["承保利润率"].abs()
+    y_abs = work["投资收益率"].abs()
+    # A single company with a 200%+ combined ratio would otherwise flatten every
+    # other point against the zero line. Use the 90th percentile for the visible
+    # range and clamp genuine outliers to the chart edge.
+    x_reference = (
+        float(x_abs.quantile(0.90)) if len(x_abs) >= 10 else float(x_abs.max())
+    )
+    y_reference = (
+        float(y_abs.quantile(0.90)) if len(y_abs) >= 10 else float(y_abs.max())
+    )
+    x_bound = max(x_reference * 1.20, 5.0)
+    y_bound = max(y_reference * 1.20, 5.0)
+    x_scale = alt.Scale(
+        type="symlog",
+        constant=1.0,
+        domain=[-x_bound, x_bound],
+        nice=False,
+        clamp=True,
+    )
+    y_scale = alt.Scale(
+        type="symlog",
+        constant=1.0,
+        domain=[-y_bound, y_bound],
+        nice=False,
+        clamp=True,
+    )
+
+    # Fixed-colour rect layers avoid a data-driven colour scale, which would
+    # otherwise override the green/red net-profit palette on the points.
+    quadrant_bands: list[alt.Chart] = []
+    for x0, x1, y0, y1, fill in (
+        (0.0, x_bound, 0.0, y_bound, "#ECFDF5"),
+        (-x_bound, 0.0, 0.0, y_bound, "#EFF6FF"),
+        (0.0, x_bound, -y_bound, 0.0, "#FFFBEB"),
+        (-x_bound, 0.0, -y_bound, 0.0, "#FEF2F2"),
+    ):
+        quadrant_bands.append(
+            alt.Chart(pd.DataFrame([{"x0": x0, "x1": x1, "y0": y0, "y1": y1}]))
+            .mark_rect(color=fill, opacity=0.75)
+            .encode(
+                x=alt.X("x0:Q", scale=x_scale, title=None),
+                x2=alt.X2("x1:Q"),
+                y=alt.Y("y0:Q", scale=y_scale, title=None),
+                y2=alt.Y2("y1:Q"),
+            )
+        )
+
+    zero_x = (
+        alt.Chart(pd.DataFrame({"x": [0.0]}))
+        .mark_rule(color=REPORT_AXIS_COLOR, strokeWidth=1.2)
+        .encode(x=alt.X("x:Q", scale=x_scale))
+    )
+    zero_y = (
+        alt.Chart(pd.DataFrame({"y": [0.0]}))
+        .mark_rule(color=REPORT_AXIS_COLOR, strokeWidth=1.2)
+        .encode(y=alt.Y("y:Q", scale=y_scale))
+    )
+
+    work["净利润状态显示"] = work["净利润"].map(
+        lambda value: t("净利润盈利", "Profitable")
+        if float(value) >= 0
+        else t("净利润亏损", "Loss-making")
+    )
+    color_scale = alt.Scale(
+        domain=[t("净利润盈利", "Profitable"), t("净利润亏损", "Loss-making")],
+        range=[PROFIT_COLOR, LOSS_COLOR],
+    )
+    points = (
+        alt.Chart(work)
+        .mark_circle(
+            size=78,
+            opacity=0.78,
+            stroke="#FFFFFF",
+            strokeWidth=1.1,
+        )
+        .encode(
+            x=alt.X(
+                "承保利润率:Q",
+                title=None,
+                scale=x_scale,
+                axis=alt.Axis(format=".1f", tickCount=7, labelFontSize=9),
+            ),
+            y=alt.Y(
+                "投资收益率:Q",
+                title=None,
+                scale=y_scale,
+                axis=alt.Axis(format=".1f", tickCount=7, labelFontSize=9),
+            ),
+            color=alt.Color(
+                "净利润状态显示:N",
+                scale=color_scale,
+                legend=alt.Legend(
+                    title=t("最终净利润", "Net profit"),
+                    orient="top",
+                    direction="horizontal",
+                    symbolType="circle",
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip("公司:N"),
+                alt.Tooltip("承保利润率:Q", title=t("承保利润率（%）", "Underwriting margin (%)"), format=".2f"),
+                alt.Tooltip("投资收益率:Q", title=t("投资收益率（%）", "Investment return (%)"), format=".2f"),
+                alt.Tooltip("净利润:Q", title=t("净利润（亿元）", "Net profit"), format=",.1f"),
+                alt.Tooltip("综合成本率:Q", title=t("综合成本率（%）", "Combined ratio (%)"), format=".1f"),
+                alt.Tooltip("保费:Q", title=t("签单保费（亿元）", "Signed premium"), format=",.1f"),
+            ],
+        )
+    )
+
+    label_rows = [
+        {
+            "x": x_bound * 0.72,
+            "y": y_bound * 0.62,
+            "label": t("双轮驱动盈利模式", "Dual-engine profit model"),
+        },
+        {
+            "x": -x_bound * 0.72,
+            "y": y_bound * 0.62,
+            "label": t("投资盈利 / 承保亏损", "Investment + / underwriting -"),
+        },
+        {
+            "x": x_bound * 0.72,
+            "y": -y_bound * 0.62,
+            "label": t("承保盈利 / 投资亏损", "Underwriting + / investment -"),
+        },
+        {
+            "x": -x_bound * 0.72,
+            "y": -y_bound * 0.62,
+            "label": t("双轮驱动失灵", "Dual-engine failure"),
+        },
+    ]
+    labels = (
+        alt.Chart(pd.DataFrame(label_rows))
+        .mark_text(
+            align="center",
+            fontSize=9,
+            fontWeight=600,
+            color=REPORT_AXIS_COLOR,
+        )
+        .encode(
+            x=alt.X("x:Q", scale=x_scale),
+            y=alt.Y("y:Q", scale=y_scale),
+            text=alt.Text("label:N"),
+        )
+    )
+
+    return (
+        alt.layer(*quadrant_bands, zero_x, zero_y, points, labels)
+        .properties(width=900, height=390, background="#FFFFFF")
+        .configure_view(stroke=None)
+        .configure_axis(
+            gridColor=REPORT_GRID_COLOR,
+            gridOpacity=0.55,
+            domainColor=REPORT_DOMAIN_COLOR,
+            labelColor=REPORT_AXIS_COLOR,
+            titleColor=REPORT_AXIS_COLOR,
+        )
+    )
+
+
 def build_underwriting_year_chart(
     annual: pd.DataFrame,
     year: int,
@@ -619,9 +915,12 @@ def build_underwriting_year_chart(
                         "保费排名:Q",
                         scale=alt.Scale(domain=list(x_domain), nice=False),
                     ),
+                    # Title belongs to the main point layer only.  Repeating it
+                    # on the boundary-triangle layers makes Vega-Lite merge two
+                    # identical titles into a long, duplicated axis label.
                     y=alt.Y(
                         "_绘制值:Q",
-                        title="综合成本率（%）",
+                        title=None,
                         scale=y_scale,
                     ),
                     color=alt.Color("盈亏:N", scale=color_scale, legend=None),
@@ -1163,6 +1462,69 @@ def render_underwriting_efficiency_scatter(
                                     "loss-making companies = those with a combined ratio above 100%.",
                                 )
                             )
+
+    if years:
+        quadrant_year = max(years)
+        quadrant = prepare_underwriting_quadrant(data, annual, quadrant_year)
+        quadrant_chart = build_underwriting_quadrant_chart(quadrant)
+        st.markdown(
+            t(
+                f"<div class='s7-uw-year-title'>承保利润率 × 投资收益率 四象限（{quadrant_year} 年）</div>"
+                "<div class='s7-uw-year-sub'>横轴：承保利润率（%）= 1 - 综合成本率；"
+                "纵轴：投资收益率（%）；颜色：最终净利润盈亏</div>",
+                f"<div class='s7-uw-year-title'>Underwriting margin vs investment return quadrant ({quadrant_year})</div>"
+                "<div class='s7-uw-year-sub'>X: underwriting margin (%) = 1 - combined ratio; "
+                "Y: investment return (%); colour: final net profit</div>",
+            ),
+            unsafe_allow_html=True,
+        )
+        if quadrant_chart is None:
+            st.markdown(
+                t(
+                    "<div class='s7-uw-empty'>当前年度缺少可配对的净利润、承保利润率或投资收益率数据，无法绘制四象限图。</div>",
+                    "<div class='s7-uw-empty'>Net profit, underwriting margin or investment return is unavailable "
+                    "for the latest year, so the quadrant chart cannot be drawn.</div>",
+                ),
+                unsafe_allow_html=True,
+            )
+        else:
+            quadrant_counts = quadrant["象限"].value_counts().to_dict()
+            st.caption(
+                t(
+                    " ｜ ".join(
+                        [
+                            f"双轮驱动盈利模式 {quadrant_counts.get('双轮驱动盈利模式', 0)} 家",
+                            f"投资盈利/承保亏损 {quadrant_counts.get('投资盈利 / 承保亏损', 0)} 家",
+                            f"承保盈利/投资亏损 {quadrant_counts.get('承保盈利 / 投资亏损', 0)} 家",
+                            f"双轮驱动失灵 {quadrant_counts.get('双轮驱动失灵', 0)} 家",
+                        ]
+                    ),
+                    " ｜ ".join(
+                        [
+                            f"Dual-engine profit model: {quadrant_counts.get('双轮驱动盈利模式', 0)}",
+                            f"Investment + / underwriting -: {quadrant_counts.get('投资盈利 / 承保亏损', 0)}",
+                            f"Underwriting + / investment -: {quadrant_counts.get('承保盈利 / 投资亏损', 0)}",
+                            f"Dual-engine failure: {quadrant_counts.get('双轮驱动失灵', 0)}",
+                        ]
+                    ),
+                )
+            )
+            render_altair_chart(
+                quadrant_chart,
+                width="stretch",
+                key=f"{key_prefix}_underwriting_quadrant_{quadrant_year}",
+            )
+            st.caption(
+                t(
+                    "绿色 = 最终净利润为正，红色 = 最终净利润为负；横纵轴均为百分比，"
+                    "以 0 为分界，右上为双轮驱动盈利模式，左下为双轮驱动失灵。"
+                    "横轴按分位区间展示，极端值点落于边界。",
+                    "Green = positive final net profit, red = negative final net profit; both axes are "
+                    "percentages and cross at zero. Top-right is the dual-engine profit model and bottom-left "
+                    "is dual-engine failure. The x-axis is percentile-trimmed, so extreme values sit on the "
+                    "boundary.",
+                )
+            )
 
     fallback_premium = annual["保费口径"].ne("本年累计数").sum()
     with st.expander(

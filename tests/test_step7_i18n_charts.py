@@ -64,6 +64,32 @@ def test_altair_domain_and_values_are_translated() -> None:
     assert spec["encoding"]["x"]["title"] == "Year"
 
 
+def test_layered_chart_auxiliary_encodings_do_not_gain_titles() -> None:
+    """Layered charts must not add fallback titles per layer.
+
+    Vega-Lite merges the titles of every layer that shares a scale, so a
+    fallback title on the band/rule/label layers turns the axis title into
+    "Signed premium rank, Premium排名, Premium排名, x".
+    """
+    frame = pd.DataFrame({"排名": [1, 2], "成本率": [98.0, 101.0]})
+    band = alt.Chart(frame).mark_rect().encode(y="成本率:Q")
+    rule = alt.Chart(frame).mark_rule().encode(y="成本率:Q")
+    points = (
+        alt.Chart(frame)
+        .mark_circle()
+        .encode(
+            x=alt.X("排名:Q", title="签单保费排名（1 = 最高）"),
+            y=alt.Y("成本率:Q", title="综合成本率（%）"),
+        )
+    )
+    chart = alt.layer(band, rule, points).resolve_scale(y="shared")
+    spec = localize_chart(chart, "en").to_dict()
+    assert "title" not in spec["layer"][0]["encoding"].get("y", {})
+    assert "title" not in spec["layer"][1]["encoding"].get("y", {})
+    assert spec["layer"][2]["encoding"]["y"]["title"] == "Combined ratio (%)"
+    assert spec["layer"][2]["encoding"]["x"]["title"] == "Signed premium rank (1 = highest)"
+
+
 def test_plotly_pie_labels_and_layout_are_english() -> None:
     categories = pd.DataFrame(
         {
@@ -177,6 +203,7 @@ def test_every_template_module_title_is_english() -> None:
 
 if __name__ == "__main__":
     test_altair_domain_and_values_are_translated()
+    test_layered_chart_auxiliary_encodings_do_not_gain_titles()
     test_plotly_pie_labels_and_layout_are_english()
     test_company_names_are_localised_in_english()
     test_bundled_module_notes_are_translated()

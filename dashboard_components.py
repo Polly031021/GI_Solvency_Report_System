@@ -795,20 +795,34 @@ def render_print_control(
     *,
     key: str = "solvency_dashboard_print",
     language: str = "zh",
+    enabled: bool = True,
+    expected_modules: int | None = None,
 ) -> None:
     st.markdown(
         "### :material/print: "
         + t("打印/导出 PDF", "Print / export PDF", language)
     )
+    if not enabled:
+        st.warning(
+            t(
+                "请先在“选择导出图表”中至少选择一个图表。",
+                "Select at least one chart under “Charts to export” first.",
+            )
+        )
+        return
     st.info(
         t(
-            "竖版 A4 与横版 16:9 均导出封面、正文和封底。"
+            "每个选中的模块独占一页并自动缩放，图表不会跨页重叠；"
             "打印时请勾选“背景图形”以保留颜色。",
-            "Both portrait A4 and widescreen 16:9 export the cover, body and back cover. "
+            "Each selected module gets its own sheet and is scaled to fit, so charts never overlap across pages. "
             "Enable “Background graphics” when printing to preserve colours.",
             language,
         )
     )
+
+    if expected_modules is None:
+        selected = st.session_state.get("s7_export_chart_names")
+        expected_modules = len(selected) if isinstance(selected, (list, tuple)) else 0
 
     html_code = """
     <div style="display:flex; gap:10px; flex-wrap:wrap;">
@@ -820,35 +834,338 @@ def render_print_control(
         </button>
     </div>
     <script>
-    function printParent(mode) {
-        // 获取父窗口的 document
-        var parentDoc = window.parent.document;
-        
-        // 移除旧打印样式
-        var old = parentDoc.getElementById('dynamic-print-style');
-        if (old) old.remove();
-        
-        var style = parentDoc.createElement('style');
-        style.id = 'dynamic-print-style';
-        
-        if (mode === 'widescreen') {
-            style.innerHTML = '@page { size: 338.67mm 190.5mm; margin: 0; }';
-        } else {
-            style.innerHTML = '@page { size: A4 portrait; margin: 10mm; }';
+    (function () {
+        var SHEET_CLASS = 's7-print-sheet';
+
+        function cleanupPrintMode() {
+            var parentDoc = window.parent.document;
+            parentDoc.documentElement.classList.remove(
+                'solvency-print-mode-widescreen',
+                'solvency-print-mode-portrait'
+            );
+            var style = parentDoc.getElementById('dynamic-print-style');
+            if (style) style.remove();
         }
-        parentDoc.head.appendChild(style);
-        
-        // 在父窗口执行打印
-        setTimeout(function() {
-            window.parent.print();
-            setTimeout(function() {
-                var s = parentDoc.getElementById('dynamic-print-style');
-                if (s) s.remove();
-            }, 500);
-        }, 300);
-    }
+
+        // Put every report module back where Streamlit rendered it.  React owns
+        // the surrounding nodes, so the wrappers are removed after printing.
+        function cleanupSheets() {
+            var parentDoc = window.parent.document;
+            parentDoc.querySelectorAll('.' + SHEET_CLASS).forEach(function (sheet) {
+                var module = sheet.querySelector('[class*="st-key-s7_report_module_"]');
+                if (module) {
+                    sheet.parentNode.insertBefore(module, sheet);
+                }
+                sheet.remove();
+            });
+        }
+
+        function cleanupAll() {
+            cleanupSheets();
+            cleanupPrintMode();
+        }
+
+        // The report can contain dozens of modules and hundreds of company
+        // charts.  Waiting for the first module (the old behaviour) let the
+        // print dialog open while Streamlit was still streaming the remaining
+        // sections, so later modules such as "Key metrics at a glance" were
+        // absent from the PDF.  Wait until the expected number of modules has
+        // arrived and the count has been stable for a moment, with a hard
+        // timeout so a genuinely missing module cannot block printing forever.
+        function waitForModules(attempt, done) {
+            var parentDoc = window.parent.document;
+            var expected = Number('__EXPECTED_MODULES__') || 0;
+            var startedAt = Date.now();
+            var lastCount = -1;
+            var stablePolls = 0;
+
+            function poll() {
+                var count = parentDoc.querySelectorAll(
+                    '[class*="st-key-s7_report_module_"]'
+                ).length;
+                if (count === lastCount && count > 0) {
+                    stablePolls += 1;
+                } else {
+                    stablePolls = 0;
+                }
+                lastCount = count;
+                var enough = expected > 0 ? count >= expected : count > 0;
+                if ((enough && stablePolls >= 2) || Date.now() - startedAt > 120000) {
+                    done();
+                    return;
+                }
+                window.setTimeout(poll, 500);
+            }
+
+            poll();
+        }
+
+        // A company strip is a horizontally scrolling row on screen.  That
+        // layout cannot be printed: 80+ cards stay on one line and every chart
+        // is squeezed to a sliver.  Convert the strip to a real grid before
+        // measuring, and clear every inherited page-break-avoid rule so the
+        // grid can start under the module header and continue on later pages.
+        function normaliseCompanyStrips(module) {
+            // Theme rules use !important for page-break avoidance, so every
+            // override here must also be !important or the strip stays
+            // unbreakable and starts on a fresh page after the module header.
+            function allowBreak(node) {
+                node.style.setProperty('break-inside', 'auto', 'important');
+                node.style.setProperty('page-break-inside', 'auto', 'important');
+                node.style.setProperty('break-before', 'auto', 'important');
+                node.style.setProperty('page-break-before', 'auto', 'important');
+            }
+            module.querySelectorAll('[class*="st-key-annual_company_grid_scroll_"]').forEach(function (strip) {
+                var block = strip.querySelector('[data-testid="stHorizontalBlock"]');
+                if (block) {
+                    // Chrome's print paginator treats grid/flex containers as
+                    // monolithic and moves the whole 87-company strip to the
+                    // next page, leaving the module header alone on a blank
+                    // sheet.  Plain block + inline-block flows and fragments
+                    // like ordinary text, so the cards start right below the
+                    // header on the same page.
+                    block.style.setProperty('display', 'block', 'important');
+                    block.style.setProperty('width', '100%', 'important');
+                    block.style.setProperty('font-size', '0', 'important');
+                    allowBreak(block);
+                }
+                strip.style.setProperty('overflow', 'visible', 'important');
+                strip.style.setProperty('height', 'auto', 'important');
+                strip.style.setProperty('max-height', 'none', 'important');
+                allowBreak(strip);
+                var node = strip;
+                while (node && node !== module) {
+                    allowBreak(node);
+                    node = node.parentElement;
+                }
+                strip.querySelectorAll('[data-testid="stColumn"]').forEach(function (column) {
+                    column.style.setProperty('display', 'inline-block', 'important');
+                    column.style.setProperty('vertical-align', 'top', 'important');
+                    column.style.setProperty('width', 'calc((100% - 56px) / 7)', 'important');
+                    column.style.setProperty('min-width', '0', 'important');
+                    column.style.setProperty('max-width', 'calc((100% - 56px) / 7)', 'important');
+                    column.style.setProperty('margin', '0 8px 8px 0', 'important');
+                    column.style.setProperty('font-size', '14px', 'important');
+                    allowBreak(column);
+                });
+            });
+        }
+
+        // One module == one fixed sheet.  The module is measured at the sheet
+        // width, then scaled down until it fits.  If even a readable scale
+        // cannot fit, the sheet is left in normal flow so Chrome may continue
+        // it on the next sheet instead of clipping or overlapping content.
+        async function prepareSheets(mode) {
+            cleanupSheets();
+            var parentDoc = window.parent.document;
+            parentDoc.querySelectorAll('.solvency-report-page-break').forEach(function (node) {
+                node.remove();
+            });
+
+            var wide = mode === 'widescreen';
+            var pageWidth = wide ? 1600 : 794;
+            var pageHeight = wide ? 900 : 1123;
+            // Full-bleed: the exported sheet is the page.  No extra white
+            // frame is reserved around the module.
+            var padX = 0;
+            var padTop = 0;
+            var padBottom = 0;
+            var availWidth = pageWidth - padX * 2;
+            var availHeight = pageHeight - padTop - padBottom;
+
+            // Pass 1: wrap and set the printable width.  Measure only after a
+            // full reflow, otherwise responsive Plotly/Vega charts report the
+            // collapsed height of the previous screen layout and overflow.
+            var entries = [];
+            parentDoc.querySelectorAll('[class*="st-key-s7_report_module_"]').forEach(function (module) {
+                if (module.closest('.' + SHEET_CLASS)) return;
+
+                var sheet = parentDoc.createElement('section');
+                sheet.className = SHEET_CLASS + (wide ? ' s7-print-sheet--wide' : ' s7-print-sheet--portrait');
+                sheet.style.width = pageWidth + 'px';
+                sheet.style.minHeight = pageHeight + 'px';
+
+                var inner = parentDoc.createElement('div');
+                inner.className = 's7-print-sheet__inner';
+                sheet.appendChild(inner);
+                module.parentNode.insertBefore(sheet, module);
+                inner.appendChild(module);
+
+                inner.style.width = availWidth + 'px';
+                inner.style.position = 'static';
+                normaliseCompanyStrips(module);
+                entries.push({module: module, sheet: sheet, inner: inner});
+            });
+
+            await new Promise(function (resolve) {
+                window.parent.requestAnimationFrame(function () {
+                    window.parent.requestAnimationFrame(function () {
+                        window.parent.setTimeout(resolve, 1200);
+                    });
+                });
+            });
+
+            // Pass 2: scale each module against the settled chart heights.
+            entries.forEach(function (entry) {
+                var module = entry.module;
+                var sheet = entry.sheet;
+                var inner = entry.inner;
+
+                module.style.height = 'auto';
+                var naturalWidth = Math.max(module.scrollWidth, inner.clientWidth, 1);
+                // Plotly/Vega SVGs overflow their wrappers, so scrollHeight can
+                // under-report a multi-chart module and the last rows get
+                // clipped by the fixed sheet.  The expander body's scrollHeight
+                // is the reliable authored height.
+                // Measure the settled module itself.  Inflating this with the
+                // expander's scrollHeight (as an earlier version did) made
+                // ordinary two-chart pages look 40% too tall, so they were
+                // needlessly shrunk and left a white band at the bottom.
+                var naturalHeight = Math.max(
+                    module.scrollHeight,
+                    module.getBoundingClientRect().height,
+                    1
+                );
+                var scale = Math.min(
+                    1,
+                    availWidth / naturalWidth,
+                    availHeight / (naturalHeight * 1.03)
+                );
+
+                if (scale < 0.62) {
+                    // A very tall module (for example five stacked chart
+                    // pairs) is kept at a readable size and allowed to flow
+                    // onto a second sheet instead of being reduced to a
+                    // postage stamp.
+                    sheet.classList.add('s7-print-sheet--flow');
+                    inner.style.width = '100%';
+                    inner.style.transform = 'none';
+                    module.style.height = 'auto';
+                    sheet.style.height = 'auto';
+                    sheet.style.minHeight = '0';
+                    return;
+                }
+
+                if (scale < 0.995) {
+                    // Slight overflow: zoom the module down.  Zoom reflows the
+                    // charts at the final width (unlike transform, which leaves
+                    // a white band on the right) and keeps text selectable.
+                    sheet.classList.add('s7-print-sheet--scaled');
+                    module.style.height = 'auto';
+                    entry.widthLimit = Math.min(1.6, availWidth / naturalWidth);
+                    sheet.style.height = (pageHeight - 8) + 'px';
+                    sheet.style.minHeight = (pageHeight - 8) + 'px';
+                    inner.style.width = '100%';
+                    inner.style.height = 'auto';
+                    inner.style.position = 'absolute';
+                    inner.style.top = '0';
+                    inner.style.left = '0';
+                    inner.style.transform = 'none';
+                    inner.style.zoom = scale;
+                    return;
+                }
+
+                // The module fits the page.  Fill the whole sheet and let the
+                // CSS distribute its rows evenly, instead of anchoring it to
+                // the top and leaving the lower half of the page white.
+                sheet.classList.add('s7-print-sheet--fill');
+                // Eight pixels of headroom: a sheet exactly as tall as the
+                // page makes Chrome emit an empty page after it.
+                sheet.style.height = (pageHeight - 8) + 'px';
+                sheet.style.minHeight = (pageHeight - 8) + 'px';
+                inner.style.width = '100%';
+                inner.style.height = '100%';
+                inner.style.position = 'static';
+                inner.style.transform = 'none';
+                module.style.height = '100%';
+            });
+
+            // Zoom changes the charts' responsive height, so the first scale
+            // estimate is only a starting point.  Re-measure, correct the zoom
+            // and centre the result vertically.
+            await new Promise(function (resolve) {
+                window.parent.setTimeout(resolve, 700);
+            });
+            for (var index = 0; index < entries.length; index++) {
+                var entry = entries[index];
+                if (!entry.sheet.classList.contains('s7-print-sheet--scaled')) continue;
+                var target = availHeight - 8;
+                var visual = entry.module.getBoundingClientRect().height;
+                if (!visual) continue;
+                var zoom = parseFloat(entry.inner.style.zoom) || 1;
+                if (Math.abs(visual - target) > 6) {
+                    var corrected = zoom * (target / visual);
+                    corrected = Math.max(0.35, Math.min(entry.widthLimit || 1, corrected));
+                    entry.inner.style.zoom = corrected;
+                    await new Promise(function (resolve) {
+                        window.parent.setTimeout(resolve, 350);
+                    });
+                    visual = entry.module.getBoundingClientRect().height;
+                }
+                if (visual < target - 4) {
+                    // Keep the module anchored to the top of the sheet; a
+                    // vertically centred fragment looks like a floating card.
+                    entry.inner.style.top = '0';
+                }
+            }
+        }
+
+
+
+        // Exposed for the print-layout regression probe and for a future
+        // “preview before print” button; it has no effect until called.
+        window.__s7PreparePrintSheets = prepareSheets;
+        window.__s7CleanupPrint = cleanupAll;
+
+        window.printParent = function (mode) {
+            var parentWindow = window.parent;
+            var parentDoc = parentWindow.document;
+            var root = parentDoc.documentElement;
+
+            cleanupPrintMode();
+            root.classList.add(
+                mode === 'widescreen'
+                    ? 'solvency-print-mode-widescreen'
+                    : 'solvency-print-mode-portrait'
+            );
+
+            var style = parentDoc.createElement('style');
+            style.id = 'dynamic-print-style';
+            style.textContent = mode === 'widescreen'
+                ? '@page { size: 16.667in 9.375in; margin: 0; }'
+                : '@page { size: A4 portrait; margin: 0; }';
+            parentDoc.head.appendChild(style);
+
+            var cleaned = false;
+            function cleanup() {
+                if (cleaned) return;
+                cleaned = true;
+                parentWindow.removeEventListener('afterprint', cleanup);
+                cleanupAll();
+            }
+
+            parentWindow.addEventListener('afterprint', cleanup);
+            waitForModules(0, function () {
+                // Let the print stylesheet settle, then await the two-pass
+                // measure/scale before opening the print dialog.
+                parentWindow.setTimeout(function () {
+                    // The last module container can arrive a moment before its
+                    // Vega charts mount.  Give the final paint a beat, otherwise
+                    // the last Key-metrics module is measured as an empty card.
+                    prepareSheets(mode).then(function () {
+                        parentWindow.setTimeout(function () {
+                            parentWindow.print();
+                            // Embedded browsers do not always emit afterprint.
+                            parentWindow.setTimeout(cleanup, 60000);
+                        }, 350);
+                    });
+                }, 3000);
+            });
+        };
+    })();
     </script>
     """
+    html_code = html_code.replace("__EXPECTED_MODULES__", str(expected_modules))
     if is_english(language):
         html_code = html_code.replace("导出竖版 A4 PDF", "Export portrait A4 PDF").replace(
             "导出横版 16:9 PDF", "Export widescreen 16:9 PDF"

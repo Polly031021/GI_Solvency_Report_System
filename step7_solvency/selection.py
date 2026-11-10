@@ -321,6 +321,10 @@ def selected_chart_names(
     if modules:
         first = st.session_state.get("company_nav_level_one", "")
         if first == PRINT_ALL_LABEL:
+            chosen = st.session_state.get("s7_export_chart_names")
+            if chosen is not None:
+                allowed = {str(name).strip() for name in chosen}
+                return [m.chart_name for m in modules if m.chart_name in allowed]
             return [m.chart_name for m in modules]
         second = st.session_state.get("company_nav_level_two", "全部")
         # 按 Excel 顺序筛选；没有二级分类的模块使用图表名作为导航入口，

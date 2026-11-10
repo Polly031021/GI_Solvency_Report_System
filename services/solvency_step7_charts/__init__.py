@@ -138,6 +138,7 @@ from .industry_premium import (
     build_industry_premium_structure_chart,
     build_industry_premium_total_chart,
     prepare_industry_premium_annual,
+    prepare_industry_premium_history,
 )
 
 from .premium_by_line import (
@@ -303,6 +304,7 @@ __all__ = [
     "build_industry_premium_structure_chart",
     "build_industry_premium_total_chart",
     "prepare_industry_premium_annual",
+    "prepare_industry_premium_history",
     "MarketShareData",
     "build_market_share_amount_bars",
     "build_market_share_pies",

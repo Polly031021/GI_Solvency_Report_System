@@ -503,7 +503,7 @@ def render_report_style() -> None:
         .solvency-print-cover__title {font-size:48px; font-weight:900; line-height:1.35;}
         .solvency-print-cover__subtitle {font-size:23px; font-weight:650; margin-top:14px;}
         .solvency-print-cover__date {font-size:19px; margin-top:18px;}
-        .solvency-print-cover--front {page-break-after:always; break-after:page;}
+        .solvency-print-cover--front {page-break-after:auto; break-after:auto;}
         .solvency-print-cover--back {page-break-before:always; break-before:page;}
         @media print {
             [data-testid="stHeader"], [data-testid="stSidebar"],
@@ -517,8 +517,10 @@ def render_report_style() -> None:
             [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"] {
                 display:block!important;
             }
-            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"]:not([open]),
-            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"]:has(details:not([open])) {
+            /* The open state lives on the inner <details>, never on the expander
+               div itself.  Matching :not([open]) on the div hid every report
+               module in print and produced a cover-only PDF. */
+            [class*="st-key-s7_module_expander_wrap_"] [data-testid="stExpander"]:has(> details:not([open])) {
                 display:none!important;
             }
             .capital_efficiency_zoom_brush,
@@ -531,8 +533,12 @@ def render_report_style() -> None:
             }
             [data-testid="stElementContainer"]:has(.platform-page-heading),
             [data-testid="stElementContainer"]:has(.solvency-report-title) {display:none!important;}
+            /* A report module is routinely taller than one 16:9 sheet.  Asking
+               the browser to keep the whole module on one page made it insert
+               blank spill pages before the module; let the module flow while
+               its chart rows and company cards keep their own intact rules. */
             [class*="st-key-s7_report_module_"] {
-                break-inside:avoid-page!important; page-break-inside:avoid!important;
+                break-inside:auto!important; page-break-inside:auto!important;
                 overflow:visible!important;
             }
             [class*="st-key-s7_report_module_"]:has(.solvency-grouped-trend) {
@@ -566,6 +572,15 @@ def render_report_style() -> None:
             }
             /* Keep every company card intact.  The print-only grid packs cards
                tightly enough to avoid an otherwise nearly empty spill page. */
+            /* The screen strip scrolls horizontally; printing must release that
+               scroll box, otherwise an 80-company grid is clipped and the
+               module shows only its summary cards. */
+            [class*="st-key-annual_company_grid_scroll_"] {
+                overflow:visible!important;
+                max-height:none!important;
+                height:auto!important;
+                flex-wrap:wrap!important;
+            }
             [class*="st-key-annual_company_grid_"],
             [class*="st-key-annual_company_grid_"] [data-testid="stHorizontalBlock"] {
                 display:grid!important;
@@ -607,10 +622,153 @@ def render_report_style() -> None:
                Covers use the whole 16:9 page; body modules provide their own
                symmetric 12 mm side margins and 8 mm top margin. */
             html.solvency-print-mode-widescreen {
-                --solvency-print-page-width:338.67mm;
-                --solvency-print-page-height:190.5mm;
-                --solvency-print-content-width:314.67mm;
-                --solvency-print-content-height:174.5mm;
+                --solvency-print-page-width:1600px;
+                --solvency-print-page-height:900px;
+                --solvency-print-content-width:1600px;
+                --solvency-print-content-height:900px;
+            }
+            /* Each exported module is wrapped in exactly one fixed sheet by the
+               print control.  Charts are measured at sheet width and scaled to
+               fit instead of being left to Chrome's page fragmentation. */
+            .s7-print-sheet {
+                position:relative!important;
+                display:block!important;
+                width:1600px!important;
+                max-width:1600px!important;
+                min-height:0!important;
+                margin:0 auto!important;
+                padding:0!important;
+                background:#FFFFFF!important;
+                overflow:visible!important;
+                box-sizing:border-box!important;
+                break-before:page!important;
+                page-break-before:always!important;
+                break-after:auto!important;
+                page-break-after:auto!important;
+                break-inside:auto!important;
+            }
+            .s7-print-sheet--portrait {
+                width:794px!important; max-width:794px!important;
+            }
+            .s7-print-sheet__inner {
+                transform-origin:top left!important;
+                box-sizing:border-box!important;
+            }
+            .s7-print-sheet--flow .s7-print-sheet__inner {
+                width:100%!important;
+                transform:none!important;
+                position:static!important;
+            }
+            /* A module that fits the sheet is stretched to the full page height
+               and its top-level rows are spaced evenly, so a page holding only
+               one or two charts does not leave a large empty band at the
+               bottom. */
+            /* 8px of headroom keeps Chrome from emitting an empty sheet after
+               a full-height fill page, while still printing edge to edge. */
+            .s7-print-sheet--fill,
+            .s7-print-sheet--scaled {
+                overflow:hidden!important;
+                height:892px!important;
+                max-height:892px!important;
+            }
+            /* Scaled sheets start a fraction below the paper edge so the module
+               card's top border and title are not clipped by the page break. */
+            .s7-print-sheet--scaled { padding-top:6px!important; }
+            .s7-print-sheet--fill.s7-print-sheet--portrait,
+            .s7-print-sheet--scaled.s7-print-sheet--portrait {
+                height:1115px!important;
+                max-height:1115px!important;
+            }
+            .s7-print-sheet--fill .s7-print-sheet__inner {
+                position:static!important;
+                width:100%!important;
+                height:100%!important;
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            .s7-print-sheet--fill [class*="st-key-s7_report_module_"] {
+                height:100%!important;
+                min-height:0!important;
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            .s7-print-sheet--fill [data-testid="stExpander"] {
+                height:100%!important;
+                min-height:0!important;
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            .s7-print-sheet--fill [data-testid="stExpander"] > details {
+                height:100%!important;
+                min-height:0!important;
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            .s7-print-sheet--fill [data-testid="stExpanderDetails"] {
+                flex:1 1 auto!important;
+                min-height:0!important;
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            .s7-print-sheet--fill [data-testid="stExpanderDetails"] > .stVerticalBlock {
+                flex:1 1 auto!important;
+                min-height:0!important;
+                display:flex!important;
+                flex-direction:column!important;
+                justify-content:space-evenly!important;
+            }
+            .s7-print-sheet [class*="st-key-s7_report_module_"] {
+                width:100%!important;
+                min-width:0!important;
+                max-width:100%!important;
+                height:auto!important;
+                max-height:none!important;
+                overflow:visible!important;
+                margin:0!important;
+                padding:0!important;
+                break-inside:auto!important;
+                page-break-inside:auto!important;
+            }
+            .s7-print-sheet .solvency-report-page-break {display:none!important;}
+            /* Streamlit defers off-screen element containers; printing must
+               paint every chart in the module, including its last row. */
+            .s7-print-sheet [data-testid="stElementContainer"],
+            .s7-print-sheet [data-testid="stVerticalBlock"],
+            .s7-print-sheet [data-testid="stLayoutWrapper"] {
+                content-visibility:visible!important;
+            }
+            .s7-print-sheet [class*="st-key-s7_company_bars_page_"] {
+                break-before:auto!important;
+                page-break-before:auto!important;
+            }
+            .s7-print-sheet [data-testid="stHorizontalBlock"],
+            .s7-print-sheet [data-testid="stVegaLiteChart"],
+            .s7-print-sheet [data-testid="stElementContainer"]:has(.js-plotly-plot) {
+                break-inside:avoid!important;
+                page-break-inside:avoid!important;
+            }
+            /* A chart row is a block wrapper, not a horizontal block, in the
+               Streamlit DOM.  Without this rule Chrome split the pair of chart
+               headings from their plots when a tall module flowed to a second
+               sheet.  Scope to the expander body so the outer module wrapper
+               can still fragment. */
+            .s7-print-sheet [data-testid="stExpanderDetails"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] {
+                break-inside:avoid!important;
+                page-break-inside:avoid!important;
+                /* A row that lands at the top of a printed page otherwise has
+                   its chart heading clipped by the zero-margin page edge. */
+                margin-top:0!important;
+                padding-top:26px!important;
+            }
+            .s7-print-sheet--flow [data-testid="stElementContainer"],
+            .s7-print-sheet--flow [data-testid="stMarkdownContainer"] {
+                overflow:visible!important;
+            }
+            /* Plotly/Vega canvases can paint their white plot background over
+               the heading that precedes them when a module flows. */
+            .s7-print-sheet--flow [data-testid="stMarkdownContainer"] {
+                position:relative!important;
+                z-index:50!important;
             }
             html.solvency-print-mode-widescreen,
             html.solvency-print-mode-widescreen body,
@@ -630,13 +788,17 @@ def render_report_style() -> None:
                 margin:0 auto!important; padding:0!important;
                 box-sizing:border-box!important; overflow:visible!important;
             }
+            /* A company strip can hold 80+ panels.  The old wide-screen rule
+               forced every panel into one row, so each chart was ~18 px wide
+               and the module looked like an empty summary.  Wrap instead, with
+               a readable minimum width per panel. */
             html.solvency-print-mode-widescreen [class*="st-key-annual_company_grid_"],
             html.solvency-print-mode-widescreen [class*="st-key-annual_company_grid_"] [data-testid="stHorizontalBlock"] {
                 width:100%!important; min-width:0!important; max-width:100%!important;
                 margin-left:0!important; margin-right:0!important;
-                grid-template-columns:none!important;
-                grid-auto-flow:column!important;
-                grid-auto-columns:minmax(0,1fr)!important;
+                grid-template-columns:repeat(auto-fit,minmax(210px,1fr))!important;
+                grid-auto-flow:row!important;
+                grid-auto-columns:auto!important;
                 gap:8px!important;
             }
             html.solvency-print-mode-widescreen [class*="st-key-annual_company_panel_"] {
@@ -664,7 +826,7 @@ def render_report_style() -> None:
             }
             .solvency-report-page-break {break-before:page; page-break-before:always;}
             html.solvency-print-mode-widescreen .solvency-print-cover {
-                width:338.67mm!important; height:190.5mm!important; max-width:338.67mm!important;
+                width:1600px!important; height:900px!important; max-width:1600px!important;
                 aspect-ratio:auto!important; margin:0 auto!important; padding:0!important;
                 box-sizing:border-box!important; overflow:hidden!important;
                 break-inside:avoid-page!important; page-break-inside:avoid!important;
@@ -676,18 +838,28 @@ def render_report_style() -> None:
             html.solvency-print-mode-widescreen [data-testid="stElementContainer"]:has(.solvency-print-cover),
             html.solvency-print-mode-widescreen [data-testid="stMarkdownContainer"]:has(.solvency-print-cover),
             html.solvency-print-mode-widescreen .stMarkdown:has(.solvency-print-cover) {
-                width:338.67mm!important; max-width:338.67mm!important;
-                height:190.5mm!important; margin:0 auto!important; padding:0!important;
+                width:1600px!important; max-width:1600px!important;
+                height:900px!important; margin:0 auto!important; padding:0!important;
+                overflow:hidden!important; line-height:0!important;
                 break-inside:avoid-page!important; page-break-inside:avoid!important;
+            }
+            /* Both the cover itself and its Streamlit wrapper carried a
+               break-after rule, which inserted two blank sheets after the
+               front cover (and before the back cover).  Keep the break on the
+               wrapper only. */
+            html.solvency-print-mode-widescreen .solvency-print-cover--front,
+            html.solvency-print-mode-widescreen .solvency-print-cover--back {
+                break-before:auto!important; page-break-before:auto!important;
+                break-after:auto!important; page-break-after:auto!important;
             }
             html.solvency-print-mode-widescreen [data-testid="stVerticalBlock"]:has(.solvency-print-cover) {
                 gap:0!important; margin:0!important; padding:0!important;
             }
             html.solvency-print-mode-widescreen [class*="st-key-s7_report_module_"] {
-                width:var(--solvency-print-content-width)!important;
-                min-width:var(--solvency-print-content-width)!important;
-                max-width:var(--solvency-print-content-width)!important;
-                min-height:0!important; padding:8mm 0 0!important;
+                width:100%!important;
+                min-width:0!important;
+                max-width:100%!important;
+                min-height:0!important; padding:0!important;
                 margin:0 auto!important; box-sizing:border-box!important;
                 overflow:visible!important;
             }
@@ -700,6 +872,16 @@ def render_report_style() -> None:
             html.solvency-print-mode-widescreen [class*="st-key-s7_report_module_"] > [data-testid="stVerticalBlock"] {
                 gap:0.45rem!important;
             }
+            /* Chromium fragments a rounded, bordered card across sheets by
+               filling the whole fragment with the border colours, which then
+               paints over charts.  Print modules as flat white sheets. */
+            html.solvency-print-mode-widescreen [class*="st-key-s7_report_module_"],
+            html.solvency-print-mode-widescreen [class*="st-key-s7_trend_group_"],
+            html.solvency-print-mode-widescreen .s7-insight-card {
+                border:0!important; border-left:0!important; border-radius:0!important;
+                background:transparent!important; background-image:none!important;
+                box-shadow:none!important;
+            }
             html.solvency-print-mode-widescreen [class*="st-key-s7_report_module_"] img {
                 max-width:100%!important; height:auto!important;
             }
@@ -708,10 +890,130 @@ def render_report_style() -> None:
                 table-layout:fixed!important; box-sizing:border-box!important;
             }
             html.solvency-print-mode-widescreen [data-testid="stElementContainer"]:has(.solvency-print-cover--front) {
-                break-after:page!important; page-break-after:always!important;
+                break-after:auto!important; page-break-after:auto!important;
+                overflow:visible!important;
+            }
+            html.solvency-print-mode-widescreen .solvency-print-cover--front {
+                aspect-ratio:16/9!important; height:900px!important;
+                width:1600px!important; max-width:1600px!important;
+            }
+            /* The report is authored for a 1600x900 screen.  Print it at that
+               width and zoom the whole block to 0.8, which maps exactly onto the
+               1280x720 (338.67x190.5mm) sheet.  Keeping the authored width means
+               the two chart columns keep their aspect ratio; forcing 1280px made
+               every module spill its header onto a separate sheet. */
+            html.solvency-print-mode-widescreen [data-testid="stApp"],
+            html.solvency-print-mode-widescreen [data-testid="stAppViewContainer"],
+            html.solvency-print-mode-widescreen [data-testid="stMain"],
+            html.solvency-print-mode-widescreen [data-testid="stMainBlockContainer"] {
+                width:1600px!important; max-width:1600px!important;
+                margin:0!important; padding:0!important;
+            }
+            /* Streamlit keeps a 300px sidebar column in the app grid even while
+               the sidebar is hidden for print, which left every sheet 310px to
+               the right and clipped the right edge.  Print as plain block flow
+               so the 1600px sheet starts at x=0. */
+            html.solvency-print-mode-widescreen [data-testid="stApp"],
+            html.solvency-print-mode-widescreen [data-testid="stAppViewContainer"] {
+                display:block!important;
+            }
+            html.solvency-print-mode-widescreen [data-testid="stMain"] {
+                padding-left:0!important; padding-right:0!important;
+            }
+            html.solvency-print-mode-widescreen [data-testid="stMainBlockContainer"] {
+                padding-left:0!important; padding-right:0!important;
+                margin-left:0!important; margin-right:0!important;
+            }
+            /* Chrome fragments flex items poorly in paged media: a column-flex
+               child taller than a sheet can be pushed past the next sheet and
+               leave an empty page behind.  Plain block flow prints predictably. */
+            html.solvency-print-mode-widescreen [data-testid="stVerticalBlock"],
+            html.solvency-print-mode-widescreen [data-testid="stLayoutWrapper"] {
+                display:block!important;
+            }
+            /* The generic block-flow rule above must not flatten a filled
+               sheet: that sheet relies on a flex column to spread its rows
+               across the whole page.  These selectors are deliberately more
+               specific and come later in the stylesheet. */
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpander"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpander"] > details,
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpanderDetails"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpanderDetails"] > .stVerticalBlock {
+                display:flex!important;
+                flex-direction:column!important;
+            }
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] {
+                height:100%!important;
+                min-height:0!important;
+            }
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] > [data-testid="stLayoutWrapper"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stExpander"],
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [class*="st-key-s7_report_module_"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stExpander"] > details {
+                flex:1 1 auto!important;
+                height:100%!important;
+                min-height:0!important;
+            }
+            /* Chromium does not lay out the slotted children of a native
+               <details> as ordinary flex items, so flex-grow on the body is
+               ignored.  Give the body an explicit height below its summary and
+               let the inner block spread the rows across that height. */
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpander"] > details {
+                position:relative!important;
+            }
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpanderDetails"] {
+                position:absolute!important;
+                top:42px!important;
+                right:0!important;
+                bottom:0!important;
+                left:0!important;
+                height:auto!important;
+                max-height:none!important;
+                min-height:0!important;
+            }
+            html.solvency-print-mode-widescreen .s7-print-sheet--fill [data-testid="stExpanderDetails"] > .stVerticalBlock {
+                display:flex!important;
+                flex-direction:column!important;
+                justify-content:space-between!important;
+                height:100%!important;
+                min-height:0!important;
+                padding:0 0 12px!important;
+            }
+            /* Keep a whole chart row on one sheet; otherwise Chrome slices a
+               chart in half and the next row prints on top of it. */
+            html.solvency-print-mode-widescreen [data-testid="stHorizontalBlock"],
+            html.solvency-print-mode-widescreen [data-testid="stElementContainer"]:has(.js-plotly-plot) {
+                break-inside:avoid!important; page-break-inside:avoid!important;
             }
             html.solvency-print-mode-widescreen [data-testid="stElementContainer"]:has(.solvency-print-cover--back) {
                 break-before:page!important; page-break-before:always!important;
+            }
+            /* A company strip is thousands of pixels tall once its cards wrap.
+               The generic horizontal-row rule above would push the whole strip
+               to the next page and leave the module header alone on a blank
+               sheet.  Let the strip start right below the header and fragment
+               between card rows. */
+            html.solvency-print-mode-widescreen [class*="st-key-annual_company_grid_scroll_"],
+            html.solvency-print-mode-widescreen [class*="st-key-annual_company_grid_scroll_"] [data-testid="stHorizontalBlock"],
+            html.solvency-print-mode-widescreen [class*="st-key-annual_company_grid_scroll_"] [data-testid="stColumn"] {
+                break-inside:auto!important; page-break-inside:auto!important;
+            }
+            /* The layout wrappers around the strip also carry a generic
+               break-inside:avoid rule.  Clear it on every wrapper that contains
+               the strip so the grid can begin directly under the module header
+               instead of starting on a fresh page. */
+            .s7-print-sheet [data-testid="stLayoutWrapper"]:has([class*="st-key-annual_company_grid_scroll_"]),
+            .s7-print-sheet [data-testid="stElementContainer"]:has([class*="st-key-annual_company_grid_scroll_"]) {
+                break-inside:auto!important; page-break-inside:auto!important;
+            }
+            /* The section caption sits in its own markdown block immediately
+               above the two chart columns.  In print the columns start a few
+               pixels before that block ends, so the left panel title overlapped
+               its caption.  Add the separation inside the title box. */
+            .s7-premium-panel-title {
+                padding-top:36px!important;
             }
             .solvency-module-title {
                 color:#00338D!important; font-size:30px!important; font-weight:900!important;

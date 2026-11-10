@@ -19,6 +19,7 @@ from services.solvency_step7_charts import (  # noqa: E402
     build_industry_premium_structure_chart,
     build_industry_premium_total_chart,
     prepare_industry_premium_annual,
+    prepare_industry_premium_history,
 )
 
 
@@ -231,6 +232,32 @@ def test_industry_premium_still_renders_partial_year() -> None:
         "非车险",
     ]
 
+
+
+def test_history_sheet_reads_partial_2026_without_full_year_growth() -> None:
+    annual, detail, companies = prepare_industry_premium_history(years=5)
+    assert annual["年度"].tolist() == ["2022", "2023", "2024", "2025", "2026"]
+    latest = annual.iloc[-1]
+    assert latest["报告期"] == "2026Q3"
+    assert bool(latest["部分年度"])
+    assert not bool(latest["完整"])
+    assert latest["合计"] == 139_820_100.0
+    assert latest["车险"] == 68_339_700.0
+    assert latest["非车险"] == latest["合计"] - latest["车险"]
+    assert detail.empty and companies == []
+
+    spec = build_industry_premium_total_chart(annual, unit_mode="亿元").to_dict()
+    assert spec["layer"][0]["encoding"]["x"]["sort"] == [
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+        "2026Q3",
+    ]
+    line_layer = next(layer for layer in spec["layer"] if layer["mark"]["type"] == "line")
+    growth_rows = spec["datasets"][line_layer["data"]["name"]]
+    assert [row.get("年度") for row in growth_rows] == ["2023", "2024", "2025"]
+    assert all(row.get("增长率") is not None for row in growth_rows)
 
 
 def test_historical_baseline_fills_missing_years_and_upload_wins() -> None:
@@ -482,6 +509,7 @@ if __name__ == "__main__":
     test_combined_structure_chart_places_two_panels_side_by_side()
     test_industry_premium_handles_2022_2026_window()
     test_industry_premium_still_renders_partial_year()
+    test_history_sheet_reads_partial_2026_without_full_year_growth()
     test_historical_baseline_fills_missing_years_and_upload_wins()
     test_reported_unit_scale_values_are_aggregated_as_is()
     test_company_disclosure_suffix_keeps_total_and_motor_split_together()

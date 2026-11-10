@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -32,6 +34,12 @@ DEFAULT_DISPLAY_UNIT = "亿元"
 _DISCLOSURE_SUFFIX = re.compile(r"[（(](?:偿付能力|合并|母公司|本部)[）)]$")
 HISTORICAL_SOURCE = "固定行业数据"
 UPLOAD_SOURCE = "上传数据"
+HISTORY_SOURCE = "原保费收入"
+INDUSTRY_PREMIUM_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "偿付能力行业集成数据_公司名称与分类规范化.xlsx"
+)
+INDUSTRY_PREMIUM_SHEET = "原保费收入"
 INDUSTRY_PREMIUM_WINDOWS = {
     "近5年": 5,
     "近10年": 10,
@@ -60,6 +68,12 @@ ANNUAL_COLUMNS = [
     "完整",
     "异常数",
     "来源",
+]
+HISTORY_COLUMNS = [
+    *ANNUAL_COLUMNS,
+    "报告期",
+    "期间",
+    "部分年度",
 ]
 
 
@@ -173,6 +187,117 @@ def _historical_annual() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows, columns=ANNUAL_COLUMNS)
+
+
+@lru_cache(maxsize=1)
+def load_industry_premium_history() -> pd.DataFrame:
+    """Read the industry-level “原保费收入” sheet from the source workbook.
+
+    The sheet is the single source of truth for the industry total and the
+    motor split.  It also carries partial-year rows (for example 2026 Q1-Q3)
+    that must be shown without being compared with a full prior year.
+    """
+    empty = pd.DataFrame(columns=HISTORY_COLUMNS)
+    if not INDUSTRY_PREMIUM_PATH.exists():
+        return empty
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(
+            INDUSTRY_PREMIUM_PATH,
+            read_only=True,
+            data_only=True,
+        )
+        try:
+            if INDUSTRY_PREMIUM_SHEET not in workbook.sheetnames:
+                return empty
+            values = list(
+                workbook[INDUSTRY_PREMIUM_SHEET].iter_rows(values_only=True)
+            )
+        finally:
+            workbook.close()
+    except Exception:
+        return empty
+    if not values:
+        return empty
+
+    header = [str(value or "").strip() for value in values[0]]
+    index = {name: position for position, name in enumerate(header)}
+
+    def cell(row: tuple[object, ...], name: str) -> object:
+        position = index.get(name)
+        return row[position] if position is not None and position < len(row) else None
+
+    rows: list[dict[str, object]] = []
+    for raw in values[1:]:
+        year = pd.to_numeric(cell(raw, "年份"), errors="coerce")
+        total = pd.to_numeric(cell(raw, "原保险保费收入"), errors="coerce")
+        if pd.isna(year) or pd.isna(total) or float(total) <= 0:
+            continue
+        motor = pd.to_numeric(cell(raw, "车险原保险保费收入"), errors="coerce")
+        total_factor = UNIT_TO_WAN.get(
+            str(cell(raw, "单位") or "亿元").strip(),
+            UNIT_TO_WAN["亿元"],
+        )
+        motor_factor = UNIT_TO_WAN.get(
+            str(cell(raw, "车险单位") or cell(raw, "单位") or "亿元").strip(),
+            total_factor,
+        )
+        total_wan = float(total) * total_factor
+        motor_wan = (
+            float(motor) * motor_factor
+            if not pd.isna(motor)
+            else None
+        )
+        if motor_wan is not None:
+            motor_wan = min(max(motor_wan, 0.0), total_wan)
+        report_period = str(cell(raw, "报告期") or "").strip()
+        quarter = _quarter_from_period(report_period)
+        period = str(cell(raw, "期间口径") or "").strip()
+        partial = bool(report_period) and quarter not in (0, 4)
+        if partial and not period:
+            period = "部分年度累计"
+        source = str(cell(raw, "数据来源") or HISTORY_SOURCE).strip()
+        rows.append(
+            {
+                "年度": str(int(year)),
+                "车险": motor_wan,
+                "非车险": (
+                    max(total_wan - motor_wan, 0.0)
+                    if motor_wan is not None
+                    else None
+                ),
+                "合计": total_wan,
+                "公司数": 0,
+                "车险公司数": 0,
+                "完整": not partial,
+                "异常数": 0,
+                "来源": source,
+                "报告期": report_period or f"{int(year)}Q4",
+                "期间": period or "全年累计",
+                "部分年度": partial,
+            }
+        )
+    if not rows:
+        return empty
+    frame = pd.DataFrame(rows, columns=HISTORY_COLUMNS)
+    frame["_年度排序"] = pd.to_numeric(frame["年度"], errors="coerce")
+    frame = frame.sort_values("_年度排序").drop(columns="_年度排序")
+    return frame.reset_index(drop=True)
+
+
+def prepare_industry_premium_history(
+    *,
+    years: int | None = 5,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Return the industry premium history in the annual-chart contract."""
+    annual = load_industry_premium_history()
+    if annual.empty:
+        return pd.DataFrame(columns=HISTORY_COLUMNS), pd.DataFrame(), []
+    annual = annual.copy()
+    if years is not None:
+        annual = annual.tail(max(1, int(years)))
+    return annual.reset_index(drop=True), pd.DataFrame(), []
 
 
 def prepare_industry_premium_annual(
@@ -423,15 +548,21 @@ def _prepare_premium_series(
             continue
         car = 0.0 if car is None else float(car)
         non_car = max(float(total) - car, 0.0) if non_car is None else float(non_car)
+        partial = bool(getattr(row, "部分年度", False))
+        report_period = str(getattr(row, "报告期", "") or "").strip()
+        year_label = report_period if partial and report_period else year
         rows.append(
             {
-                "年度": year,
+                "年度": year_label,
                 "车险": car,
                 "非车险": non_car,
                 "合计": float(total),
                 "车险占比": car / float(total),
                 "非车险占比": non_car / float(total),
                 "来源": source,
+                "部分年度": partial,
+                "报告期": report_period or f"{year}Q4",
+                "期间": str(getattr(row, "期间", "") or "全年累计"),
             }
         )
 
@@ -462,8 +593,14 @@ def _growth_rows(
     values_by_year: dict[str, float],
     years: list[str],
     prior_2016: float | None,
+    *,
+    partial_years: frozenset[str] = frozenset(),
 ) -> pd.DataFrame:
-    """Compute year-on-year growth without resetting the base across gaps."""
+    """Compute year-on-year growth without resetting the base across gaps.
+
+    Partial-year points (such as 2026 Q1-Q3) are plotted but never compared
+    with a full prior year; they also break the growth line there.
+    """
     rows: list[dict[str, object]] = []
     previous_year: str | None = "2016" if prior_2016 is not None else None
     previous_value: float | None = prior_2016
@@ -472,6 +609,25 @@ def _growth_rows(
         if key not in values_by_year:
             continue
         current_value = values_by_year[key]
+        if key in partial_years:
+            # The user explicitly wants the partial period compared with the
+            # whole of the previous year, so keep the dashed line continuous
+            # and surface the comparison instead of dropping the point.
+            if (
+                previous_year is not None
+                and previous_value is not None
+                and previous_value != 0
+            ):
+                rows.append(
+                    {
+                        "年度": key,
+                        "增长率": (current_value / previous_value - 1.0) * 100.0,
+                        "当年金额": current_value,
+                        "上年金额": previous_value,
+                        "基期年度": f"{previous_year}全年",
+                    }
+                )
+            continue
         if (
             previous_year is not None
             and previous_value is not None
@@ -491,6 +647,13 @@ def _growth_rows(
     return pd.DataFrame(rows)
 
 
+def _partial_year_labels(frame: pd.DataFrame) -> frozenset[str]:
+    if "部分年度" not in frame.columns:
+        return frozenset()
+    partial = frame["部分年度"].fillna(False).astype(bool)
+    return frozenset(frame.loc[partial, "年度"].astype(str))
+
+
 def _total_growth_frame(frame: pd.DataFrame, years: list[str]) -> pd.DataFrame:
     prior = _implied_2016_prior(frame)
     prior_total = sum(prior.values()) if len(prior) == 2 else None
@@ -498,7 +661,12 @@ def _total_growth_frame(frame: pd.DataFrame, years: list[str]) -> pd.DataFrame:
         str(row.年度): float(row.合计)
         for row in frame.itertuples(index=False)
     }
-    return _growth_rows(values, years, prior_total)
+    return _growth_rows(
+        values,
+        years,
+        prior_total,
+        partial_years=_partial_year_labels(frame),
+    )
 
 
 def _category_growth_frame(frame: pd.DataFrame, years: list[str]) -> pd.DataFrame:
@@ -509,7 +677,12 @@ def _category_growth_frame(frame: pd.DataFrame, years: list[str]) -> pd.DataFram
             str(row.年度): float(getattr(row, category))
             for row in frame.itertuples(index=False)
         }
-        growth = _growth_rows(values, years, prior.get(category))
+        growth = _growth_rows(
+            values,
+            years,
+            prior.get(category),
+            partial_years=_partial_year_labels(frame),
+        )
         if growth.empty:
             continue
         growth["类别"] = category
@@ -579,10 +752,9 @@ def _base_year_layers(
     growth_scale: alt.Scale,
 ) -> list[alt.Chart]:
     growth_years = set(growth_frame["年度"].astype(str))
-    base_year = next(
-        (str(year) for year in years if str(year) not in growth_years),
-        None,
-    )
+    # Only the first visible year can be a base period.  A later partial year
+    # legitimately has no growth point and must not be labelled “基期”.
+    base_year = str(years[0]) if years and str(years[0]) not in growth_years else None
     if not base_year:
         return []
     base_frame = pd.DataFrame([{"年度": base_year, "增长率": 0.0}])

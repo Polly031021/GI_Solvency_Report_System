@@ -943,6 +943,14 @@ PHRASE_EN: dict[str, str] = {
     "退保风险": "Surrender risk",
     "费用风险": "Expense risk",
     "缺少可绘制的完整公司数据": "lacks complete company data for plotting",
+    "缺少可绘制的年度资本金额。": " has no annual capital amount to plot.",
+    "缺少可绘制的资本金额。": " has no capital amount to plot.",
+    "缺少可绘制的组成指标。": " has no components to plot.",
+    "需要按公司分别绘制。": " must be plotted per company.",
+    "缺少核心或综合偿付能力充足率数据。": " is missing core or comprehensive solvency ratio data.",
+    "缺少可用于比例堆叠的构成占比。": " is missing component shares for a 100% stack.",
+    "核心及综合充足率需要按公司分别绘制。": "Core and comprehensive solvency ratios must be plotted per company.",
+    "缺少可绘制数据。": " has no data to plot.",
     "缺少气泡图所需指标": "is missing metrics required for the bubble chart",
     "最新报告期缺少气泡图所需指标。": "The latest reporting period is missing metrics required for the bubble chart.",
     "最新报告期": "Latest reporting period",
@@ -1269,9 +1277,23 @@ def _translate_value(value: Any, language: str | None) -> Any:
     return value
 
 
-def _translate_chart_node(node: Any, language: str | None, *, in_values: bool = False) -> Any:
+def _translate_chart_node(
+    node: Any,
+    language: str | None,
+    *,
+    in_values: bool = False,
+    in_layer: bool = False,
+) -> Any:
     if isinstance(node, list):
-        return [_translate_chart_node(item, language, in_values=in_values) for item in node]
+        return [
+            _translate_chart_node(
+                item,
+                language,
+                in_values=in_values,
+                in_layer=in_layer,
+            )
+            for item in node
+        ]
     if not isinstance(node, dict):
         if isinstance(node, str) and in_values:
             return _translate_value(node, language)
@@ -1333,10 +1355,37 @@ def _translate_chart_node(node: Any, language: str | None, *, in_values: bool = 
                 translated["text"] = translate_text(translated["text"], language)
             result[key] = translated
             continue
-        result[key] = _translate_chart_node(value, language, in_values=in_values)
+        if key == "layer" and isinstance(value, list):
+            # Layer-level encodings share the top-level scales.  Giving an
+            # auxiliary text/rule layer its own title makes Vega-Lite merge
+            # every layer title into one very long axis title (e.g.
+            # "Combined ratio (%) Combined ratio Combined ratio y").  Only
+            # top-level (and concat child) encodings may receive a fallback
+            # title; layer titles must always come from the builder.
+            result[key] = [
+                _translate_chart_node(
+                    item,
+                    language,
+                    in_values=in_values,
+                    in_layer=True,
+                )
+                for item in value
+            ]
+            continue
+        result[key] = _translate_chart_node(
+            value,
+            language,
+            in_values=in_values,
+            in_layer=in_layer,
+        )
 
     # Give unlabelled encoding fields a readable title.
-    if "field" in node and isinstance(node.get("field"), str) and "title" not in node:
+    if (
+        not in_layer
+        and "field" in node
+        and isinstance(node.get("field"), str)
+        and "title" not in node
+    ):
         if "axis" not in node and "legend" not in node:
             field = str(node["field"])
             if field not in {"数值", "值"}:

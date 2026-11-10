@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import math
 import re
 import unicodedata
 import tempfile
+import zipfile
+from xml.etree import ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1029,7 +1032,7 @@ def _backfill_missing_company_names(frame: pd.DataFrame) -> pd.DataFrame:
 
     return result
 
-STANDARD_WORKBOOK_CACHE_VERSION = "standard-workbook-v1"
+STANDARD_WORKBOOK_CACHE_VERSION = "standard-workbook-v2"
 
 
 def _standard_workbook_cache_path(
@@ -1049,6 +1052,179 @@ def _standard_workbook_cache_path(
     cache_dir = Path(tempfile.gettempdir()) / "gi_solvency_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"{digest}.pkl"
+
+
+_SHEETML_NAMESPACE = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_OFFICE_REL_NAMESPACE = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_ALLOWED_BINARY_OPERATORS = (
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+)
+_ALLOWED_UNARY_OPERATORS = (ast.UAdd, ast.USub)
+
+
+def _column_letters(index: int) -> str:
+    """1 -> A, 27 -> AA (openpyxl 的列编号规则)。"""
+    letters = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _evaluate_simple_formula(formula: str) -> float | None:
+    """安全求值 `=数字/10000` 这类纯算术公式。
+
+    只接受数字常量和 + - * / // % **、正负号，单元格引用、函数、名称一律放弃，
+    避免把用户工作簿里的任意公式当代码执行。
+    """
+    if not isinstance(formula, str):
+        return None
+    text = formula.strip()
+    if not text.startswith("="):
+        return None
+    try:
+        tree = ast.parse(text[1:], mode="eval")
+    except SyntaxError:
+        return None
+
+    def evaluate(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return evaluate(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+                raise ValueError("unsupported constant")
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, _ALLOWED_UNARY_OPERATORS):
+            operand = evaluate(node.operand)
+            return operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.BinOp) and isinstance(node.op, _ALLOWED_BINARY_OPERATORS):
+            left = evaluate(node.left)
+            right = evaluate(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+            if isinstance(node.op, ast.FloorDiv):
+                return left // right
+            if isinstance(node.op, ast.Mod):
+                return left % right
+            return left**right
+        raise ValueError("unsupported formula node")
+
+    try:
+        value = evaluate(tree)
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _find_sheet_xml_path(archive: zipfile.ZipFile, sheet_name: str) -> str | None:
+    """在 xlsx 压缩包里定位 sheet_name 对应的 worksheet XML。"""
+    try:
+        workbook_root = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+        relationships_root = ElementTree.fromstring(
+            archive.read("xl/_rels/workbook.xml.rels")
+        )
+    except (KeyError, ElementTree.ParseError):
+        return None
+    relationship_id = None
+    for sheet in workbook_root.iter(f"{_SHEETML_NAMESPACE}sheet"):
+        if sheet.get("name") == sheet_name:
+            relationship_id = sheet.get(f"{_OFFICE_REL_NAMESPACE}id")
+            break
+    if not relationship_id:
+        return None
+    for relationship in relationships_root:
+        if relationship.get("Id") == relationship_id:
+            target = (relationship.get("Target") or "").lstrip("/")
+            if not target.startswith("xl/"):
+                target = "xl/" + target
+            return target
+    return None
+
+
+def _read_column_formulas(
+    workbook_bytes: bytes,
+    sheet_name: str,
+    column_index: int,
+) -> dict[int, str]:
+    """读取指定列每个单元格的公式，返回 {Excel 行号: 公式文本}。
+
+    用 zipfile + iterparse 流式解析 worksheet XML，避免 openpyxl 全表加载：
+    60k 行的标准窄表只解析一遍 XML，耗时约 1~2 秒。
+    """
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(workbook_bytes))
+    except zipfile.BadZipFile:
+        return {}
+    with archive:
+        xml_path = _find_sheet_xml_path(archive, sheet_name)
+        if not xml_path:
+            return {}
+        try:
+            handle = archive.open(xml_path)
+        except KeyError:
+            return {}
+        target_letters = _column_letters(column_index)
+        formulas: dict[int, str] = {}
+        with handle:
+            for _, element in ElementTree.iterparse(handle, events=("end",)):
+                if element.tag != f"{_SHEETML_NAMESPACE}c":
+                    continue
+                reference = element.get("r") or ""
+                letters = "".join(char for char in reference if char.isalpha())
+                if letters != target_letters:
+                    continue
+                formula_element = element.find(f"{_SHEETML_NAMESPACE}f")
+                if formula_element is not None and formula_element.text:
+                    digits = "".join(char for char in reference if char.isdigit())
+                    if digits:
+                        formulas[int(digits)] = "=" + formula_element.text
+                element.clear()
+        return formulas
+
+
+def _resolve_formula_values(
+    workbook_bytes: bytes,
+    sheet_name: str,
+    header_row: int,
+    frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """把“数值”列里无缓存值的简单公式回填成计算结果。
+
+    Excel 里手工写入的公式在未重算保存时没有 cached value，pandas/openpyxl
+    读出来是 NaN（例如 STEP7 净利润 2025Q4 的 `=金额/10000`）。这里只处理
+    纯数字算术公式，其余公式保持原状。
+    """
+    if frame.empty or "数值" not in frame.columns:
+        return frame
+    column_index = int(frame.columns.get_loc("数值")) + 1
+    formulas = _read_column_formulas(workbook_bytes, sheet_name, column_index)
+    if not formulas:
+        return frame
+    data_start_row = header_row + 2
+    resolved = frame.copy()
+    for excel_row, formula in formulas.items():
+        row_index = excel_row - data_start_row
+        if not 0 <= row_index < len(resolved):
+            continue
+        position = resolved.index[row_index]
+        if not pd.isna(resolved.at[position, "数值"]):
+            continue
+        value = _evaluate_simple_formula(formula)
+        if value is not None:
+            resolved.at[position, "数值"] = value
+    return resolved
 
 
 def _open_excel_workbook(workbook_bytes: bytes) -> pd.ExcelFile:
@@ -1089,6 +1265,7 @@ def read_standard_workbook(
         raise ValueError(f"{filename} 未找到标准窄表表头。")
     frame = pd.read_excel(excel, sheet_name=sheet_name, header=header_row)
     frame.columns = [str(column).strip() for column in frame.columns]
+    frame = _resolve_formula_values(workbook_bytes, sheet_name, header_row, frame)
     if include_internal and INTERNAL_STANDARD_SHEET_NAME in excel.sheet_names:
         internal = pd.read_excel(excel, sheet_name=INTERNAL_STANDARD_SHEET_NAME)
         internal.columns = [str(column).strip() for column in internal.columns]

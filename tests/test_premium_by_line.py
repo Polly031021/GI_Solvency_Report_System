@@ -29,6 +29,9 @@ from services.solvency_step7_charts import (  # noqa: E402
     premium_by_line_window_years,
     premium_line_frame,
 )
+from services.solvency_step7_charts.premium_by_line import (  # noqa: E402
+    annual_premium_by_line_frame,
+)
 from services.report_i18n import localize_chart  # noqa: E402
 from services.step7_excel_config import load_step7_config  # noqa: E402
 
@@ -43,8 +46,8 @@ def test_integrated_workbook_contains_sheet() -> None:
     try:
         assert INTEGRATED_SHEET_NAME in workbook.sheetnames
         sheet = workbook[INTEGRATED_SHEET_NAME]
-        assert sheet.max_row == 52  # 表头 + 51 条记录
-        assert sheet.max_column == 7
+        assert sheet.max_row == 57  # 表头 + 56 条记录（含 2026 前三季度 5 行）
+        assert sheet.max_column == 8
     finally:
         workbook.close()
     assert premium_by_line_source_key() == "integrated"
@@ -53,15 +56,23 @@ def test_integrated_workbook_contains_sheet() -> None:
 def test_source_data_is_loaded() -> None:
     assert PREMIUM_BY_LINE_PATH.exists()
     frame = load_premium_by_line_data()
-    assert len(frame) == 51
-    assert set(frame.columns) == {"年度", "险种", "原保险保费收入", "同比增速", "基期年度"}
+    assert len(frame) == 56
+    assert set(frame.columns) == {
+        "年度",
+        "险种",
+        "原保险保费收入",
+        "同比增速",
+        "基期年度",
+        "期间",
+    }
     assert frame["年度"].min() == 2019
-    assert frame["年度"].max() == 2025
+    assert frame["年度"].max() == 2026
     assert frame["险种"].nunique() == 9
+    assert set(frame["期间"].astype(str)) == {"全年累计", "前三季度累计"}
 
 
 def test_growth_uses_adjacent_year_with_data() -> None:
-    frame = load_premium_by_line_data()
+    frame = annual_premium_by_line_frame(load_premium_by_line_data())
     motor = premium_line_frame(frame, "机动车辆保险")
     assert motor["年度"].tolist() == list(range(2019, 2026))
     latest = motor.iloc[-1]
@@ -72,6 +83,20 @@ def test_growth_uses_adjacent_year_with_data() -> None:
     engineering = premium_line_frame(frame, "工程保险")
     assert engineering["年度"].tolist() == [2019, 2020, 2021, 2022]
     assert engineering.iloc[-1]["同比增速"] is not None
+
+
+def test_partial_year_is_not_plotted_with_full_years() -> None:
+    frame = load_premium_by_line_data()
+    annual = annual_premium_by_line_frame(frame)
+    assert 2026 not in set(annual["年度"])
+    assert 2026 in set(frame["年度"])
+    years = premium_by_line_window_years(frame)
+    assert years == [2022, 2023, 2024, 2025]
+    display = premium_by_line_display_frame(frame, years=years)
+    assert 2026 not in set(display["年度"])
+    partial = frame[frame["年度"].eq(2026)]
+    assert set(partial["期间"].astype(str)) == {"前三季度累计"}
+    assert partial["同比增速"].isna().all()
 
 
 def test_display_frame_keeps_five_lines_and_latest_four_years() -> None:
@@ -295,6 +320,7 @@ if __name__ == "__main__":
     test_integrated_workbook_contains_sheet()
     test_source_data_is_loaded()
     test_growth_uses_adjacent_year_with_data()
+    test_partial_year_is_not_plotted_with_full_years()
     test_display_frame_keeps_five_lines_and_latest_four_years()
     test_chart_frame_marks_missing_years_for_retired_lines()
     test_combo_chart_layers_premium_bars_and_growth_line()

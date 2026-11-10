@@ -200,9 +200,13 @@ def render_step7_excel_navigation(profile_id: str) -> None:
         format_func=level_name,
     )
     if main_nav == PRINT_ALL_LABEL:
+        export_enabled = _render_export_scope_selector(
+            modules, profile_id=profile_id
+        )
         render_print_control(
             key=f"company_report_print_{profile_id}",
             language=get_language(),
+            enabled=export_enabled,
         )
         return
 
@@ -238,6 +242,85 @@ def render_step7_excel_navigation(profile_id: str) -> None:
 
     # 二级分类即图表入口；不再额外展示“具体图表”单选。
     st.session_state.pop("company_nav_chart", None)
+
+
+
+def _render_export_scope_selector(modules, *, profile_id: str) -> bool:
+    """Let the user export every module or only a hand-picked set of charts."""
+    ordered: list[str] = []
+    labels: dict[str, str] = {}
+    for module in modules:
+        name = str(module.chart_name or "").strip()
+        if not name or name in labels:
+            continue
+        ordered.append(name)
+        parts = [
+            level_name(part)
+            for part in (module.level_one, module.level_two)
+            if str(part or "").strip()
+        ]
+        localized = chart_name(name)
+        if not parts or parts[-1] != localized:
+            parts.append(localized)
+        labels[name] = " · ".join(parts)
+
+    if not ordered:
+        return True
+
+    key = f"s7_export_charts_{profile_id}"
+    if key not in st.session_state:
+        st.session_state[key] = list(ordered)
+    keep_valid_widget_state(key, ordered, multiple=True)
+
+    st.caption(
+        t(
+            "导出范围：可全选，也可只选需要的表格；未选中的模块不会出现在 PDF 中。",
+            "Export scope: keep all modules or select only the tables you need; unselected modules are omitted from the PDF.",
+        )
+    )
+    selected = st.multiselect(
+        t("选择导出图表", "Charts to export"),
+        ordered,
+        key=key,
+        format_func=lambda value: labels.get(value, value),
+        placeholder=t("请选择至少一个图表", "Select at least one chart"),
+    )
+
+    def _select_all() -> None:
+        st.session_state[key] = list(ordered)
+
+    def _clear_all() -> None:
+        st.session_state[key] = []
+
+    left, right = st.columns(2)
+    left.button(
+        t("全选", "Select all"),
+        key=f"s7_export_all_{profile_id}",
+        on_click=_select_all,
+        width="stretch",
+    )
+    right.button(
+        t("清空", "Clear"),
+        key=f"s7_export_none_{profile_id}",
+        on_click=_clear_all,
+        width="stretch",
+    )
+    st.session_state["s7_export_chart_names"] = list(selected)
+    if selected:
+        st.caption(
+            t(
+                f"已选 {len(selected)} / {len(ordered)} 个图表。",
+                f"{len(selected)} of {len(ordered)} charts selected.",
+            )
+        )
+    else:
+        st.warning(
+            t(
+                "请至少选择一个图表后再导出。",
+                "Select at least one chart before exporting.",
+            )
+        )
+    return bool(selected)
 
 
 def render_major_financing_upload(profile_id: str) -> None:

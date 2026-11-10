@@ -561,10 +561,13 @@ def render_company_chart_grid(
             try:
                 chart = chart_factory(company_frame)
             except (ValueError, KeyError) as exc:
+                # The chart builder raises Chinese detail text.  Translate the
+                # detail too, otherwise the English page leaks Chinese here.
+                detail = translate_text(str(exc), "en") if is_english() else str(exc)
                 st.warning(
                     t(
-                        f"该公司的图表暂不可用：{exc}",
-                        f"Chart unavailable for this company: {exc}",
+                        f"该公司的图表暂不可用：{detail}",
+                        f"Chart unavailable for this company: {detail}",
                     )
                 )
                 return

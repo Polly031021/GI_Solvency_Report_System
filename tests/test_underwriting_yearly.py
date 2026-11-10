@@ -163,6 +163,24 @@ def test_large_company_pool_axis_and_outliers() -> None:
         for layer in spec["layer"]
     )
 
+    # English localisation must not add a fallback title to every layer; Vega
+    # would merge those into one very long, duplicated axis label.
+    from services.report_i18n import localize_chart
+
+    localized = localize_chart(chart, "en").to_dict()
+    y_titles = [
+        layer["encoding"]["y"].get("title")
+        for layer in localized["layer"]
+        if layer.get("encoding", {}).get("y", {}).get("title")
+    ]
+    x_titles = [
+        layer["encoding"]["x"].get("title")
+        for layer in localized["layer"]
+        if layer.get("encoding", {}).get("x", {}).get("title")
+    ]
+    assert y_titles == ["Combined ratio (%)"], y_titles
+    assert x_titles == ["Signed premium rank (1 = highest)"], x_titles
+
 
 def test_step7_underwriting_page_five_year_layout() -> None:
     """The Step 7 module must render five annual cards and a count trend."""

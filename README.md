@@ -38,7 +38,7 @@ streamlit run app.py
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
 | STEP6 自定义分析 | 任选指标/公司/报告期，生成簇状柱、折线、散点、横向条形等对比图，图例与配色可自定义 | `ui/step6_analysis.py`、`services/solvency_step6_analysis.py` |
-| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益五年年度散点图、行业五年保费结构、公司类别市场份额等，支持图片覆盖、AI 点评与打印导出 PDF；页面顶部可一键切换中英文展示。STEP7 所需指标统一维护在 `config/Step7_指标需求清单.xlsx` | `step7_solvency/`、`services/solvency_step7_charts/`、`services/solvency_step7_metric_catalog.py`、`services/report_i18n.py` |
+| STEP7 公司报告 | 按 Excel 注释表（或内置导航）逐图表生成公司级对标报告：趋势图、资本结构组合图、气泡图、雷达图、承保效益五年年度散点图、行业五年保费结构、公司类别市场份额等，支持图片覆盖、AI 点评与打印导出 PDF（可按图表选择导出范围，超长模块自动缩放或分页，避免重叠与遮挡）；页面顶部可一键切换中英文展示。STEP7 所需指标统一维护在 `config/Step7_指标需求清单.xlsx` | `step7_solvency/`、`services/solvency_step7_charts/`、`services/solvency_step7_metric_catalog.py`、`services/report_i18n.py` |
 | STEP8 行业分析 | 行业整体概览、同业分类分布趋势与排名、重大融资统计，支持整本报告打印 | `step8_solvency.py`、`dashboard_components.py` |
 
 STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.xlsx`，无需每次在侧边栏上传；上传文件仅覆盖当前会话，可点击“恢复默认配置”切回内置模板。侧边栏只保留一级/二级分类，二级分类即图表入口。

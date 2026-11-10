@@ -67,6 +67,7 @@ from services.solvency_step7_charts import (
     classify_performance_pattern,
     build_performance_pattern_trajectory,
     prepare_industry_premium_annual,
+    prepare_industry_premium_history,
     prepare_premium_by_line_overview,
     load_premium_by_line_data,
     premium_by_line_chart_frame,
@@ -2100,7 +2101,10 @@ def render_plan_capability_radar(
     # 每个分面图最多 10 家（2 行 × 5 列），兼顾渲染速度与打印分页。
     companies_per_chart = 10
     columns_per_row = 5
-    panel_size = 230  # 单张小图尺寸
+    # Five panels must fit the report column, including the sidebar on screen
+    # and the printable 1600 px sheet.  210 px keeps the right-most pentagon
+    # inside the container; width="stretch" then scales the whole facet.
+    panel_size = 210  # 单张小图尺寸
 
     for category in ordered_categories:
         cat_scores = score_all[score_all["_分类"].astype(str).eq(category)].reset_index(drop=True)
@@ -2173,7 +2177,7 @@ def render_plan_capability_radar(
             ):
                 render_altair_chart(
                     chart,
-                    width="content",
+                    width="stretch",
                     key=f"{key_prefix}_radar_{category}_{start}",
                 )
 
@@ -2353,12 +2357,20 @@ def render_plan_industry_premium_structure(
         )
     selected_range = selected_range or default_range
     year_window = INDUSTRY_PREMIUM_WINDOWS[selected_range]
-    annual, detail, companies = prepare_industry_premium_annual(
-        industry_frame,
+    # The industry-level “原保费收入” sheet is the source of truth for this
+    # module.  It also carries partial-year rows (2026 Q1-Q3) that must be
+    # shown without being compared with a full prior year.
+    annual, detail, companies = prepare_industry_premium_history(
         years=year_window,
-        annual_scope=annual_scope,
-        include_historical=True,
     )
+    using_history = not annual.empty
+    if annual.empty:
+        annual, detail, companies = prepare_industry_premium_annual(
+            industry_frame,
+            years=year_window,
+            annual_scope=annual_scope,
+            include_historical=True,
+        )
     if annual.empty:
         st.warning(
             t(
@@ -2398,10 +2410,16 @@ def render_plan_industry_premium_structure(
 
     value_format = ",.1f" if unit == "十亿元" else ",.0f"
 
-    base = complete if not complete.empty else available
-    latest = base.iloc[-1]
-    previous = base.iloc[-2] if len(base) >= 2 else None
-    latest_is_complete = bool(latest.get("完整", False))
+    # Show the newest available point even when it is a partial year; complete
+    # years remain the basis for YoY and CAGR.
+    latest = available.iloc[-1]
+    latest_partial = not bool(latest.get("完整", False))
+    latest_is_complete = not latest_partial
+    previous = None
+    if not complete.empty:
+        previous = complete.iloc[-1]
+    elif len(available) >= 2:
+        previous = available.iloc[-2]
     latest_total = display_value(latest.get("合计"))
     latest_car = display_value(latest.get("车险"))
     latest_non_car = display_value(latest.get("非车险"))
@@ -2421,6 +2439,8 @@ def render_plan_industry_premium_structure(
     )
 
     latest_year = str(latest.get("年度", "") or "")
+    if latest_partial:
+        latest_year = str(latest.get("报告期", "") or latest_year)
     previous_total = None if previous is None else previous.get("合计")
     previous_year = None if previous is None else str(previous.get("年度", ""))
     is_year_over_year = bool(
@@ -2429,17 +2449,19 @@ def render_plan_industry_premium_structure(
         and previous_year.isdigit()
         and int(latest["年度"]) - int(previous_year) == 1
     )
-    growth_label = (
-        t("同比增速", "YoY growth")
-        if is_year_over_year and latest_is_complete
-        else t("较上一有数年度", "vs previous year with data")
-    )
+    if latest_partial:
+        growth_label = t("前三季度累计，不做全年同比", "Q1-Q3 cumulative; no full-year YoY")
+    elif is_year_over_year:
+        growth_label = t("同比增速", "YoY growth")
+    else:
+        growth_label = t("较上一有数年度", "vs previous year with data")
     latest_total_raw = latest.get("合计")
     growth_value: float | None = None
     car_growth_value: float | None = None
     non_car_growth_value: float | None = None
     if (
-        previous_total is not None
+        latest_is_complete
+        and previous_total is not None
         and pd.notna(previous_total)
         and float(previous_total) != 0
         and latest_total_raw is not None
@@ -2473,7 +2495,7 @@ def render_plan_industry_premium_structure(
     cagr_value: float | None = None
     if len(complete) >= 2 and float(complete.iloc[0]["合计"] or 0) > 0:
         cagr_value = (
-            (float(latest["合计"]) / float(complete.iloc[0]["合计"]))
+            (float(complete.iloc[-1]["合计"]) / float(complete.iloc[0]["合计"]))
             ** (1 / (len(complete) - 1))
             - 1
         ) * 100
@@ -2542,7 +2564,9 @@ def render_plan_industry_premium_structure(
             else f"{summary_total:,.1f} {summary_unit_label}"
         ),
         delta=(
-            t("同比不可比", "YoY not comparable")
+            growth_label
+            if latest_partial
+            else t("同比不可比", "YoY not comparable")
             if growth_value is None
             else f"{growth_label} {growth_value:+.1f}%"
         ),
@@ -2562,7 +2586,11 @@ def render_plan_industry_premium_structure(
         "全部": t("历年", "All years"),
     }
     years = annual["年度"].astype(str).tolist()
-    year_span = years[0] if len(years) == 1 else f"{years[0]}–{years[-1]}"
+    year_labels = [
+        str(row.报告期) if bool(getattr(row, "部分年度", False)) else str(row.年度)
+        for row in annual.itertuples(index=False)
+    ]
+    year_span = year_labels[0] if len(year_labels) == 1 else f"{year_labels[0]}–{year_labels[-1]}"
     has_growth = int(pd.to_numeric(annual["合计"], errors="coerce").notna().sum()) >= 2
     chart_title = t(
         "保费规模与同比增速" if has_growth else "保费规模与结构",
@@ -2640,37 +2668,74 @@ def render_plan_industry_premium_structure(
                 )
             )
 
-        historical_years = annual.loc[
-            annual["来源"].eq(HISTORICAL_SOURCE), "年度"
-        ].astype(str).tolist()
-        uploaded_years = annual.loc[
-            annual["来源"].eq(UPLOAD_SOURCE), "年度"
-        ].astype(str).tolist()
-
         def year_span_text(values: list[str]) -> str:
             return values[0] if len(values) == 1 else f"{values[0]}–{values[-1]}"
 
-        source_parts = []
-        if historical_years:
-            source_parts.append(
-                t(
-                    f"{year_span_text(historical_years)} 采用固定行业数据",
-                    f"{year_span_text(historical_years)}: built-in industry data",
+        source_parts: list[str] = []
+        if using_history:
+            fixed_years = annual.loc[
+                annual["来源"].eq(HISTORICAL_SOURCE), "年度"
+            ].astype(str).tolist()
+            standard_years = annual.loc[
+                annual["来源"].eq("标准数据汇总"), "年度"
+            ].astype(str).tolist()
+            partial_years = annual.loc[
+                annual.get("部分年度", pd.Series(False, index=annual.index)).astype(bool),
+                "报告期",
+            ].astype(str).tolist()
+            if fixed_years:
+                source_parts.append(
+                    t(
+                        f"{year_span_text(fixed_years)} 采用固定行业基准",
+                        f"{year_span_text(fixed_years)}: built-in industry baseline",
+                    )
                 )
-            )
-        if uploaded_years:
-            source_parts.append(
-                t(
-                    f"{year_span_text(uploaded_years)} 采用上传数据",
-                    f"{year_span_text(uploaded_years)}: uploaded data",
+            if standard_years:
+                source_parts.append(
+                    t(
+                        f"{year_span_text(standard_years)} 为公司年度汇总",
+                        f"{year_span_text(standard_years)}: company annual aggregates",
+                    )
                 )
-            )
+            if partial_years:
+                source_parts.append(
+                    t(
+                        f"{year_span_text(partial_years)} 为前三季度行业汇总（截至 9 月），仅展示规模与结构，不做全年同比",
+                        f"{year_span_text(partial_years)}: Q1-Q3 industry aggregate to September, "
+                        "shown for scale and mix only, with no full-year YoY",
+                    )
+                )
+        else:
+            historical_years = annual.loc[
+                annual["来源"].eq(HISTORICAL_SOURCE), "年度"
+            ].astype(str).tolist()
+            uploaded_years = annual.loc[
+                annual["来源"].eq(UPLOAD_SOURCE), "年度"
+            ].astype(str).tolist()
+            if historical_years:
+                source_parts.append(
+                    t(
+                        f"{year_span_text(historical_years)} 采用固定行业数据",
+                        f"{year_span_text(historical_years)}: built-in industry data",
+                    )
+                )
+            if uploaded_years:
+                source_parts.append(
+                    t(
+                        f"{year_span_text(uploaded_years)} 采用上传数据",
+                        f"{year_span_text(uploaded_years)}: uploaded data",
+                    )
+                )
         source_note = t("；", "; ").join(source_parts)
-        if historical_years and uploaded_years:
+        if not using_history and historical_years and uploaded_years:
             source_note += t("，重叠年份以上传数据为准", "; uploaded data prevails for overlapping years")
         st.caption(f"{source_note}。")
 
-    incomplete = annual[~annual["完整"].astype(bool)]
+    partial_mask = annual.get(
+        "部分年度", pd.Series(False, index=annual.index)
+    ).astype(bool)
+    partial_years = annual[partial_mask]
+    incomplete = annual[~annual["完整"].astype(bool) & ~partial_mask]
     anomaly_count = int(pd.to_numeric(annual["异常数"], errors="coerce").fillna(0).sum())
 
     with st.expander(t("查看行业年度明细", "View annual industry detail")):
@@ -2690,6 +2755,26 @@ def render_plan_industry_premium_structure(
         )
         st.markdown("**" + t("年度汇总", "Annual summary") + "**")
         st.dataframe(translate_dataframe(summary), width="stretch", hide_index=True)
+        if not partial_years.empty:
+            def period_label(value: object) -> str:
+                text = str(value or "").strip()
+                if text == "前三季度累计":
+                    return t("前三季度累计", "Q1-Q3 cumulative")
+                if text == "全年累计":
+                    return t("全年累计", "full-year cumulative")
+                return text or t("部分年度累计", "partial-year cumulative")
+
+            labels = "、".join(
+                f"{row.报告期}（{period_label(row.期间)}）"
+                for row in partial_years.itertuples(index=False)
+            )
+            st.caption(
+                t(
+                    f"部分年度：{labels}；仅展示累计规模与结构，不参与全年同比和复合增速。",
+                    f"Partial periods: {labels}; cumulative scale and mix only, "
+                    "excluded from full-year YoY and CAGR.",
+                )
+            )
         if not incomplete.empty:
             company_count = max(len(companies), 1)
             missing_labels = []
@@ -2754,6 +2839,15 @@ def render_plan_industry_premium_by_line(
     amount_unit = unit_name(unit)
     amount_text = f"{overview.total:,.0f} {amount_unit}"
     source_text = premium_by_line_source_text()
+    period_labels = chart_frame["年度"].astype(str).drop_duplicates().tolist()
+    period_span = (
+        f"{period_labels[0]}–{period_labels[-1]}"
+        if period_labels
+        else f"{years[0]}–{years[-1]}"
+    )
+    period_count = len(period_labels) or len(years)
+    latest_period = period_labels[-1] if period_labels else str(overview.year)
+    latest_full_year = years[-1] if years else overview.year
     lines = [
         line for line in DISPLAY_LINES
         if line in set(frame["险种"].astype(str))
@@ -2821,8 +2915,8 @@ def render_plan_industry_premium_by_line(
         title=t("分险种保费收入", "Premium by line of business"),
         eyebrow=t("险种结构", "Line-of-business mix"),
         headline=t(
-            f"{overview.year} 年列示险种原保险保费收入",
-            f"Original premium income by line ({overview.year})",
+            f"{overview.period_label or overview.year} 列示险种原保险保费收入",
+            f"Original premium income by line ({overview.period_label or overview.year})",
         ),
         value=amount_text,
         delta=growth_delta,
@@ -2830,31 +2924,35 @@ def render_plan_industry_premium_by_line(
         bullets=bullets,
         footnote=t(
             f"数据来源：{source_text}；仅列示机动车辆保险、健康险、农业保险、责任险和意外险五个险种，"
-            f"并保留最近 {len(years)} 个年度（{years[0]}–{years[-1]}）；"
-            "保费与同比增速合并为一张双轴组合图，每行两个险种，同比按相邻有数年度计算。",
+            f"并保留 {period_span}（{period_count} 个报告期，含 {latest_period}）；"
+            f"保费与同比增速合并为一张双轴组合图，每行两个险种；{latest_period} 的同比按 "
+            f"{latest_full_year} 全年数计算。",
             f"Source: {source_text}. Five major lines only (motor, health, agriculture, "
-            f"liability and accident), for the latest {len(years)} years "
-            f"({years[0]}–{years[-1]}). Premium bars and YoY growth share one dual-axis "
-            "chart, two lines per row; YoY uses the adjacent year with data.",
+            f"liability and accident), covering {period_span} ({period_count} periods, "
+            f"including {latest_period}). Premium bars and YoY growth share one dual-axis "
+            f"chart, two lines per row; {latest_period} YoY is calculated against the "
+            f"{latest_full_year} full-year figure.",
         ),
     )
 
     st.caption(
         t(
-            f"共列示 {len(lines)} 个险种、{len(years)} 个年度（{years[0]}–{years[-1]}）："
+            f"共列示 {len(lines)} 个险种、{period_count} 个报告期（{period_span}）："
             "每个险种一张组合图，柱状图为原保险保费收入（左轴，亿元），"
             "折线为同比增速（右轴，%），每行两个险种；"
-            "同比按相邻有数年度计算，“×”表示源表未披露该年度数据。",
-            f"{len(lines)} lines of business across {len(years)} years "
-            f"({years[0]}–{years[-1]}). One combo chart per line: premium bars "
+            f"{latest_period} 的同比按 {latest_full_year} 全年数计算，"
+            "“×”表示源表未披露该报告期数据。",
+            f"{len(lines)} lines of business across {period_count} periods "
+            f"({period_span}). One combo chart per line: premium bars "
             "(left axis, RMB 100 mn) and YoY growth (right axis, %), two lines per row. "
-            "YoY uses the adjacent year with data; “×” marks years not disclosed in the source.",
+            f"{latest_period} YoY uses the {latest_full_year} full-year figure; "
+            "“×” marks periods not disclosed in the source.",
         )
     )
 
     st.markdown(
         f"<div class='s7-uw-year-title'>{t('分险种原保险保费收入与同比增速', 'Original premium income and YoY growth by line')}</div>"
-        f"<div class='s7-uw-year-sub'>{t(f'每行两个险种，每个险种一张组合图：柱状图为原保险保费收入（左轴，亿元），折线为同比增速（右轴，%）；展示 {years[0]}–{years[-1]} 年', f'Two lines per row, one combo chart each: premium bars (left axis, RMB 100 mn) and YoY growth (right axis, %); {years[0]}–{years[-1]}')}</div>",
+        f"<div class='s7-uw-year-sub'>{t(f'每行两个险种，每个险种一张组合图：柱状图为原保险保费收入（左轴，亿元），折线为同比增速（右轴，%）；展示 {period_span}，含 {latest_period}', f'Two lines per row, one combo chart each: premium bars (left axis, RMB 100 mn) and YoY growth (right axis, %); {period_span}, including {latest_period}')}</div>",
         unsafe_allow_html=True,
     )
     for start in range(0, len(lines), 2):
@@ -2886,6 +2984,9 @@ def render_plan_industry_premium_by_line(
         detail["年度"] = detail["年度"].astype(str)
         detail = detail.rename(
             columns={
+                # 年度必须一起改名：英文表头选择列表用的是 "Year"，
+                # 只改险种/金额会让英文页面的明细报 ['Year'] not in index。
+                "年度": t("年度", "Year"),
                 "险种": t("险种", "Line of business"),
                 PREMIUM_BY_LINE_AMOUNT_COLUMN: t(
                     f"原保险保费收入（{unit}）",

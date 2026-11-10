@@ -26,6 +26,9 @@ MOTOR_LINE = "机动车辆保险"
 AMOUNT_COLUMN = "原保险保费收入"
 GROWTH_COLUMN = "同比增速"
 BASE_COLUMN = "基期年度"
+PERIOD_COLUMN = "期间"
+FULL_YEAR_PERIOD = "全年累计"
+PARTIAL_PERIOD_LABELS: dict[str, str] = {"前三季度累计": "Q3"}
 
 SOURCE_INTEGRATED = "integrated"
 SOURCE_STANDALONE = "standalone"
@@ -179,6 +182,7 @@ class PremiumByLineOverview:
     slowest_growth: float
     active_lines: tuple[str, ...]
     legacy_lines: tuple[str, ...]
+    period_label: str = ""
 
 
 def line_display_name(name: object) -> str:
@@ -254,6 +258,10 @@ def _parse_tabular(raw: pd.DataFrame) -> pd.DataFrame:
         (index for index, name in enumerate(header) if name.strip() == "单位"),
         None,
     )
+    period_column = next(
+        (index for index, name in enumerate(header) if name.strip() == PERIOD_COLUMN),
+        None,
+    )
     if year_column is None or line_column is None:
         return empty
     if amount_column is None:
@@ -273,18 +281,24 @@ def _parse_tabular(raw: pd.DataFrame) -> pd.DataFrame:
             unit_text = row.iloc[unit_column]
             if not pd.isna(unit_text) and str(unit_text).strip():
                 factor = _amount_factor(str(unit_text))
+        period = FULL_YEAR_PERIOD
+        if period_column is not None:
+            period_text = row.iloc[period_column]
+            if not pd.isna(period_text) and str(period_text).strip():
+                period = str(period_text).strip()
         rows.append(
             {
                 "年度": int(year),
                 "险种": line_text,
                 AMOUNT_COLUMN: float(amount) * factor,
+                PERIOD_COLUMN: period,
             }
         )
     if not rows:
         return empty
     return (
-        pd.DataFrame(rows, columns=_BASE_COLUMNS)
-        .drop_duplicates(["年度", "险种"], keep="last")
+        pd.DataFrame(rows, columns=[*_BASE_COLUMNS, PERIOD_COLUMN])
+        .drop_duplicates(["年度", "险种", PERIOD_COLUMN], keep="last")
         .reset_index(drop=True)
     )
 
@@ -323,19 +337,33 @@ def _read_standalone_workbook() -> pd.DataFrame:
 
 
 def _attach_growth(frame: pd.DataFrame) -> pd.DataFrame:
-    """Sort each line by year and calculate YoY growth on available years."""
+    """Sort each line by year and calculate YoY growth on comparable periods.
+
+    Partial-year rows (for example 2026 Q1-Q3) must not be compared with a
+    full previous year, so growth is calculated inside each period bucket.
+    """
     result = frame.copy()
     result[AMOUNT_COLUMN] = pd.to_numeric(result[AMOUNT_COLUMN], errors="coerce")
     result["年度"] = pd.to_numeric(result["年度"], errors="coerce")
     result = result.dropna(subset=["年度", AMOUNT_COLUMN, "险种"]).copy()
     if result.empty:
-        return pd.DataFrame(columns=[*_BASE_COLUMNS, GROWTH_COLUMN, BASE_COLUMN])
+        return pd.DataFrame(
+            columns=[*_BASE_COLUMNS, PERIOD_COLUMN, GROWTH_COLUMN, BASE_COLUMN]
+        )
     result["年度"] = result["年度"].astype(int)
-    result = result.sort_values(["险种", "年度"], kind="mergesort").reset_index(drop=True)
+    if PERIOD_COLUMN not in result.columns:
+        result[PERIOD_COLUMN] = FULL_YEAR_PERIOD
+    result[PERIOD_COLUMN] = (
+        result[PERIOD_COLUMN].fillna(FULL_YEAR_PERIOD).astype(str).str.strip()
+    )
+    result[PERIOD_COLUMN] = result[PERIOD_COLUMN].replace("", FULL_YEAR_PERIOD)
+    result = result.sort_values(
+        ["险种", PERIOD_COLUMN, "年度"], kind="mergesort"
+    ).reset_index(drop=True)
 
     growth: list[float] = [float("nan")] * len(result)
     bases: list[str] = [""] * len(result)
-    for indices in result.groupby("险种", sort=False).groups.values():
+    for indices in result.groupby(["险种", PERIOD_COLUMN], sort=False).groups.values():
         previous_year: int | None = None
         previous_value: float | None = None
         for index in indices:
@@ -345,9 +373,34 @@ def _attach_growth(frame: pd.DataFrame) -> pd.DataFrame:
                 bases[index] = str(previous_year)
             previous_year = int(result.at[index, "年度"])
             previous_value = value
+    # Partial periods (for example 2026 Q1-Q3) are compared with the full
+    # previous year on the user's request, so the chart still shows a YoY
+    # reading even when the source has no matching partial prior period.
+    full_year = result[result[PERIOD_COLUMN].eq(FULL_YEAR_PERIOD)]
+    full_lookup = {
+        (str(row.险种), int(row.年度)): float(getattr(row, AMOUNT_COLUMN))
+        for row in full_year.itertuples(index=False)
+    }
+    for index, row in result[~result[PERIOD_COLUMN].eq(FULL_YEAR_PERIOD)].iterrows():
+        previous_year = int(row["年度"]) - 1
+        previous_value = full_lookup.get((str(row["险种"]), previous_year))
+        if previous_value in (None, 0):
+            continue
+        growth[index] = (float(row[AMOUNT_COLUMN]) / previous_value - 1.0) * 100.0
+        bases[index] = f"{previous_year}{FULL_YEAR_PERIOD}"
     result[GROWTH_COLUMN] = growth
     result[BASE_COLUMN] = bases
     return result
+
+
+def annual_premium_by_line_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep full-year rows only; partial periods are not comparable."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    if PERIOD_COLUMN not in frame.columns:
+        return frame
+    periods = frame[PERIOD_COLUMN].fillna(FULL_YEAR_PERIOD).astype(str).str.strip()
+    return frame[periods.eq(FULL_YEAR_PERIOD)].copy()
 
 
 @lru_cache(maxsize=1)
@@ -361,6 +414,7 @@ def _load_with_source() -> tuple[pd.DataFrame, str]:
         if not frame.empty:
             return _attach_growth(frame), source
     embedded = pd.DataFrame(EMBEDDED_PREMIUM_BY_LINE, columns=_BASE_COLUMNS)
+    embedded[PERIOD_COLUMN] = FULL_YEAR_PERIOD
     return _attach_growth(embedded), SOURCE_EMBEDDED
 
 
@@ -373,6 +427,7 @@ def ordered_premium_lines(frame: pd.DataFrame) -> list[str]:
     """Order lines by latest reported amount, active lines before retired ones."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
+    frame = annual_premium_by_line_frame(frame)
     latest = (
         frame.sort_values("年度")
         .groupby("险种", sort=False, as_index=False)
@@ -391,7 +446,9 @@ def ordered_premium_lines(frame: pd.DataFrame) -> list[str]:
 def premium_line_frame(frame: pd.DataFrame, line_name: str) -> pd.DataFrame:
     """Return one line of business ordered by year."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
-        return pd.DataFrame(columns=[*_BASE_COLUMNS, GROWTH_COLUMN, BASE_COLUMN])
+        return pd.DataFrame(
+            columns=[*_BASE_COLUMNS, PERIOD_COLUMN, GROWTH_COLUMN, BASE_COLUMN]
+        )
     selected = frame[frame["险种"].astype(str).eq(str(line_name))].copy()
     return selected.sort_values("年度").reset_index(drop=True)
 
@@ -403,8 +460,18 @@ def premium_by_line_window_years(
     """Return the latest count years available in the frame."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
+    frame = annual_premium_by_line_frame(frame)
     years = sorted(int(year) for year in frame["年度"].dropna().unique())
     return years[-count:] if count > 0 else years
+
+
+def _period_label(year: object, period: object) -> str:
+    """Return a compact period label such as 2025 or 2026Q3."""
+    period_text = str(period or FULL_YEAR_PERIOD).strip()
+    year_text = str(int(year))
+    if period_text == FULL_YEAR_PERIOD:
+        return year_text
+    return f"{year_text}{PARTIAL_PERIOD_LABELS.get(period_text, period_text)}"
 
 
 def premium_by_line_display_frame(
@@ -415,19 +482,30 @@ def premium_by_line_display_frame(
 ) -> pd.DataFrame:
     """Restrict the source frame to the presented lines and latest years.
 
-    Growth is calculated on the full history before this filter, so the first
-    visible year still carries its year-on-year growth and base year.
+    Full years are followed by the latest partial period (2026 Q1-Q3), which
+    is shown as an extra slot instead of being silently dropped.
     """
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return frame
+    if PERIOD_COLUMN not in frame.columns:
+        frame = frame.assign(**{PERIOD_COLUMN: FULL_YEAR_PERIOD})
     if years is None:
         years = premium_by_line_window_years(frame)
+    periods = frame[PERIOD_COLUMN].fillna(FULL_YEAR_PERIOD).astype(str).str.strip()
+    partial = frame[~periods.eq(FULL_YEAR_PERIOD)]
+    partial_mask = pd.Series(False, index=frame.index)
+    if not partial.empty:
+        latest_partial_year = int(partial["年度"].astype(int).max())
+        partial_mask = (
+            frame["年度"].astype(int).eq(latest_partial_year)
+            & ~periods.eq(FULL_YEAR_PERIOD)
+        )
     selected = frame[
         frame["险种"].astype(str).isin(lines)
-        & frame["年度"].astype(int).isin(years)
+        & (frame["年度"].astype(int).isin(years) | partial_mask)
     ].copy()
     return selected.sort_values(
-        ["年度", "险种"], kind="mergesort"
+        ["年度", PERIOD_COLUMN, "险种"], kind="mergesort"
     ).reset_index(drop=True)
 
 
@@ -446,26 +524,45 @@ def premium_by_line_chart_frame(
     columns = ["年度", "险种", AMOUNT_COLUMN, GROWTH_COLUMN, BASE_COLUMN, "披露状态"]
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.DataFrame(columns=columns)
+    if PERIOD_COLUMN not in frame.columns:
+        frame = frame.assign(**{PERIOD_COLUMN: FULL_YEAR_PERIOD})
+    annual = annual_premium_by_line_frame(frame)
     if years is None:
-        years = sorted(int(year) for year in frame["年度"].dropna().unique())
+        years = sorted(int(year) for year in annual["年度"].dropna().unique())
     else:
         years = sorted(int(year) for year in years)
-    lines = [str(line_name)] if line_name is not None else ordered_premium_lines(frame)
+    periods = frame[PERIOD_COLUMN].fillna(FULL_YEAR_PERIOD).astype(str).str.strip()
+    partial = frame[~periods.eq(FULL_YEAR_PERIOD)]
+    slots: list[tuple[int, str]] = [(year, FULL_YEAR_PERIOD) for year in years]
+    if not partial.empty:
+        latest_partial_year = int(partial["年度"].astype(int).max())
+        partial_periods = sorted(
+            set(
+                partial.loc[
+                    partial["年度"].astype(int).eq(latest_partial_year), PERIOD_COLUMN
+                ].astype(str)
+            )
+        )
+        for period in partial_periods:
+            if (latest_partial_year, period) not in slots:
+                slots.append((latest_partial_year, period))
+    lines = [str(line_name)] if line_name is not None else ordered_premium_lines(annual)
     if line_name is not None and str(line_name) not in set(frame["险种"].astype(str)):
         lines = []
     rows: list[dict[str, object]] = []
     for line_name in lines:
         line_frame = premium_line_frame(frame, line_name)
-        by_year = {
-            int(row.年度): row
+        by_period = {
+            (int(row.年度), str(getattr(row, PERIOD_COLUMN, FULL_YEAR_PERIOD))): row
             for row in line_frame.itertuples(index=False)
         }
-        for year in years:
-            record = by_year.get(year)
+        for year, period in slots:
+            record = by_period.get((year, period))
+            label = _period_label(year, period)
             if record is None:
                 rows.append(
                     {
-                        "年度": str(year),
+                        "年度": label,
                         "险种": line_name,
                         AMOUNT_COLUMN: float("nan"),
                         GROWTH_COLUMN: float("nan"),
@@ -477,7 +574,7 @@ def premium_by_line_chart_frame(
             growth = getattr(record, GROWTH_COLUMN)
             rows.append(
                 {
-                    "年度": str(year),
+                    "年度": label,
                     "险种": line_name,
                     AMOUNT_COLUMN: float(getattr(record, AMOUNT_COLUMN)),
                     GROWTH_COLUMN: float(growth) if pd.notna(growth) else float("nan"),
@@ -729,19 +826,24 @@ def build_premium_by_line_combo_chart(
 def prepare_premium_by_line_overview(
     frame: pd.DataFrame,
 ) -> PremiumByLineOverview | None:
-    """Aggregate the latest-year active lines for the module insight card."""
+    """Aggregate the latest reported period for the module insight card."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return None
-    latest_rows = (
-        frame.sort_values("年度")
-        .groupby("险种", sort=False, as_index=False)
-        .tail(1)
-    )
-    max_year = int(frame["年度"].max())
-    active = latest_rows[latest_rows["年度"].eq(max_year)].copy()
+    if PERIOD_COLUMN not in frame.columns:
+        frame = frame.assign(**{PERIOD_COLUMN: FULL_YEAR_PERIOD})
+    max_year = int(frame["年度"].astype(int).max())
+    latest = frame[frame["年度"].astype(int).eq(max_year)].copy()
+    partial = latest[
+        ~latest[PERIOD_COLUMN].fillna(FULL_YEAR_PERIOD).astype(str).eq(FULL_YEAR_PERIOD)
+    ]
+    if not partial.empty:
+        latest_period = str(partial[PERIOD_COLUMN].astype(str).iloc[0])
+        latest = partial[partial[PERIOD_COLUMN].astype(str).eq(latest_period)]
+    else:
+        latest_period = FULL_YEAR_PERIOD
+    active = latest.sort_values(AMOUNT_COLUMN, ascending=False).copy()
     if active.empty:
         return None
-    active = active.sort_values(AMOUNT_COLUMN, ascending=False)
     total = float(pd.to_numeric(active[AMOUNT_COLUMN], errors="coerce").sum())
     active_names = tuple(active["险种"].astype(str))
     top_row = active.iloc[0]
@@ -750,8 +852,10 @@ def prepare_premium_by_line_overview(
     top_share = (top_value / total * 100.0) if total > 0 else 0.0
 
     previous_year = max_year - 1
-    previous = frame[
-        frame["年度"].eq(previous_year) & frame["险种"].astype(str).isin(active_names)
+    annual = annual_premium_by_line_frame(frame)
+    previous = annual[
+        annual["年度"].astype(int).eq(previous_year)
+        & annual["险种"].astype(str).isin(active_names)
     ]
     previous_names = set(previous["险种"].astype(str))
     if previous_names == set(active_names):
@@ -780,8 +884,16 @@ def prepare_premium_by_line_overview(
         slowest_line = str(slowest["险种"])
         slowest_growth = float(slowest[GROWTH_COLUMN])
 
+    latest_rows = (
+        annual.sort_values("年度")
+        .groupby("险种", sort=False, as_index=False)
+        .tail(1)
+    )
+    annual_max_year = int(annual["年度"].astype(int).max())
     legacy_lines = tuple(
-        latest_rows.loc[latest_rows["年度"].lt(max_year), "险种"].astype(str)
+        latest_rows.loc[
+            latest_rows["年度"].astype(int).lt(annual_max_year), "险种"
+        ].astype(str)
     )
     return PremiumByLineOverview(
         year=max_year,
@@ -796,4 +908,5 @@ def prepare_premium_by_line_overview(
         slowest_growth=slowest_growth,
         active_lines=active_names,
         legacy_lines=legacy_lines,
+        period_label=_period_label(max_year, latest_period),
     )
