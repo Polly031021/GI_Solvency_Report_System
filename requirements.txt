@@ -17,3 +17,5 @@ matplotlib
 plotly
 kaleido
 pyyaml
+playwright
+vl-convert-python

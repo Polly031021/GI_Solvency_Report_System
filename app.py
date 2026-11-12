@@ -37,6 +37,9 @@ from ui.step5_integration import render_step5_review, render_integration_tab
 from ui.step6_analysis import render_analysis_sidebar, render_analysis_tab
 from ui.theme import render_analysis_tab_styles, render_app_styles
 from services import report_i18n
+from services.report_pdf import capture as pdf_capture
+
+pdf_capture.install()
 
 
 st.set_page_config(page_title="保险公司报告分析处理平台", page_icon="🛡️", layout="wide")

@@ -39,6 +39,7 @@ from services.solvency_step7_chart_plans import (
 )
 from services.solvency_step7_charts import annual_period_order
 from services.solvency_report_notes import company_notes_template
+from services.report_pdf import capture as pdf_capture
 from services.report_i18n import (
     LANG_ZH,
     LANGUAGE_LABELS,
@@ -156,6 +157,7 @@ def show_step_7_solvency(
     未提供时回退到 COMPANY_NAVIGATION 的内置配置。
     """
     _sync_language_from_control()
+    pdf_capture.start_document()
     render_report_style()
     st.markdown(
         "<div class='solvency-report-title'>"
@@ -392,25 +394,54 @@ def show_step_7_solvency(
         return
     print_all = st.session_state.get("company_nav_level_one") == PRINT_ALL_LABEL
     if print_all:
-        # ... 渲染封面（这段保持不变）...
-        today = date.today()
-        period_label = (
-            selected_periods[0]
-            if len(selected_periods) == 1
-            else f"{selected_periods[0]}–{selected_periods[-1]}"
+        export_scope = st.session_state.get("s7_export_chart_names")
+        if export_scope:
+            chart_names = [name for name in chart_names if name in export_scope]
+            if not chart_names:
+                st.warning(
+                    t(
+                        "请先在“选择导出图表”中至少选择一个图表。",
+                        "Select at least one chart under “Charts to export” first.",
+                    )
+                )
+                return
+    today = date.today()
+    period_label = (
+        selected_periods[0]
+        if len(selected_periods) == 1
+        else f"{selected_periods[0]}–{selected_periods[-1]}"
+    )
+    if is_english():
+        company_label = (
+            ", ".join(selected_companies)
+            if len(selected_companies) <= 4
+            else f"{len(selected_companies)} companies"
         )
-        if is_english():
-            company_label = (
-                ", ".join(selected_companies)
-                if len(selected_companies) <= 4
-                else f"{len(selected_companies)} companies"
-            )
-        else:
-            company_label = (
-                "、".join(selected_companies)
-                if len(selected_companies) <= 4
-                else f"{len(selected_companies)} 家公司"
-            )
+    else:
+        company_label = (
+            "、".join(selected_companies)
+            if len(selected_companies) <= 4
+            else f"{len(selected_companies)} 家公司"
+        )
+    # The export button lives in the sidebar panel as a fragment; storing the
+    # report metadata here keeps exporting independent of a full rerun.  It is
+    # published for scoped exports too (a single module or level-one group).
+    st.session_state["_s7_pdf_meta"] = {
+            "title": t(
+                "保险公司偿付能力公司对标报告",
+                "Insurance Company Solvency Benchmarking Report",
+            ),
+            "subtitle": f"{period_label} · {company_label}",
+            "date_text": (
+                f"{today.year}-{today.month:02d}"
+                if is_english()
+                else f"{today.year}年{today.month}月"
+            ),
+            "language": "en" if is_english() else "zh",
+        "front_cover_image": str(PICTURE_DIR / "标题页.png"),
+        "back_cover_image": str(PICTURE_DIR / "封底页.png"),
+    }
+    if print_all:
         render_report_cover(
             title=t("保险公司偿付能力公司对标报告", "Insurance Company Solvency Benchmarking Report"),
             subtitle=f"{period_label} · {company_label}",
@@ -467,6 +498,7 @@ def show_step_7_solvency(
                 title_parts.append(part)
         title_text = " - ".join(title_parts)
 
+        pdf_capture.begin_module(title_text, section=level_name(level_one))
         with st.container(key=f"s7_report_module_{chart_index}"):
             with st.container(key=f"s7_module_expander_wrap_{chart_index}"):
                 with st.expander(
@@ -481,6 +513,7 @@ def show_step_7_solvency(
                     )
                     if not chart_periods:
                         st.warning(f"“{chart_name}”在配置的年度范围内没有可用数据。")
+                        pdf_capture.end_module()
                         continue
                     chart_scope = scoped[
                         scoped["报告期"].fillna("").astype(str).isin(chart_periods)
@@ -598,6 +631,7 @@ def show_step_7_solvency(
                                     )
                                 )
                     render_report_footnote(chart_note, language=get_language())
+        pdf_capture.end_module()
 
     if print_all:
         render_report_back_cover(picture_dir=PICTURE_DIR)

@@ -373,21 +373,9 @@ def _attach_growth(frame: pd.DataFrame) -> pd.DataFrame:
                 bases[index] = str(previous_year)
             previous_year = int(result.at[index, "年度"])
             previous_value = value
-    # Partial periods (for example 2026 Q1-Q3) are compared with the full
-    # previous year on the user's request, so the chart still shows a YoY
-    # reading even when the source has no matching partial prior period.
-    full_year = result[result[PERIOD_COLUMN].eq(FULL_YEAR_PERIOD)]
-    full_lookup = {
-        (str(row.险种), int(row.年度)): float(getattr(row, AMOUNT_COLUMN))
-        for row in full_year.itertuples(index=False)
-    }
-    for index, row in result[~result[PERIOD_COLUMN].eq(FULL_YEAR_PERIOD)].iterrows():
-        previous_year = int(row["年度"]) - 1
-        previous_value = full_lookup.get((str(row["险种"]), previous_year))
-        if previous_value in (None, 0):
-            continue
-        growth[index] = (float(row[AMOUNT_COLUMN]) / previous_value - 1.0) * 100.0
-        bases[index] = f"{previous_year}{FULL_YEAR_PERIOD}"
+    # Partial periods (for example 2026 Q3) are not comparable with a full
+    # prior year, so their growth stays empty and they are omitted from the
+    # YoY line while the bars still show the cumulative amount.
     result[GROWTH_COLUMN] = growth
     result[BASE_COLUMN] = bases
     return result

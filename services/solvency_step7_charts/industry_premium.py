@@ -598,8 +598,8 @@ def _growth_rows(
 ) -> pd.DataFrame:
     """Compute year-on-year growth without resetting the base across gaps.
 
-    Partial-year points (such as 2026 Q1-Q3) are plotted but never compared
-    with a full prior year; they also break the growth line there.
+    Partial-year points (such as 2026 Q3) are not comparable with a full
+    prior year and are therefore omitted from the growth line.
     """
     rows: list[dict[str, object]] = []
     previous_year: str | None = "2016" if prior_2016 is not None else None
@@ -610,23 +610,7 @@ def _growth_rows(
             continue
         current_value = values_by_year[key]
         if key in partial_years:
-            # The user explicitly wants the partial period compared with the
-            # whole of the previous year, so keep the dashed line continuous
-            # and surface the comparison instead of dropping the point.
-            if (
-                previous_year is not None
-                and previous_value is not None
-                and previous_value != 0
-            ):
-                rows.append(
-                    {
-                        "年度": key,
-                        "增长率": (current_value / previous_value - 1.0) * 100.0,
-                        "当年金额": current_value,
-                        "上年金额": previous_value,
-                        "基期年度": f"{previous_year}全年",
-                    }
-                )
+            # 部分年度（如 2026Q3）与全年不可比，增速折线不绘制该点。
             continue
         if (
             previous_year is not None

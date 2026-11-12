@@ -64,7 +64,12 @@ def render_report_navigation(
     keep_valid_widget_state(level_one_key, first_options)
     main_nav = st.radio("📁 一级模块", first_options, key=level_one_key)
     if main_nav == PRINT_ALL_LABEL:
-        render_print_control(key=print_key)
+        st.caption(
+            t(
+                "行业分析报告请切换到 STEP8 行业报告页面查看和导出。",
+                "Open the STEP8 industry report page to view and export the industry report.",
+            )
+        )
         return
 
     navigation_level = OVERVIEW_LEVEL if industry else main_nav
@@ -242,6 +247,14 @@ def render_step7_excel_navigation(profile_id: str) -> None:
 
     # 二级分类即图表入口；不再额外展示“具体图表”单选。
     st.session_state.pop("company_nav_chart", None)
+
+    # Export stays available when only a single level-one/level-two module is
+    # selected, not just for the "全部展开" view.
+    render_print_control(
+        key=f"company_report_print_{profile_id}",
+        language=get_language(),
+        enabled=True,
+    )
 
 
 

@@ -9,6 +9,7 @@ import json
 import pandas as pd
 import streamlit as st
 from dashboard_components import render_key_solvency_overview, render_major_financing
+from services.report_pdf import capture as pdf_capture
 from services.report_style import (
     COBALT_BLUE,
     PACIFIC_BLUE,
@@ -764,56 +765,59 @@ def render_plan_performance_pattern_grid(
             "profit-rank trajectory.",
         )
     )
-    # ★ 新增：数据诊断展开区，帮用户排查"某年缺失"的具体原因
-    with st.expander(
-        t(
-            "🔍 数据诊断：查看每家公司的收入/利润数据覆盖情况",
-            "Data diagnostics: revenue/profit coverage by company",
-        ),
-        expanded=False,
-    ):
-        st.caption(
+    # This is an interactive data-quality drilldown, not formal report
+    # content.  Keep it available in Streamlit but never capture it into the
+    # published PDF.
+    with pdf_capture.suspend():
+        with st.expander(
             t(
-                f"下表显示每家公司每个报告期是否有「{revenue_code}」和「{profit_code}」数据。"
-                "❌ 表示该期该指标缺失（未披露或未集成）。"
-                "若发现大量 ❌，请到 STEP5/STEP6 检查原始数据是否完整。",
-                f"The table shows whether each company has “{revenue_code}” and “{profit_code}” "
-                "data in each period. ❌ means the metric is missing (not disclosed or not integrated). "
-                "If many ❌ appear, check the source data in STEP5/STEP6.",
+                "🔍 数据诊断：查看每家公司的收入/利润数据覆盖情况",
+                "Data diagnostics: revenue/profit coverage by company",
+            ),
+            expanded=False,
+        ):
+            st.caption(
+                t(
+                    f"下表显示每家公司每个报告期是否有「{revenue_code}」和「{profit_code}」数据。"
+                    "❌ 表示该期该指标缺失（未披露或未集成）。"
+                    "若发现大量 ❌，请到 STEP5/STEP6 检查原始数据是否完整。",
+                    f"The table shows whether each company has “{revenue_code}” and “{profit_code}” "
+                    "data in each period. ❌ means the metric is missing (not disclosed or not integrated). "
+                    "If many ❌ appear, check the source data in STEP5/STEP6.",
+                )
             )
-        )
-        _diag_rows = []
-        for _c in all_companies:
-            _c_df = _df[_df["公司"].eq(_c)]
-            for _p in periods_list:
-                _p_df = _c_df[_c_df["报告期"].eq(_p)]
-                _has_revenue = (
-                    not _p_df[_p_df["指标编码"].astype(str).eq(revenue_code)]
-                    .dropna(subset=["数值"])
-                    .empty
-                )
-                _has_profit = (
-                    not _p_df[_p_df["指标编码"].astype(str).eq(profit_code)]
-                    .dropna(subset=["数值"])
-                    .empty
-                )
-                _diag_rows.append(
-                    {
-                        "公司": _c,
-                        "报告期": _p,
-                        t(f"有{revenue_code}", f"Has {revenue_code}"): (
-                            "✅" if _has_revenue else "❌"
-                        ),
-                        t(f"有{profit_code}", f"Has {profit_code}"): (
-                            "✅" if _has_profit else "❌"
-                        ),
-                    }
-                )
-        st.dataframe(
-            translate_dataframe(pd.DataFrame(_diag_rows)),
-            width="stretch",
-            hide_index=True,
-        )
+            _diag_rows = []
+            for _c in all_companies:
+                _c_df = _df[_df["公司"].eq(_c)]
+                for _p in periods_list:
+                    _p_df = _c_df[_c_df["报告期"].eq(_p)]
+                    _has_revenue = (
+                        not _p_df[_p_df["指标编码"].astype(str).eq(revenue_code)]
+                        .dropna(subset=["数值"])
+                        .empty
+                    )
+                    _has_profit = (
+                        not _p_df[_p_df["指标编码"].astype(str).eq(profit_code)]
+                        .dropna(subset=["数值"])
+                        .empty
+                    )
+                    _diag_rows.append(
+                        {
+                            "公司": _c,
+                            "报告期": _p,
+                            t(f"有{revenue_code}", f"Has {revenue_code}"): (
+                                "✅" if _has_revenue else "❌"
+                            ),
+                            t(f"有{profit_code}", f"Has {profit_code}"): (
+                                "✅" if _has_profit else "❌"
+                            ),
+                        }
+                    )
+            st.dataframe(
+                translate_dataframe(pd.DataFrame(_diag_rows)),
+                width="stretch",
+                hide_index=True,
+            )
 
     # ---------- 5. 按模式纵向分组，组内公司横向网格排列 ----------
     try:
@@ -895,40 +899,41 @@ def render_plan_performance_pattern_grid(
                             f"{_pattern_index}_{_start + _slot}"
                         )
                     ):
-                        st.markdown(
-                            f"<div class='s7-pattern-panel-head'>"
-                            f"<div class='s7-pattern-panel-title' "
-                            f"title='{escape(str(localized_company_name(_company)))}'>"
-                            f"{escape(str(localized_company_name(_company)))}</div>"
-                            f"</div>"
-                            f"<div class='s7-pattern-panel-meta'>{''.join(_pill_html)}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        try:
-                            _chart = build_performance_pattern_trajectory(
-                                frame,
-                                _company,
-                                periods_list,
-                                revenue_code=revenue_code,
-                                profit_code=profit_code,
-                                x_title=revenue_rank_title,
-                                y_title=profit_rank_title,
-                                x_value_title=revenue_label,
-                                y_value_title=profit_label,
-                                panel_width=panel_width,
-                                panel_height=panel_height,
-                                rank_frame=_rank_source,
+                        with pdf_capture.layout_card():
+                            st.markdown(
+                                f"<div class='s7-pattern-panel-head'>"
+                                f"<div class='s7-pattern-panel-title' "
+                                f"title='{escape(str(localized_company_name(_company)))}'>"
+                                f"{escape(str(localized_company_name(_company)))}</div>"
+                                f"</div>"
+                                f"<div class='s7-pattern-panel-meta'>{''.join(_pill_html)}</div>",
+                                unsafe_allow_html=True,
                             )
-                            render_altair_chart(
-                                _chart,
-                                width="stretch",
-                                key=(
-                                    f"{key_prefix}_pattern_{_pattern_index}_"
-                                    f"{_start + _slot}"
-                                ),
-                            )
-                        except ValueError as _exc:
-                            st.warning(f"{localized_company_name(_company)}: {_exc}")
+                            try:
+                                _chart = build_performance_pattern_trajectory(
+                                    frame,
+                                    _company,
+                                    periods_list,
+                                    revenue_code=revenue_code,
+                                    profit_code=profit_code,
+                                    x_title=revenue_rank_title,
+                                    y_title=profit_rank_title,
+                                    x_value_title=revenue_label,
+                                    y_value_title=profit_label,
+                                    panel_width=panel_width,
+                                    panel_height=panel_height,
+                                    rank_frame=_rank_source,
+                                )
+                                render_altair_chart(
+                                    _chart,
+                                    width="stretch",
+                                    key=(
+                                        f"{key_prefix}_pattern_{_pattern_index}_"
+                                        f"{_start + _slot}"
+                                    ),
+                                )
+                            except ValueError as _exc:
+                                st.warning(f"{localized_company_name(_company)}: {_exc}")
 
 
 def render_plan_key_metrics_table(frame, highlight_company):

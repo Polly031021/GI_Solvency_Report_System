@@ -80,3 +80,14 @@ tmp/
 # ============================================================
 /*.xlsx
 !/财险公司列表.xlsx
+
+# 本地工具配置与本地设计文档
+docs/
+.dsh-prompt-setting/
+
+# 代码打包副本（历史遗留）
+GI_Solvency_Report_System.zip
+
+# Playwright/Chromium 运行时临时目录（tmp + 随机后缀）
+tmp*/
+*.tmp

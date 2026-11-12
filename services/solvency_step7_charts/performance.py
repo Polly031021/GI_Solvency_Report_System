@@ -249,11 +249,15 @@ def build_performance_pattern_trajectory(
     # 反向坐标：排名 1 在右上角；domain 左/下为大值
     x_domain = [rev_hi + 0.5, rev_lo - 0.5]
     y_domain = [prof_hi + 0.5, prof_lo - 0.5]
-    # 刻度数量随排名跨度自适应，同时限制在 2–6 个，避免小图刻度过密。
-    x_ticks = max(2, min(6, int(round(rev_hi - rev_lo)) + 1))
-    y_ticks = max(2, min(6, int(round(prof_hi - prof_lo)) + 1))
+    # Always emit a small integer tick range.  Vega may otherwise suppress all
+    # ticks for a constant rank series, which makes the PDF look like an empty
+    # white chart with one dot.
+    x_tick_values = list(range(max(1, int(rev_lo) - 1), int(rev_hi) + 2))
+    y_tick_values = list(range(max(1, int(prof_lo) - 1), int(prof_hi) + 2))
+    x_ticks = len(x_tick_values)
+    y_ticks = len(y_tick_values)
 
-    grid_color = "#E6EDF7"
+    grid_color = "#CBD5E1"
     axis_title_color = "#475569"
     x_axis = alt.Axis(
         title=x_title,
@@ -265,14 +269,16 @@ def build_performance_pattern_trajectory(
         labelColor=axis_title_color,
         labelOverlap="greedy",
         tickCount=x_ticks,
+        values=x_tick_values,
         tickMinStep=1,
         format="d",
         grid=True,
         gridColor=grid_color,
         gridOpacity=1,
-        gridWidth=1,
+        gridWidth=1.2,
         domain=False,
-        ticks=False,
+        ticks=True,
+        tickSize=0,
         labels=True,
     )
     y_axis = alt.Axis(
@@ -285,14 +291,16 @@ def build_performance_pattern_trajectory(
         labelColor=axis_title_color,
         labelOverlap="greedy",
         tickCount=y_ticks,
+        values=y_tick_values,
         tickMinStep=1,
         format="d",
         grid=True,
         gridColor=grid_color,
         gridOpacity=1,
-        gridWidth=1,
+        gridWidth=1.2,
         domain=False,
-        ticks=False,
+        ticks=True,
+        tickSize=0,
         labels=True,
     )
 
