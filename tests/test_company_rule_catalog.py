@@ -94,27 +94,68 @@ structure_versions:
 
 
 def test_apply_rule_merges_profile_config_without_mutating() -> None:
-    resolved = rules.resolve_rule("人保产险", 2024)
-    assert resolved is not None
-    original = [
-        {
-            "table_id": "NON_LIFE_OPERATING_METRICS",
-            "table_name": "主要经营指标",
-            "title_terms": ["旧标题"],
-            "max_pages": 2,
-        },
-        {"table_id": "SOLVENCY_MAIN", "table_name": "偿付能力充足率指标"},
-    ]
-    merged = rules.apply_rule_to_tables(original, resolved)
-    assert original[0]["title_terms"] == ["旧标题"]
-    assert merged[0]["expected_pages"] == [20, 21]
-    assert merged[0]["tolerance"] == 2
-    assert merged[0]["page_match"] == "prefer"
-    assert merged[0]["title_terms"] == ["主要经营指标"]
-    assert merged[0]["max_pages"] == 2
-    assert merged[0]["_extraction_rule"]["source"] == "人保产险.yaml"
-    # 没有规则的表保持原样。
-    assert merged[1] == original[1]
+    directory = _temp_dir()
+    _write_rule(
+        directory,
+        "合并测试",
+        """
+company:
+  canonical: 合并测试
+tables:
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [20, 21]
+    tolerance: 2
+    anchor_terms: [主要经营指标]
+""",
+    )
+    try:
+        resolved = rules.resolve_rule("合并测试", 2024, directory=directory)
+        assert resolved is not None
+        original = [
+            {
+                "table_id": "NON_LIFE_OPERATING_METRICS",
+                "table_name": "主要经营指标",
+                "title_terms": ["旧标题"],
+                "max_pages": 2,
+            },
+            {"table_id": "SOLVENCY_MAIN", "table_name": "偿付能力充足率指标"},
+        ]
+        merged = rules.apply_rule_to_tables(original, resolved)
+        assert original[0]["title_terms"] == ["旧标题"]
+        assert merged[0]["expected_pages"] == [20, 21]
+        assert merged[0]["tolerance"] == 2
+        assert merged[0]["page_match"] == "prefer"
+        assert merged[0]["title_terms"] == ["主要经营指标"]
+        assert merged[0]["max_pages"] == 2
+        assert merged[0]["_extraction_rule"]["source"] == "合并测试.yaml"
+        # 规则里没有的表保持原样。
+        assert merged[1] == original[1]
+    finally:
+        for path in directory.glob("*"):
+            path.unlink(missing_ok=True)
+        directory.rmdir()
+
+
+def test_repository_rules_cover_all_profile_tables() -> None:
+    """三家公司必须覆盖 Profile 的全部目标表，不能只配经营表。"""
+    from services.report_profiles import load_profile_workbook
+
+    root = Path(__file__).resolve().parents[1]
+    profile = load_profile_workbook(
+        (root / "config/report_profiles/NON_LIFE_SOLVENCY_profile.xlsx").read_bytes(),
+        project_root=root,
+    )
+    expected_tables = {
+        str(table["table_id"]) for table in profile.feature_config["tables"]
+    }
+    assert expected_tables, "Profile 未读到目标表"
+    for company in ("人保产险", "平安产险", "太保产险"):
+        resolved = rules.resolve_rule(company, 2025)
+        assert resolved is not None, company
+        missing = expected_tables - set(resolved.tables)
+        assert not missing, f"{company} 缺少表：{sorted(missing)}"
+        for table_id, config in resolved.tables.items():
+            assert config.get("expected_pages"), f"{company}.{table_id} 缺少 expected_pages"
 
 
 def test_alias_table_id_matches_builtin_rule_key() -> None:
@@ -224,6 +265,7 @@ if __name__ == "__main__":
     test_missing_year_keeps_rule_and_warns()
     test_structure_version_selection()
     test_apply_rule_merges_profile_config_without_mutating()
+    test_repository_rules_cover_all_profile_tables()
     test_alias_table_id_matches_builtin_rule_key()
     test_unknown_table_id_raises()
     test_canonical_must_match_filename()

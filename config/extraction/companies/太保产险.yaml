@@ -1,22 +1,52 @@
 # 太保产险：公司级提取规则（跨年度复用，不按年维护）
 #
-# 依据：2022-2025 样例定位结果
-#   2022 → 12-14     2023 → 12-13
-#   2024 → 12-13     2025 → 12-13（测试样本，文件名为“太保财险（偿付能力）”）
+# 页码依据：2022-2025 样例定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 10-11
+#   NON_LIFE_OPERATING_METRICS    12-13（2022 延伸到 14 页）
+#   ACTUAL_CAPITAL                20-23（2022=20-22，2023=22-23）
+#   MINIMUM_CAPITAL               25-27
+#   THREE_YEAR_INVESTMENT_RETURN  13（2022 无该表）
+#   LIQUIDITY_MONITORING          11-12
 #
-# 封面公司名固定为“中国太平洋财产保险股份有限公司”，文件名差异不影响路由。
+# 封面公司名固定为“中国太平洋财产保险股份有限公司”，
+# 2025 文件名“太保财险（偿付能力）”不影响路由。
 
 company:
   canonical: 太保产险
   aliases: [中国太平洋财产保险股份有限公司, 太保财险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
-  notes: 经营情况表稳定位于物理页 12-13，2022 年延伸到 14 页
+  notes: 各表页码稳定，2022 经营表延伸至第 14 页
 
 tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11]
+    tolerance: 2
+    page_match: prefer
+
   NON_LIFE_OPERATING_METRICS:
     expected_pages: [12, 13]
     tolerance: 2
     page_match: prefer
     anchor_terms: [主要经营指标]
     required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [21, 22]
+    tolerance: 2
+    page_match: prefer
+
+  MINIMUM_CAPITAL:
+    expected_pages: [25, 26]
+    tolerance: 2
+    page_match: prefer
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer

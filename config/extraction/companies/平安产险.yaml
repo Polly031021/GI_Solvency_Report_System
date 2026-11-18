@@ -1,22 +1,52 @@
 # 平安产险：公司级提取规则（跨年度复用，不按年维护）
 #
-# 依据：2022-2025 样例定位结果
-#   2022 → 17        2023 → 20
-#   2024 → 19        2025 → 19（测试样本）
+# 页码依据：2022-2025 样例定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 17-18（2022=15，2023=18）
+#   NON_LIFE_OPERATING_METRICS    19-20（2022=17，由容差覆盖）
+#   ACTUAL_CAPITAL                36-37（2022=31，超出 ±2，prefer 会回退全文）
+#   MINIMUM_CAPITAL               42-43（2022=37-38，超出 ±2，prefer 会回退全文）
+#   THREE_YEAR_INVESTMENT_RETURN  20-21（2022 无该表）
+#   LIQUIDITY_MONITORING          18-19（2022=16，由容差覆盖）
 #
-# 2022 的 17 页由容差 ±2 覆盖（窗口 17-22），因此不需要为其单列年度配置。
+# 2022 年报结构较旧，个别表页码明显提前；prefer 模式会回退全文锚点，
+# 并在 rule_note 标注“超出窗口”，不影响提取结果。
 
 company:
   canonical: 平安产险
   aliases: [中国平安财产保险股份有限公司, 平安财险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
-  notes: 经营情况表位于物理页 19-20，2022 年提前到 17 页
+  notes: 2023 起版式稳定；2022 实际资本/最低资本页码提前较多，依赖全文回退
 
 tables:
+  SOLVENCY_MAIN:
+    expected_pages: [17, 18]
+    tolerance: 2
+    page_match: prefer
+
   NON_LIFE_OPERATING_METRICS:
     expected_pages: [19, 20]
     tolerance: 2
     page_match: prefer
     anchor_terms: [主要经营指标]
     required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [36, 37]
+    tolerance: 2
+    page_match: prefer
+
+  MINIMUM_CAPITAL:
+    expected_pages: [42, 43]
+    tolerance: 2
+    page_match: prefer
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [20, 21]
+    tolerance: 2
+    page_match: prefer
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [18, 19]
+    tolerance: 2
+    page_match: prefer
