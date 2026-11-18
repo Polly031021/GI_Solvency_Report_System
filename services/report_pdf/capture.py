@@ -444,6 +444,16 @@ def to_content_items(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    # Kaleido (Plotly) 与 Playwright 都会用 tempfile 建 Chromium 的 user-data-dir；
+    # 如果 TEMP 还指向系统目录（或不可写而回退到 cwd），这些 tmpXXXX 目录就会散落在
+    # 项目根目录并累积到 GB 级。先把 TEMP 固定到项目内的 tmp/playwright。
+    try:
+        from .renderer import _ensure_writable_temp
+
+        _ensure_writable_temp()
+    except Exception:  # pragma: no cover - 临时目录只是卫生问题，不能阻断导出
+        pass
+
     layouts = []
     plans: list[tuple[int, int, str, object, int, int, int]] = []
     for module in modules:
