@@ -1,0 +1,22 @@
+# 人保产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 依据：2022-2025 样例定位结果
+#   2022 → 20-21    2023 → 21-22
+#   2024 → 20-21    2025 → 20-23（测试样本，仍在容差窗口内）
+#
+# 只有表结构大改时才在 structure_versions 追加版本。
+
+company:
+  canonical: 人保产险
+  aliases: [中国人民财产保险股份有限公司, 人保财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: 经营情况表常年位于物理页 20-21，标题固定为“主要经营指标”
+
+tables:
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [20, 21]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]

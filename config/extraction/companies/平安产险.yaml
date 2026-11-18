@@ -1,0 +1,22 @@
+# 平安产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 依据：2022-2025 样例定位结果
+#   2022 → 17        2023 → 20
+#   2024 → 19        2025 → 19（测试样本）
+#
+# 2022 的 17 页由容差 ±2 覆盖（窗口 17-22），因此不需要为其单列年度配置。
+
+company:
+  canonical: 平安产险
+  aliases: [中国平安财产保险股份有限公司, 平安财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: 经营情况表位于物理页 19-20，2022 年提前到 17 页
+
+tables:
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [19, 20]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]

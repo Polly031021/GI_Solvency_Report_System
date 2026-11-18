@@ -277,6 +277,7 @@ def locate_tables_hybrid(
                 table_config=dict(table),
                 confidence=int(confidence),
                 confidence_basis=confidence_basis,
+                rule_note=str(getattr(local, "rule_note", "") if local else ""),
             )
         )
     status_parts: list[str] = []

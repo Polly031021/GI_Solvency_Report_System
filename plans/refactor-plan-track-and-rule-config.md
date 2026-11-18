@@ -295,8 +295,8 @@ structure_versions:
 | --- | --- | --- |
 | 0 准备 | ⚠️ 部分完成：分支 `feature/track-company-and-rule-config` + tag `pre-refactor-2026-11` 已建；未跑 3 家×3 年完整基线 | — |
 | 1 表定义外置 | ✅ 完成：常量与改造前逐项一致（含别名） | `0865d90` |
-| 2 规则库骨架 | ⬜ 未开始 | — |
-| 3 规则铺开 + 缺失原因 | ⬜ 未开始 | — |
+| 2 规则库骨架 | ✅ 完成：3 家公司 YAML + 容差窗口 + 别名/结构版本路由 | 见下条提交 |
+| 3 规则铺开 + 缺失原因 | ⚠️ 部分：3 家试点配置完成；缺失原因透出（STEP2/STEP3/STEP7）未做 | — |
 | 4 Track 置顶 + sticky | ✅ 完成 | `ab086ec` |
 | 5 五边形叠加对比 | ✅ 完成 | `ab086ec` |
 | 6 回归 + 文档 | ⚠️ 部分完成：新测试与 AppTest 通过；PDF 整本导出未跑 | — |
@@ -306,12 +306,15 @@ structure_versions:
 - `tests/test_extraction_config.py`、`test_track_company_order.py`、`test_capability_radar_overlap.py` 通过。
 - `test_new_workflow_behavior`、`test_step2_extraction_modes`、`test_step3_header_recovery`、`test_workflow_smoke`、`test_app_smoke` 通过。
 - 真实 PDF 冒烟：人保产险 2022 定位成功（43 页），`NON_LIFE_OPERATING_METRICS` → 物理页 20-21；封面公司识别为“中国财产再保险股份有限公司”（文件名与封面不一致，属数据问题，路由以封面为准）。
+- 规则端到端：人保/平安/太保 × 2022–2025 共 12 份 PDF，全部命中规则窗口（人保 18-23、平安 17-22、太保 10-15）；2025 样本为首次使用，未新增任何年度配置。
+- 人保 2025 无规则时经营表被误扩到 20-23 页（混入“五、风险管理能力”），规则窗口将其修正为 20-21 页。
 - 能力五边形叠加图已用 `vegalite_to_svg` 验证可转换（PDF 链路可用）。
 
 已知未处理：
 
 - `tests/test_step7_excel_modules.py` 的 `test_industry_premium_template_module` 既有失败（与本改造无关，行业保费模块未动）。
-- 批次 2/3 的规则库、公司 YAML、缺失原因透出尚未实现。
+- 批次 3 的缺失原因透出（`RULE_NOT_FOUND` / `PAGE_OUT_OF_TOLERANCE` / `ANCHOR_NOT_FOUND` / `REQUIRED_ITEM_MISSING` 写入 STEP2 日志、STEP3 诊断与备注、STEP7 缺口清单）尚未实现；当前仅在 STEP1 面板与 `PageMatch.rule_note` 中显示窗口命中情况。
+- 其余 86 家公司的 YAML 尚未铺开。
 
 ### 批次 0：准备（0.5 天）
 

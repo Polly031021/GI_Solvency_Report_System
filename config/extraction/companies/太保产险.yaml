@@ -1,0 +1,22 @@
+# 太保产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 依据：2022-2025 样例定位结果
+#   2022 → 12-14     2023 → 12-13
+#   2024 → 12-13     2025 → 12-13（测试样本，文件名为“太保财险（偿付能力）”）
+#
+# 封面公司名固定为“中国太平洋财产保险股份有限公司”，文件名差异不影响路由。
+
+company:
+  canonical: 太保产险
+  aliases: [中国太平洋财产保险股份有限公司, 太保财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: 经营情况表稳定位于物理页 12-13，2022 年延伸到 14 页
+
+tables:
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]

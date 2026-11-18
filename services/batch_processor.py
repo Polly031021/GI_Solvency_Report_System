@@ -17,6 +17,7 @@ from .solvency_company_identity import (
     load_company_master_workbook,
     load_peer_group_config,
 )
+from .extraction_rules import apply_rule_to_tables, resolve_rule
 from .solvency_hybrid_pipeline import locate_tables_hybrid
 from .solvency_metric_registry import extend_taxonomy
 from .solvency_normalizer import load_taxonomy
@@ -283,9 +284,26 @@ def locate_one_pdf_bytes(
     }
     try:
         result["metadata"] = extract_report_metadata(pdf_bytes)
+        # 公司级规则：封面公司 + 报告年度路由；未配置公司的行为完全不变。
+        resolved_rule = resolve_rule(
+            result["metadata"].get("公司") or company_name,
+            result["metadata"].get("报告年度"),
+            profile_id=getattr(ctx.profile, "profile_id", ""),
+        )
+        feature_config = ctx.feature_config
+        if resolved_rule is not None:
+            feature_config = {
+                **feature_config,
+                "tables": apply_rule_to_tables(
+                    feature_config.get("tables", []), resolved_rule
+                ),
+            }
+            result["rule"] = resolved_rule.label
+            result["rule_source"] = resolved_rule.source
+            result["rule_warnings"] = list(resolved_rule.warnings)
         matches, locator_message = locate_tables_hybrid(
             pdf_bytes,
-            ctx.feature_config,
+            feature_config,
             api_key=ctx.api_key,
             base_url=ctx.base_url,
             model=ctx.model,

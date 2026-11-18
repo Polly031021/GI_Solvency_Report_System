@@ -34,6 +34,8 @@ class PageMatch:
     # radar fallback or LLM disagreement scores lower and require review.
     confidence: int = 0
     confidence_basis: str = ""
+    # 公司级规则（expected_pages/tolerance/page_match）本次定位的命中说明。
+    rule_note: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -851,6 +853,39 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
 
         anchors.sort(key=lambda item: (-item[1], item[0]))
         selected: list[tuple[int, float, list[str]]] = anchors[:1]
+        rule_note = ""
+        expected_pages = [
+            int(page)
+            for page in (table.get("expected_pages") or ())
+            if str(page).strip().isdigit() and int(page) > 0
+        ]
+        page_match = str(table.get("page_match") or "anchor_only").strip()
+        if expected_pages and page_match in {"prefer", "strict"}:
+            try:
+                tolerance = max(0, int(table.get("tolerance", 2)))
+            except (TypeError, ValueError):
+                tolerance = 2
+            window_start = max(1, min(expected_pages) - tolerance)
+            window_end = min(len(page_texts), max(expected_pages) + tolerance)
+            in_window = [
+                item for item in anchors
+                if window_start <= item[0] <= window_end
+            ]
+            page_text = "、".join(str(page) for page in expected_pages)
+            if in_window:
+                selected = in_window[:1]
+                rule_note = (
+                    f"规则窗口 {window_start}-{window_end} 命中（预期第 {page_text} 页）"
+                )
+            elif page_match == "strict":
+                selected = []
+                rule_note = (
+                    f"规则窗口 {window_start}-{window_end} 未命中锚点（strict），标记缺失"
+                )
+            else:
+                rule_note = (
+                    f"规则窗口 {window_start}-{window_end} 未命中，已回退全文锚点"
+                )
         max_pages = max(1, int(table.get("max_pages", 1)))
         if table.get("include_continuation") and selected and max_pages > 1:
             other_titles = [
@@ -896,6 +931,8 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
         pages = [item[0] for item in selected]
         best_score = max((item[1] for item in selected), default=0.0)
         evidence = "、".join(dict.fromkeys(hit for item in selected for hit in item[2]))
+        if rule_note:
+            evidence = f"{evidence}；{rule_note}" if evidence else rule_note
         results.append(PageMatch(
             table_id=str(table["table_id"]),
             table_name=str(table["table_name"]),
@@ -904,6 +941,7 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
             evidence=evidence,
             strategy_id=str(table.get("strategy_id", "")),
             table_config=dict(table),
+            rule_note=rule_note,
         ))
     return results
 

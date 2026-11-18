@@ -6,6 +6,7 @@ import fitz
 import streamlit as st
 from services.report_profiles import ReportProfile
 from services.workflow_settings import apply_pending_single_settings
+from services.extraction_rules import apply_rule_to_tables, resolve_rule
 from services.solvency_hybrid_pipeline import locate_tables_hybrid
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
 from services.solvency_pdf_locator import (
@@ -260,9 +261,17 @@ def _render_locator_target_panel(
             elif use_full_llm_mode:
                 spinner_text = "正在执行大模型定位：文字页语义定位 + 图片页视觉定位..."
             with st.spinner(spinner_text):
+                # 封面公司 + 年度 → 公司级规则；页码用窗口 + 锚点验证。
+                resolved_rule = resolve_rule(
+                    (st.session_state.metadata or {}).get("公司", ""),
+                    (st.session_state.metadata or {}).get("报告年度"),
+                    profile_id=active_profile.profile_id,
+                )
                 selected_feature_config = {
                     **feature_config,
-                    "tables": selected_configs,
+                    "tables": apply_rule_to_tables(
+                        selected_configs, resolved_rule
+                    ),
                 }
                 matches, locator_message = locate_tables_hybrid(
                     incoming,
@@ -289,6 +298,13 @@ def _render_locator_target_panel(
                 for item in matches:
                     st.session_state[f"page_edit_{item.table_id}"] = ", ".join(map(str, item.pages))
             located_count = sum(bool(item.pages) for item in matches)
+            if resolved_rule is not None:
+                st.caption(
+                    f"已应用公司规则：{resolved_rule.label}"
+                    f"（{resolved_rule.source}）"
+                )
+                for warning in resolved_rule.warnings:
+                    st.warning(warning, icon=":material/warning:")
             if located_count:
                 st.success(
                     f"定位完成：{located_count}类目标已找到候选页。"
