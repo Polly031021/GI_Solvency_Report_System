@@ -110,6 +110,9 @@ config/extraction/companies/<公司>.yaml  公司级规则（跨年度复用 + �
 
 - 表级 YAML：迁移现有 `TABLE_SIGNATURES / TABLE_EXCLUSIONS / TABLE_HEADERS / TABLE_START_MARKERS / TABLE_END_MARKERS`。
 - 公司级 YAML：只写**与默认不同**的部分（页码、标题变体、列映射、必填行），避免复制整张表定义。
+- 公司专属提取器（可选）：`company.extractor` 指向 `services/company_extractors/<name>.py`，
+  在通用提取之后修补版式特例（合并单元格、跨章节指标、无表头续页）。
+  目前只有平安启用（`extractor: pingan`）；其他公司不配则行为完全不变。
 - 兼容：`solvency_table_extractor.py` 继续导出 `TABLE_HEADERS` 等名字（改为从配置模块读取），`batch_workflow.py`、`table_strategy_handlers.py` 无需改 import。
 
 ### 2.2 规则模型：公司级配置 + 容差窗口（R2）
@@ -310,6 +313,7 @@ structure_versions:
 - 人保 2025 无规则时经营表被误扩到 20-23 页（混入“五、风险管理能力”），规则窗口将其修正为 20-21 页。
 - 三家公司规则已覆盖 Profile 全部 6 张目标表，2025 年每张表均命中窗口（人保 15-20/18-23/33-38/39-44/17-22；平安 15-20/17-22/34-39/40-45/18-23；太保 8-13/10-15/19-24/23-26/11-15）。
 - 新增 `keep_unmapped`（默认关闭）：体检脚本默认保留未匹配标准指标库的原始行（编码 `RAW_*`），2025 实测指标数 人保 90→111、平安 58→71、太保 51→58。
+- 平安 2022 专属提取器（`services/company_extractors/pingan.py`）：修复偿付能力主表粘连列与换行标签，重建经营表效益/规模/品质类指标，并从公司分类表补签单保费；实测指标 66→83，认可资产/负债、量化风险最低资本、签单保费全部就位。
 - 能力五边形叠加图已用 `vegalite_to_svg` 验证可转换（PDF 链路可用）。
 
 已知未处理：
@@ -317,6 +321,8 @@ structure_versions:
 - `tests/test_step7_excel_modules.py` 的 `test_industry_premium_template_module` 既有失败（与本改造无关，行业保费模块未动）。
 - 批次 3 的缺失原因透出（`RULE_NOT_FOUND` / `PAGE_OUT_OF_TOLERANCE` / `ANCHOR_NOT_FOUND` / `REQUIRED_ITEM_MISSING` 写入 STEP2 日志、STEP3 诊断与备注、STEP7 缺口清单）尚未实现；当前仅在 STEP1 面板与 `PageMatch.rule_note` 中显示窗口命中情况。
 - 其余 86 家公司的 YAML 尚未铺开。
+- 公司专属提取器目前只在批量路径（`batch_workflow`）生效；STEP2 单文件上传路径尚未接入。
+- 专属提取器仅平安试点；太保续页（第 13/14 页）仍走通用规则，指标覆盖偏低（39-51）。
 
 ### 批次 0：准备（0.5 天）
 
