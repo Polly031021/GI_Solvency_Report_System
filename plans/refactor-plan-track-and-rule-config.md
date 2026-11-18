@@ -289,6 +289,30 @@ structure_versions:
 
 > 每一步结束都可独立验收、单独 commit；不同批次不交叉修改同一文件。
 
+### 实施进度（2026-11-18）
+
+| 批次 | 状态 | 提交 |
+| --- | --- | --- |
+| 0 准备 | ⚠️ 部分完成：分支 `feature/track-company-and-rule-config` + tag `pre-refactor-2026-11` 已建；未跑 3 家×3 年完整基线 | — |
+| 1 表定义外置 | ✅ 完成：常量与改造前逐项一致（含别名） | `0865d90` |
+| 2 规则库骨架 | ⬜ 未开始 | — |
+| 3 规则铺开 + 缺失原因 | ⬜ 未开始 | — |
+| 4 Track 置顶 + sticky | ✅ 完成 | `ab086ec` |
+| 5 五边形叠加对比 | ✅ 完成 | `ab086ec` |
+| 6 回归 + 文档 | ⚠️ 部分完成：新测试与 AppTest 通过；PDF 整本导出未跑 | — |
+
+已完成验证：
+
+- `tests/test_extraction_config.py`、`test_track_company_order.py`、`test_capability_radar_overlap.py` 通过。
+- `test_new_workflow_behavior`、`test_step2_extraction_modes`、`test_step3_header_recovery`、`test_workflow_smoke`、`test_app_smoke` 通过。
+- 真实 PDF 冒烟：人保产险 2022 定位成功（43 页），`NON_LIFE_OPERATING_METRICS` → 物理页 20-21；封面公司识别为“中国财产再保险股份有限公司”（文件名与封面不一致，属数据问题，路由以封面为准）。
+- 能力五边形叠加图已用 `vegalite_to_svg` 验证可转换（PDF 链路可用）。
+
+已知未处理：
+
+- `tests/test_step7_excel_modules.py` 的 `test_industry_premium_template_module` 既有失败（与本改造无关，行业保费模块未动）。
+- 批次 2/3 的规则库、公司 YAML、缺失原因透出尚未实现。
+
 ### 批次 0：准备（0.5 天）
 
 - 从 `main` 拉分支 `feature/track-company-and-rule-config`
@@ -449,6 +473,7 @@ structure_versions:
 4. 叠加雷达图 **进 PDF**（整页宽）。
 5. 试点公司：**人保产险 / 平安产险 / 太保产险**，各一份配置跨 2022–2024 复用。
 6. 页码容差：**±2 页**（已确认）。
+7. 规则路由键用**封面公司名**（`metadata["公司"]`）；文件名与封面冲突时以封面为准，并保留 `report_identity_warning` 人工核查提示。
 
 遗留待定：
 - `config/solvency_page_features.json` 的处置：建议保留只读、不接入新链路（批次 1 不动它）。
