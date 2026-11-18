@@ -968,7 +968,9 @@ def _paginate(
     measured: list[float] | None = None,
     first_capacity: float = FIRST_PAGE_HEIGHT,
     next_capacity: float = NEXT_PAGE_HEIGHT,
-    max_pages: int = 20,
+    # 只是防止病态输入的硬上限，不能当作"合并溢出内容"的开关：
+    # 40 家公司时单模块已接近 10 页，89 家会更多，合并会把几页内容压成一页被裁掉。
+    max_pages: int = 400,
 ) -> tuple[list[list[Block]], list[Block]]:
     """Pack blocks onto fixed pages using measured (or estimated) heights."""
     blocks = _blocks_for(items)
@@ -1006,7 +1008,7 @@ def _paginate(
         if tail_height <= 70 and len(tail) <= 2:
             pages[-2].extend(tail)
             pages.pop()
-    if len(pages) > max_pages:
+    if len(pages) > max_pages:  # pragma: no cover - 仅防御病态输入
         pages = pages[: max_pages - 1] + [sum(pages[max_pages - 1 :], [])]
     return pages, blocks
 
@@ -1107,7 +1109,7 @@ def build_report_html(
             measured=heights,
             first_capacity=FIRST_PAGE_HEIGHT,
             next_capacity=NEXT_PAGE_HEIGHT,
-            max_pages=20,
+            max_pages=400,
         )
         for index, chunk in enumerate(chunks):
             pages.append(

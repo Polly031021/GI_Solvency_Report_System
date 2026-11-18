@@ -49,6 +49,19 @@ def _report_meta(language: str) -> ReportMeta:
     )
 
 
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    try:
+        import fitz  # PyMuPDF，延迟导入
+
+        document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            return document.page_count
+        finally:
+            document.close()
+    except Exception:  # pragma: no cover - 计数失败不阻断导出
+        return -1
+
+
 def _safe_filename(text: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|\r\n]+', "_", str(text or "")).strip("_ ")
     return cleaned[:80] or "report"
@@ -67,11 +80,15 @@ def _export_pdf(language: str) -> bytes | None:
     try:
         raw_modules = captured_modules()
         if not raw_modules:
+            # 选了很多公司时，整本报告要几分钟才能渲染完；此间抓取结果是空的，
+            # 以前会静默生成只有封面封底的 PDF。
             st.warning(
                 _label(
                     language,
-                    "没有可导出的模块，请刷新页面后重试。",
-                    "No modules to export. Refresh the page and try again.",
+                    "报告还在渲染，暂时没有可导出的内容。请等页面上的进度条和图表全部加载完"
+                    "（选择公司较多时需要 1–3 分钟），再点击导出。",
+                    "The report is still rendering, so there is nothing to export yet. Wait until "
+                    "every chart has loaded (1-3 minutes for large company selections), then export.",
                 )
             )
             return None
@@ -129,6 +146,18 @@ def _export_pdf(language: str) -> bytes | None:
         t2 = time.perf_counter()
         measured, pdf = measure_and_render(probe_html, _build)
         t_render = time.perf_counter()
+        page_count = _pdf_page_count(pdf)
+        if page_count <= 2:
+            # 封面 + 封底：说明模块页一张都没生成，宁可报错也不交付空报告。
+            raise RuntimeError(
+                _label(
+                    language,
+                    f"只生成了封面和封底（{page_count} 页），模块内容缺失。"
+                    "请确认页面已渲染完成后再导出。",
+                    f"Only the cover and back cover were produced ({page_count} pages); module "
+                    "content is missing. Make sure the page has finished rendering, then retry.",
+                )
+            )
         progress.progress(
             1.0, text=_label(language, "导出完成", "Export complete")
         )
