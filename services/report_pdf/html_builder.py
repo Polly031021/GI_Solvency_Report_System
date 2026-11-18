@@ -19,10 +19,25 @@ from .text import label
 PAGE_WIDTH = 1600
 PAGE_HEIGHT = 900
 CONTENT_WIDTH = 1512  # 1600 - 2 * 44px page padding
-FIRST_PAGE_HEIGHT = 720
-NEXT_PAGE_HEIGHT = 790
+FIRST_PAGE_HEIGHT = 712
+NEXT_PAGE_HEIGHT = 780
 MAX_FULL_FIGURE_HEIGHT = 500
-MAX_PAIR_FIGURE_HEIGHT = 340
+MAX_PAIR_FIGURE_HEIGHT = 330
+# Tall multi-row charts (e.g. Plotly subplot stacks) cannot be squeezed into a
+# half-width cell: their legends and axis titles then collide.  They get a full
+# row and a height-driven box instead of a width-driven one.
+MAX_TALL_FIGURE_HEIGHT = 660
+TALL_ASPECT_LIMIT = 1.8
+# Company cards: fixed image height so every card in a row has the same size
+# (a width-driven box left large gaps under narrow charts).
+COMPANY_CARD_FIGURE_HEIGHT = 250
+COMPANY_CARD_HEIGHT = 310
+# Preferred on-page card width.  The number of cards per row is derived from
+# that target and the actual company count (see ``_card_columns``), so a report
+# with 3, 10 or 30 companies all lay out sensibly instead of assuming one case.
+COMPANY_CARD_TARGET_WIDTH = 480
+COMPANY_CARD_MIN_COLUMNS = 2
+COMPANY_CARD_MAX_COLUMNS = 3
 
 _CSS = """
 @page { size: 1600px 900px; margin: 0; }
@@ -52,10 +67,23 @@ html, body { margin: 0; padding: 0; background: #ffffff; color: #1f2937;
 .figure { text-align: center; margin-bottom: 10px; }
 .figure-wrap { margin-bottom: 8px; }
 .figure-wrap.full { width: 100%; }
-.company-card { flex: 1 1 0; min-width: 0; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; background: #fff; }
-.company-card .figure { margin: 2px 0 0; }
-.company-card .figure svg { max-height: 270px; }
-.figures-row .company-card { margin-bottom: 0; }
+/* Company grid: cards are laid out on a fixed grid (two or three per row) so
+   a row reads as a clean grid instead of cards of different widths. */
+.figures-row.company-row { align-items: stretch; }
+.figures-row.company-row .company-card { margin-bottom: 0; }
+.figures-row.company-row .company-card {
+  flex: 0 0 calc((100% - 16px * (var(--card-cols, 3) - 1)) / var(--card-cols, 3)); }
+.company-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px 6px; background: #fff; box-sizing: border-box; }
+.company-card .figure { margin: 0; text-align: center; }
+.company-card .figure svg { width: 100%; height: auto; max-height: 250px; margin: 0 auto; }
+.company-card .annual-company-title { margin: 0 0 4px; }
+.company-card .module-note { margin: 0; }
+.half-cell { width: calc(50% - 8px); margin: 0 auto 8px; }
+.block-group { width: 100%; }
+.half-cell .figure svg { width: 100%; height: auto; max-height: 330px; }
+/* Two lone charts sharing one row: equal halves, no centred offset. */
+.figures-row.half-pair > .half-cell { flex: 1 1 0; width: auto; min-width: 0; margin: 0; }
+.figures-row.company-row.sparse { justify-content: center; }
 .two-col { display: flex; gap: 22px; align-items: flex-start; }
 .two-col .col { min-width: 0; }
 .two-col.multi { flex-wrap: wrap; }
@@ -63,7 +91,17 @@ html, body { margin: 0; padding: 0; background: #ffffff; color: #1f2937;
 .figure-title { font-size: 15px; font-weight: 600; color: #111827; text-align: left; margin: 2px 0; }
 /* `width: 100%` (not max-width) so narrow charts are enlarged instead of
    floating tiny inside a wide white box. */
-.figure svg { width: 100%; height: auto; max-height: 560px; display: block; margin: 0 auto; }
+.figure svg { width: 100%; height: auto; max-height: 500px; display: block; margin: 0 auto; }
+/* Height-driven size for tall stacked charts: keeps the authored proportions
+   and enlarges the labels instead of compressing the plot. */
+.figure.tall svg { height: 660px; width: auto; max-width: 100%; max-height: none; }
+/* Wide-enough charts fill the row completely.  Capping their height with
+   max-height used to letterbox them, leaving big empty margins left and right. */
+/* Full-row charts share one height so a wide trend chart and a narrow one look
+   the same size; the width follows each chart's own ratio (capped to the row). */
+.figure.fill svg { height: 500px; width: auto; max-width: 100%; max-height: none;
+  display: block; margin: 0 auto; }
+.figure.tall .figcaption { text-align: center; }
 .figures-row { display: flex; gap: 16px; align-items: flex-start; }
 .figures-row .figure { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
 .figures-row .figure-wrap { flex: 1 1 0; min-width: 0; }
@@ -83,7 +121,7 @@ td:first-child, th:first-child { text-align: left; }
   color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 8px; margin-top: 10px; }
 
 .metric-row { display: flex; gap: 16px; margin: 10px 0 16px; }
-.figure, .figures-row, table, .metric-row, .metric-card, .s7-insight-card,
+.figure, .figures-row, .company-card, table, .metric-row, .metric-card, .s7-insight-card,
 .module-note, .solvency-report-analysis, .s7-chart-summary, .solvency-analysis-note,
 .s7-capital-insight, .s7-market-side, .s7-pattern-group, .s7-uw-empty {
   break-inside: avoid; page-break-inside: avoid; }
@@ -213,7 +251,7 @@ tr { break-inside: avoid; page-break-inside: avoid; }
 .s7-uw-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .s7-uw-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .s7-uw-dash { width: 24px; height: 0; border-top: 2px dashed #64748B; display: inline-block; }
-.s7-uw-empty { min-height: 275px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 28px 20px; box-sizing: border-box; border: 1px dashed #CBD5E1; border-radius: 10px; background: #F8FAFC; color: #94A3B8; font-size: 12px; line-height: 1.8; }
+.s7-uw-empty { min-height: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px 14px; box-sizing: border-box; border: 1px dashed #CBD5E1; border-radius: 10px; background: #F8FAFC; color: #94A3B8; font-size: 12px; line-height: 1.8; }
 
 .s7-market-side { min-height: 424px; padding: 16px 18px 14px; border-radius: 12px; border: 1px solid #D9E2F0; background: linear-gradient(180deg,#F7FAFF 0%,#FFFFFF 72%); box-shadow: 0 2px 10px rgba(0,51,141,.05); }
 .s7-market-side__title { color: #00338D; font-size: 15px; font-weight: 800; letter-spacing: .3px; margin: 0 0 10px; }
@@ -296,7 +334,7 @@ def _cover(meta: ReportMeta, *, back: bool) -> str:
     )
 
 
-def _render_item(item: ContentItem) -> str:
+def _render_item(item: ContentItem, *, fill: bool = False) -> str:
     caption = (
         f'<div class="figcaption">{html.escape(item.caption)}</div>' if item.caption else ""
     )
@@ -304,7 +342,16 @@ def _render_item(item: ContentItem) -> str:
         payload = item.payload.lstrip()
         if payload.startswith("<?xml"):
             payload = payload.split("?>", 1)[1]
-        cls = "figure full" if _is_wide_chart(item) else "figure"
+        if _is_tall_chart(item):
+            cls = "figure full tall"
+        elif _is_wide_chart(item) or fill:
+            # A chart that owns its row and is wider than tall should use the
+            # whole width: keeping a fixed max-height letterboxed it with big
+            # empty margins on both sides.
+            wide_enough = (item.aspect or 0) >= 1.9 or _is_fill_chart(item)
+            cls = "figure full fill" if wide_enough else "figure full"
+        else:
+            cls = "figure"
         return f'<div class="{cls}">{payload}{caption}</div>'
     if item.kind == "table":
         return f'<div class="table-wrap">{item.payload}{caption}</div>'
@@ -383,6 +430,10 @@ def _units(items: list[ContentItem]) -> list[list[ContentItem]]:
             and _looks_like_chart_title(item)
             and index + 1 < len(items)
             and items[index + 1].kind == "svg"
+            # A card already owns its company title; a section heading in front
+            # of a card must stay a separate block, otherwise it ends up inside
+            # the first company card.
+            and items[index + 1].layout_group is None
         ):
             units.append([item, items[index + 1]])
             index += 2
@@ -458,7 +509,7 @@ def _cluster_units(units: list[list[ContentItem]]) -> list[list[ContentItem]]:
     return clustered
 
 
-def _render_unit(unit: list[ContentItem]) -> str:
+def _render_unit(unit: list[ContentItem], *, fill: bool = False) -> str:
     if any(item.layout_group is not None for item in unit):
         return '<article class="company-card">' + "".join(
             _render_item(item) for item in unit
@@ -473,24 +524,62 @@ def _render_unit(unit: list[ContentItem]) -> str:
         return (
             '<div class="figure-wrap">'
             f'<div class="figure-title">{unit[0].payload}</div>'
-            f"{_render_item(unit[1])}</div>"
+            f"{_render_item(unit[1], fill=fill)}</div>"
         )
     if len(unit) == 1:
-        return _render_item(unit[0])
+        return _render_item(unit[0], fill=fill)
     return "".join(_render_item(item) for item in unit)
+
+
+def _is_tall_chart(item: ContentItem) -> bool:
+    """True for tall stacked Plotly figures that need a full row.
+
+    Only Plotly subplot stacks are laid out against the figure height, so only
+    they benefit from a height-driven box.  An Altair line chart is a normal
+    chart: treating it as "tall" blew it up to a full page and split it across
+    two pages.
+    """
+    if item.kind != "svg" or item.layout_group is not None:
+        return False
+    if item.source != "plotly":
+        return False
+    if item.panels and item.panels > 1:
+        return False
+    aspect = item.aspect or 0.0
+    return 0.0 < aspect < TALL_ASPECT_LIMIT
+
+
+def _is_fill_chart(item: ContentItem) -> bool:
+    """Charts explicitly marked to span the page (multi-company trend lines).
+
+    Ordinary charts must NOT be stretched to the full row: a lone chart left at
+    the end of a two-per-row run used to be promoted to full width, growing to
+    ~676px and forcing a page of its own.
+    """
+    if item.kind != "svg" or item.layout_group is not None:
+        return False
+    return bool(item.full_width)
 
 
 def _is_wide_chart(item: ContentItem) -> bool:
     """Only inherently wide charts occupy a full PDF row."""
     if item.kind != "svg":
         return False
+    if item.full_width:
+        return True
     if item.panels and item.panels > 6:
+        return True
+    if _is_tall_chart(item):
         return True
     return bool(item.aspect and item.aspect >= 3.2)
 
 
 def _chart_height(item: ContentItem, *, full: bool) -> float:
     """Rendered height of a chart in a full-width or half-width cell."""
+    if item.layout_group is not None:
+        return float(COMPANY_CARD_HEIGHT)
+    if _is_tall_chart(item):
+        return MAX_TALL_FIGURE_HEIGHT + 26.0
     width = CONTENT_WIDTH if full else (CONTENT_WIDTH - 16) / 2
     cap = MAX_FULL_FIGURE_HEIGHT if full else MAX_PAIR_FIGURE_HEIGHT
     aspect = item.aspect if item.aspect and item.aspect > 0 else 0.0
@@ -498,6 +587,10 @@ def _chart_height(item: ContentItem, *, full: bool) -> float:
         height = width / aspect
     else:
         height = float(item.max_height_px or 340)
+    if _is_fill_chart(item):
+        # The CSS fills the row and lets the height follow the ratio, so the
+        # estimate must not clamp it either.
+        return height + 26.0
     return min(height, cap) + 26.0
 
 
@@ -556,7 +649,32 @@ def _bucket_height(bucket: list[ContentItem]) -> float:
     return total
 
 
-def _blocks_for(items: list[ContentItem]) -> list[Block]:
+def _card_columns(count: int) -> int:
+    """Choose how many company cards share one PDF row for ``count`` cards.
+
+    Two goals pull in opposite directions: wider cards read better, but too few
+    columns leave empty slots at the end of the run.  The score prefers the
+    on-page target width and charges for every unused slot, so the layout adapts
+    to the real company count instead of being tuned for one of them.
+    """
+    if count <= 0:
+        return COMPANY_CARD_MIN_COLUMNS
+    if count == 1:
+        return 1
+    best_columns = COMPANY_CARD_MIN_COLUMNS
+    best_score = None
+    for columns in range(COMPANY_CARD_MIN_COLUMNS, COMPANY_CARD_MAX_COLUMNS + 1):
+        width = (CONTENT_WIDTH - 16 * (columns - 1)) / columns
+        rows = -(-count // columns)
+        empty_slots = rows * columns - count
+        score = empty_slots * 60 + abs(width - COMPANY_CARD_TARGET_WIDTH)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_columns = columns
+    return min(best_columns, count)
+
+
+def _blocks_for(items: list[ContentItem], *, allow_half: bool = True) -> list[Block]:
     """Split a module's content into layout blocks.
 
     Blocks mirror :func:`_render_items` one-to-one: each block is exactly the
@@ -566,34 +684,94 @@ def _blocks_for(items: list[ContentItem]) -> list[Block]:
     if not items:
         return []
     units = _cluster_units(_units(items))
+    card_units = sum(
+        1 for unit in units if any(item.layout_group is not None for item in unit)
+    )
+    chart_units = sum(1 for unit in units if unit[-1].kind == "svg")
+    # Few companies -> two larger cards per row (labels stay legible); many
+    # companies -> three per row so the module does not sprawl over pages.
+    cards_per_row = _card_columns(card_units)
     blocks: list[Block] = []
     row: list[list[ContentItem]] = []
     metrics: list[ContentItem] = []
+    lone: list[Block] = []
+
+    def flush_lone() -> None:
+        """Emit collected lone charts: two share a row, one is centred."""
+        nonlocal lone
+        if not lone:
+            return
+        if len(lone) >= 2:
+            cells = "".join(f'<div class="half-cell">{b.html}</div>' for b in lone[:2])
+            est = max(b.est for b in lone[:2]) + 8.0
+            blocks.append(
+                Block(f'<div class="figures-row half-pair">{cells}</div>', est, len(lone[:2]))
+            )
+            lone = lone[2:]
+            flush_lone()
+            return
+        single = lone[0]
+        blocks.append(Block(f'<div class="half-cell">{single.html}</div>', single.est, 1))
+        lone = []
 
     def flush_row() -> None:
         nonlocal row
         company_cards = bool(row) and all(
             any(item.layout_group is not None for item in unit) for unit in row
         )
-        per_row = 3 if company_cards else 2
+        per_row = cards_per_row if company_cards else 2
+        row_class = "figures-row company-row" if company_cards else "figures-row"
         for start in range(0, len(row), per_row):
             chunk = row[start : start + per_row]
-            if len(chunk) > 1:
+            # Company cards always live in a row container so a trailing single
+            # card keeps the one-third width instead of stretching full width.
+            if len(chunk) > 1 or (company_cards and chunk):
+                flush_lone()
                 inner = "".join(_render_unit(unit) for unit in chunk)
                 est = max(_chart_height(unit[-1], full=False) for unit in chunk) + 8.0
+                cls = row_class
+                if company_cards and len(chunk) < per_row:
+                    cls += " sparse"
+                style = f' style="--card-cols: {per_row}"' if company_cards else ""
                 blocks.append(
-                    Block(f'<div class="figures-row">{inner}</div>', est, len(chunk))
+                    Block(f'<div class="{cls}"{style}>{inner}</div>', est, len(chunk))
                 )
             elif chunk:
                 unit = chunk[0]
-                blocks.append(
-                    Block(_render_unit(unit), _estimate_height(unit[-1]) + 8.0, 1)
-                )
+                chart = unit[-1]
+                html = _render_unit(unit)
+                if (
+                    allow_half
+                    and chart.kind in ("svg", "image")
+                    and not _is_wide_chart(chart)
+                    and chart.layout_group is None
+                ):
+                    # An odd leftover must not be promoted to full page width:
+                    # a 1512px-wide chart grew to 500-676px tall and took a
+                    # page of its own.  Its short heading comes along, otherwise
+                    # the title stays flush left while the chart is centred.
+                    est = _estimate_height(chart) + 8.0
+                    if blocks:
+                        prev = blocks[-1]
+                        prev_text = _plain_text(prev.html)
+                        if (
+                            "module-note" in prev.html
+                            and "company-card" not in prev.html
+                            and len(prev_text) <= 60
+                            and prev.est <= 90
+                        ):
+                            blocks.pop()
+                            html = prev.html + html
+                            est += prev.est
+                    lone.append(Block(html, est, 1))
+                    continue
+                blocks.append(Block(html, _estimate_height(chart) + 8.0, 1))
         row = []
 
     def flush_metrics() -> None:
         nonlocal metrics
         if metrics:
+            flush_lone()
             inner = "".join(_render_item(item) for item in metrics)
             blocks.append(Block(f'<div class="metric-row">{inner}</div>', 116.0))
             metrics = []
@@ -603,20 +781,35 @@ def _blocks_for(items: list[ContentItem]) -> list[Block]:
         if first.kind == "columns":
             flush_row()
             flush_metrics()
+            flush_lone()
             buckets, weights = first.payload
             if not buckets:
                 continue
-            per_bucket = [_blocks_for(bucket) for bucket in buckets]
+            # Build with half-cell wrappers: when the pair is NOT kept
+            # side by side, a bucket holding a single chart falls back to a
+            # standalone block, and it must stay half width (a full-width
+            # fallback grew to 500-676px and took a page of its own).
+            per_bucket = [_blocks_for(bucket, allow_half=True) for bucket in buckets]
             heights = [sum(block.est for block in parts) for parts in per_bucket]
-            # Keep the side-by-side card layout only when both panels fit on a
-            # page; a tall pair would be shrunk to illegibility by the
-            # renderer's fit-on-one-page fallback.
-            side_by_side = len(buckets) == 2 and max(heights, default=0) <= 620
+            # Keep the side-by-side layout only when BOTH panels carry real
+            # content; an empty or text-only column would waste half the page
+            # width and squeeze the chart beside it.
+            populated = [bool(bucket) for bucket in buckets]
+            has_chart = [
+                any(item.kind in ("svg", "image", "table") for item in bucket)
+                for bucket in buckets
+            ]
+            side_by_side = (
+                len(buckets) == 2
+                and all(populated)
+                and max(heights, default=0) <= 620
+                and not (has_chart[0] != has_chart[1] and min(heights, default=0) < 90)
+            )
             if side_by_side:
                 cells = []
                 for index, bucket in enumerate(buckets):
                     weight = weights[index] if index < len(weights) else 1.0
-                    inner = _render_items(bucket)
+                    inner = _render_items(bucket, allow_half=False)
                     cells.append(f'<div class="col" style="flex: {weight} 1 0;">{inner}</div>')
                 blocks.append(
                     Block('<div class="two-col">' + "".join(cells) + "</div>", max(heights))
@@ -627,32 +820,121 @@ def _blocks_for(items: list[ContentItem]) -> list[Block]:
             continue
         if first.kind == "metric":
             flush_row()
+            flush_lone()
             metrics.append(first)
             continue
         if first.kind == "table":
             flush_row()
             flush_metrics()
+            flush_lone()
             blocks.append(Block(_render_unit(unit), _estimate_height(first), 0))
             continue
         flush_metrics()
         chart = unit[-1]
         if chart.kind == "svg":
-            row.append(unit)
-            if chart.layout_group is None and len(row) == 2:
+            is_card = chart.layout_group is not None
+            row_has_card = any(
+                item.layout_group is not None for unit_ in row for item in unit_
+            )
+            # Cards and ordinary charts never share a row: a mixed row would
+            # break the one-third card grid and leave odd widths.
+            if row and is_card != row_has_card:
                 flush_row()
-            elif chart.layout_group is not None and len(row) == 3:
+            row.append(unit)
+            if is_card and len(row) == cards_per_row:
+                flush_row()
+            elif not is_card and len(row) == 2:
                 flush_row()
         else:
             flush_row()
-            blocks.append(Block(_render_unit(unit), _estimate_height(chart) + 8.0, 0))
+            # Only a module that carries a single chart should stretch it to the
+            # full page width.  Doing that to every odd leftover pushed charts
+            # (e.g. the fifth 险种 chart) onto a page of their own.
+            allow_fill = chart_units == 1 or bool(getattr(chart, "full_width", False))
+            blocks.append(
+                Block(
+                    _render_unit(unit, fill=allow_fill),
+                    _estimate_height(chart) + 8.0,
+                    0,
+                )
+            )
     flush_row()
     flush_metrics()
+    flush_lone()
+    # Two lone charts separated only by a short caption (a legend or one-line
+    # note) belong on one row: when each keeps its own block they land on two
+    # pages that are each half empty.
+    folded: list[Block] = []
+    index = 0
+    while index < len(blocks):
+        a = blocks[index]
+        if a.html.startswith('<div class="half-cell">') and index + 2 < len(blocks):
+            mid, b = blocks[index + 1], blocks[index + 2]
+            short_note = (
+                "module-note" in mid.html
+                and mid.est <= 70
+                and len(_plain_text(mid.html)) <= 90
+            )
+            if short_note and b.html.startswith('<div class="half-cell">'):
+                inner_a = a.html[len('<div class="half-cell">'):].rstrip()
+                inner_a = inner_a[: -len("</div>")] if inner_a.endswith("</div>") else inner_a
+                inner_b = b.html[len('<div class="half-cell">'):].rstrip()
+                inner_b = inner_b[: -len("</div>")] if inner_b.endswith("</div>") else inner_b
+                folded.append(mid)
+                folded.append(
+                    Block(
+                        '<div class="figures-row half-pair">'
+                        f'<div class="half-cell">{inner_a}</div>'
+                        f'<div class="half-cell">{inner_b}</div>'
+                        "</div>",
+                        max(a.est, b.est) + 8.0,
+                        2,
+                    )
+                )
+                index += 3
+                continue
+        folded.append(a)
+        index += 1
+    blocks = folded
+    # A half-cell chart may have been emitted right after its own short
+    # heading (the heading belongs to a different bucket, so it could not be
+    # folded in while walking the units).  Move the heading inside the cell so
+    # the title sits above the chart instead of at the page edge.
+    merged: list[Block] = []
+    for block in blocks:
+        if (
+            block.html.startswith('<div class="half-cell">')
+            and merged
+            and "module-note" in merged[-1].html
+            and "company-card" not in merged[-1].html
+            and len(_plain_text(merged[-1].html)) <= 60
+            and merged[-1].est <= 90
+        ):
+            head = merged.pop()
+            block.html = block.html.replace(
+                '<div class="half-cell">',
+                f'<div class="half-cell">{head.html}',
+                1,
+            )
+            block.est += head.est
+        merged.append(block)
+    blocks = merged
+    # A trailing one-line caption (typically the chart's footnote) would
+    # otherwise land alone on a page of its own.  Fold it into the block above.
+    if len(blocks) >= 2:
+        tail = blocks[-1]
+        tail_text = _plain_text(tail.html)
+        if tail.est <= 80 and len(tail_text) <= 140 and "module-note" in tail.html:
+            prev = blocks[-2]
+            prev.html = f'<div class="block-group">{prev.html}{tail.html}</div>'
+            prev.est += tail.est
+            blocks.pop()
     return blocks
 
 
-def _render_items(items: list[ContentItem]) -> str:
+def _render_items(items: list[ContentItem], *, allow_half: bool = True) -> str:
     """Render a list of content items exactly as :func:`_blocks_for` groups them."""
-    return "".join(block.html for block in _blocks_for(items))
+    return "".join(block.html for block in _blocks_for(items, allow_half=allow_half))
 
 
 def _paginate(
@@ -684,6 +966,19 @@ def _paginate(
             used += height
     if current:
         pages.append(current)
+    # A page that only carries a few pixels of trailing text looks broken.
+    # Merge such a stub into the previous page instead of leaving it alone.
+    if len(pages) > 1:
+        tail = pages[-1]
+        tail_height = sum(
+            (measured[index] if measured is not None and index < len(measured) and measured[index] > 0
+             else block.est)
+            for index, block in enumerate(blocks)
+            if block in tail
+        )
+        if tail_height <= 70 and len(tail) <= 2:
+            pages[-2].extend(tail)
+            pages.pop()
     if len(pages) > max_pages:
         pages = pages[: max_pages - 1] + [sum(pages[max_pages - 1 :], [])]
     return pages, blocks

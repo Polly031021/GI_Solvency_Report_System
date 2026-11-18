@@ -677,6 +677,25 @@ def build_market_share_premium_pie(
     return fig
 
 
+# English category names are too long to sit side by side on one line and the
+# automatic 45° rotation makes them reach down into the horizontal legend.  A
+# manual line break keeps them flat and inside their own band.
+CATEGORY_LABEL_WRAP_EN = {
+    "Large companies": "Large<br>companies",
+    "Medium companies": "Medium<br>companies",
+    "Small companies": "Small<br>companies",
+    "Foreign-invested": "Foreign-<br>invested",
+    "Captive insurers": "Captive<br>insurers",
+    "Agricultural insurance": "Agricultural<br>insurance",
+    "Group subsidiaries": "Group<br>subsidiaries",
+}
+
+
+def wrap_category_labels(labels: list[str]) -> list[str]:
+    """Return print-friendly multi-line English category labels."""
+    return [CATEGORY_LABEL_WRAP_EN.get(str(label).strip(), str(label)) for label in labels]
+
+
 def build_market_share_profit_bars(
     data: MarketShareData,
     *,
@@ -845,7 +864,7 @@ def build_market_share_profit_bars(
     fig.update_yaxes(
         title_text=t(
             f"净利润 / 承保利润（{unit}）",
-            f"Net profit / Underwriting profit ({unit_name(unit)})",
+            f"Net / UW profit ({unit_name(unit)})",
         ),
         row=2,
         col=1,
@@ -877,18 +896,25 @@ def build_market_share_profit_bars(
         linecolor=REPORT_DOMAIN_COLOR,
         linewidth=1,
         ticks="",
-        tickfont=dict(family=REPORT_FONT, size=10, color=REPORT_AXIS_COLOR),
+        # Keep the long English category names horizontal; rotated labels
+        # reach down into the legend row and overlap it.
+        tickangle=0,
+        automargin=True,
+        tickfont=dict(family=REPORT_FONT, size=9, color=REPORT_AXIS_COLOR),
     )
     fig.update_layout(
         height=640,
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
-        margin=dict(t=58, b=76, l=76, r=68),
+        margin=dict(t=58, b=112, l=76, r=68),
         showlegend=True,
         legend=dict(
             orientation="h",
-            yanchor="top",
-            y=-0.13,
+            yanchor="bottom",
+            # Plot area is 640 - 58 - 112 = 470px tall, so -0.20 puts the
+            # legend ~94px below the plot and ~18px inside the canvas edge,
+            # clear of the (now horizontal) category labels.
+            y=-0.20,
             x=0.5,
             xanchor="center",
             font=dict(family=REPORT_FONT, size=10, color=REPORT_TEXT_COLOR),

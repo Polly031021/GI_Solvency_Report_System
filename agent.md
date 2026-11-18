@@ -188,36 +188,77 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
    - `capture.set_note()` / `request_export()` / `store_result()` / `result()` — 备注、导出触发与结果回传。
 3. `capture.to_content_items()`：Altair/Plotly → SVG（`ThreadPoolExecutor` 并行 + 缓存）；
    同一 `st.columns` 组折成 `kind="columns"` 块（饼图"左图右栏"靠它）。
-4. `html_builder.build_report_html()`：封面 + 每模块固定 1600×900 页 + 封底。
-   `_units()` 只把"短标题"（≤90 字、不含卡片/图例 class）绑成图标题；
-   `_blocks_for()` 把内容切成不可分割的排版块（图行/卡片/表格），
-   宽图（面板>1 或宽高比≥2.2）独占一行，普通图两两一行；单个模块不限 2 页。
-5. `renderer.render_pdf(html)`：Playwright Chromium `page.pdf(width="1600px", height="900px")`
-   输出矢量 PDF，再用 PyMuPDF 盖页码；分页前 `measure_blocks()` 先实测每块高度，按 712/782px 容量装页。
+4. `html_builder.build_report_html(meta, modules, measured=...)`：封面 + 每模块固定 1600×900 页 + 封底。
+   - `_units()` 只把"短标题"（≤90 字、不含卡片/图例 class）绑成图标题；
+   - `_blocks_for()` 把内容切成不可分割的排版块（图行/卡片/表格），分页按**实测高度**装页；
+   - 普通图两两一行；公司卡片行按公司数量自动决定列数（见 5.2）；
+   - **落单图**（一行里只剩一张）用 `.half-cell` 保持半页宽 + 限高 330px，并把它自己的小标题一起包进去；
+     连续两张落单图（中间只隔一行短说明）会合并成一行 `figures-row half-pair`；
+   - 只有**模块内仅一张图**或显式 `usermeta={"s7_full_width": True}` 的图，才撑满整页宽。
+5. `renderer.measure_and_render(probe_html, build_report)`：**一次 Chromium 会话**内完成
+   "测量块高 → 用实测高度生成 HTML → 渲染 PDF"，再用 PyMuPDF 盖页码。
+   容量：首页 `FIRST_PAGE_HEIGHT=712`、续页 `NEXT_PAGE_HEIGHT=780`（对应 `.module-body` 720/790px）。
+   以前 measure 和 render 各起一个浏览器，每次多 5–10 秒且偶发 `unclean kill browser`。
 
-### 5.2 图表尺寸（`report_pdf/svg.py`）
+### 5.2 图表尺寸与卡片列数
 
-- 顶层 `width/height` 对 facet/concat 无效，**必须写到叶子 spec**：`_size_spec()` 递归分配，
-  并按面板数重设 `columns`。
-- 面板最小 250×190。
-- 请求尺寸故意小于 PDF 排版宽度，靠 SVG 放大来放大坐标轴/数据标签，避免"图大字小"。
+**转换尺寸**（`capture.py` 的 `plans` 分支，请求值 ≠ 最终显示尺寸）：
 
-### 5.3 调试开关
+| 类型 | 请求尺寸 | 说明 |
+| --- | --- | --- |
+| 公司卡片图 | 480×240 | 卡片内显示宽约 470px，按显示尺寸出图才能保持字号 |
+| 普通单面板 | 760×270 | 两图一行，行高约 360–420px，一页可放两行 |
+| 面板 ≥2 | 780×330 | —— |
+| 面板 ≥5 | 1100×460 | —— |
+| 整行宽图 | 1500×400 | 折线趋势图，`usermeta` 标记；Vega 会另加约 70px 轴/标题区 |
+| Plotly | 用图自身尺寸 | 缩小换算会重排图例导致与轴标签重叠 |
+
+**CSS 侧**（`html_builder._CSS`）：
+
+- `.figure svg`：`width:100%; max-height:500px`（普通图）。
+- `.figure.fill svg`：**`height:500px; width:auto`** —— 整行宽图统一高度，宽度随各自比例自适应。
+  曾经用 `width:100%; height:auto`，导致比例不同的三张折线图高度差 14%，看起来"某张变小了"。
+- `.company-card .figure svg`：`max-height:250px`；卡片行高约 287–310px。
+- `.half-cell`：半页宽（50%）+ 图 `max-height:330px`，用于落单图。
+
+**公司卡片列数**：`_card_columns(count)` 按"目标卡片宽 480px + 空位扣分"自动选 2–3 列
+（1 家 1 列、2 家 2 列、3–12 家 3 列…），不再按 10 家的特例写死。
+
+**`svg.py` 的约束**：顶层 `width/height` 对 facet/concat 无效，**必须写到叶子 spec**（`_size_spec()` 递归），
+并按面板数重设 `columns`；面板最小 250×190。
+
+### 5.3 快速迭代（只改排版时用这个）
+
+```bash
+python tools/fast_layout.py --refresh  # 首次：跑一遍 Streamlit + 转图，约 100s，结果缓存在 tmp/pdf_diagnose/modules.pkl
+python tools/fast_layout.py            # 之后：只重"测量+排版+渲染"，约 8–10s
+```
+
+改排版时**不要**用 `tmp/apptest_export_10.py` 全量跑（那要 75–150s）。
+确认排版后，再用生产路径（点"导出 PDF 报告"或 `apptest_export_10.py`）做最终校验。
+
+### 5.4 调试开关
 
 `S7_EXPORT_DEBUG=1` 打印 `[s7-export] modules/items/convert/html/pdf` 耗时和 `[s7-module]` 结构。
 
-### 5.4 已知坑（改这块最容易踩）
+### 5.5 已知坑（改这块最容易踩）
 
 - Altair 自带的 `properties(width=...)` 若不覆盖，小面板（235×200）在 PDF 里极小 → 由 `_size_spec()` 兜住。
+- **CSS 类名必须和代码生成的类名一致**。曾经代码输出 `half-solo`、样式表写的是 `.half-cell`，
+  落单图拿不到 50% 宽和 330 限高，回退到 `max-height:500px`（526px 高），被顶到新页，
+  后续所有页码整体后移一页。**改类名时先用 grep 对一遍 CSS。**
+- `_render_unit(..., fill=True)` 会把图变成整页宽。只允许用于"模块仅一张图"或 `full_width` 标记的图；
+  给所有独占行的图都加会把你不想变大的图（如第 5 张险种图）撑到 750px 高、独占一页。
 - SVG 根节点缺 `viewBox` → CSS 缩放不等比，`_ensure_viewbox()` 补上。
-- CSS 里 `.figure svg` 用 `width:100%`（不是 `max-width`），否则窄图缩在宽白框中央。
 - `st.columns` 只有 **2 列**才折成 `kind="columns"` 保持左右排版；3 列以上视为公司网格，
-  拆成普通条目以便两两一行并参与分页。
+  转为卡片行（`layout_card` 分组），**不要在 2 列块内部再套一层 `.half-cell`**，否则图只有 1/4 宽。
 - 新增图的样式 class 必须同步进 `html_builder._CSS`，否则 PDF 里只剩无格式文字。
-- 导出是重活：全量 18 模块约 60–90 秒（转换 40s + 测量/排版 8s + 渲染 14s），
-  **别在测试里反复全量跑**。
+- 切换报告语言会让 Streamlit **重跑整本报告（实测约 30–50 秒）**，这期间点击导出会被丢弃；
+  `export.py` 用 `_s7_language_switched_at` 在面板上提示等待，不要当成导出 bug 排查。
+- 导出耗时（10 家公司 / 18 模块）：转换 40–60s + 测量/排版/渲染 10–15s ≈ **75s**；
+  若出现 280s+ 通常是 Playwright 收尾异常重试，不必改逻辑。
 - 旧的浏览器端打印实现（`dashboard_components.py` 里 400 行 JS：`s7-print-sheet`、
-  `waitForModules`、`normaliseCompanyStrips`）已在本次重构中删除，
+  `waitForModules`、`normaliseCompanyStrips`）已在重构中删除，
   `render_print_control` 现在是 40 行的委托封装。**不要从 git 历史里把它捡回来。**
 
 ---
@@ -271,6 +312,8 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 | --- | --- |
 | 模块级备注位置 | `ModuleSnapshot.note` 仍固定追加在模块最后一页底部，未做智能避让 |
 | 雷达图/小面板网格 | SVG 转换后轴标签、网格偶有丢失，需按图类型单独处理 |
+| 卡片网格尾行 | 卡片数不能被列数整除时，尾行会单独占一页下半部（如 10 家公司的 3+3+3+1），暂接受 |
+| 图内微标签 | 每页多图的模块里，柱内百分比仍有 3.6–4.5pt，属"一页装多图"的固有代价 |
 | 远程图片 | 导出 HTML 里 http 图片依赖网络，离线环境不显示 |
 | STEP8 导出 | 仍走旧的打印控件路径，未接入 `services/report_pdf` 新管线 |
 | 寿险 Profile | 仅有财险工作簿，`LIFE_SOLVENCY` 相关代码路径未验证 |
@@ -281,7 +324,17 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 
 - `app.py`：初始化 `pdf_capture.install()`。
 - `dashboard_components.py`：删除浏览器打印 JS（-450 行），`render_print_control` 委托服务端导出。
-- `step7_solvency/report.py`：`start_document` / `begin_module` / `end_module` 埋点，发布 `_s7_pdf_meta`。
-- `step7_solvency/plan_renderers.py`：诊断区用 `capture.suspend()` 排除；公司网格面板包 `layout_card()`。
+- `step7_solvency/report.py`：`start_document` / `begin_module` / `end_module` 埋点，发布 `_s7_pdf_meta`；
+  记录语言切换时间 `_s7_language_switched_at`，供导出面板提示"重渲染中"。
+- `step7_solvency/plan_renderers.py`：诊断区用 `capture.suspend()` 排除；公司网格面板包 `layout_card()`；
+  `st.dataframe` 仍不进 PDF。
 - `services/solvency_step7_charts/{industry_premium,premium_by_line,performance}.py`：统一同比口径、排名轴显式刻度。
+- `services/solvency_step7_charts/trend.py`：多公司折线图图例改**顶部水平**（原右侧竖排会压住数据线）、
+  最低点数值标签上移避开年份标签、`usermeta` 标记整页宽。
+- `services/report_pdf/{capture,html_builder,models,renderer,export}.py`：
+  - `ContentItem` 增加 `panels / aspect / layout_group / layout_index / source / full_width`；
+  - 落单图半页宽 + 连续落单图合并、`_card_columns()` 自适应列数、卡片禁跨页拆分；
+  - `measure_and_render()` 单会话完成测量+渲染；导出面板按语言重渲染提示；
+  - 修 `localize_plotly()` 把空轴标题 `None` 渲染成字符串 "None" 的 bug。
+- 规模参考：10 家公司、18 个模块约 **39–40 页**（旧版 41–50 页）。
 - `requirements.txt`：新增 `playwright`、`vl-convert-python`。

@@ -62,6 +62,38 @@ def _current_column() -> tuple[int, int, int, float] | None:
     return _COLUMN_MAP.get(id(active))
 
 
+def _wants_full_width(chart: object) -> bool:
+    """True when a chart asked to span the whole page.
+
+    Chart builders mark such figures with ``usermeta={"s7_full_width": True}``;
+    the marker survives into ``to_dict()``/``usermeta`` but never affects the
+    rendered chart.
+    """
+    meta = getattr(chart, "usermeta", None)
+    if isinstance(meta, dict):
+        return bool(meta.get("s7_full_width"))
+    try:
+        spec_meta = chart.to_dict().get("usermeta")  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return bool(isinstance(spec_meta, dict) and spec_meta.get("s7_full_width"))
+
+
+def _is_card_chart(raw: "_RawItem") -> bool:
+    """True when this chart is rendered inside a company card."""
+    if raw.extra.get("layout_card") is not None:
+        return True
+    column = raw.extra.get("column")
+    if isinstance(column, tuple) and len(column) == 4:
+        # Three or more Streamlit columns are a company grid, which the PDF
+        # rebuilds as cards.
+        try:
+            return int(column[2]) >= 3
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 @dataclass
 class _RawItem:
     kind: str
@@ -366,7 +398,17 @@ def _collapse_columns(items: list[ContentItem]) -> list[ContentItem]:
             index += 1
         if total == 2 and any(buckets):
             # A genuine two-panel layout (chart + metric/insight panel) keeps
-            # its side-by-side arrangement in the PDF.
+            # its side-by-side arrangement in the PDF.  The side-by-side pairing
+            # already expresses the layout, so drop the per-column card markers:
+            # keeping them wrapped every panel in a company card inside the
+            # column and shrank the chart to a quarter of the page width.
+            for bucket in buckets:
+                for child in bucket:
+                    child.column = None
+                    child.layout_group = None
+                    child.layout_index = None
+                    child.layout_total = 0
+                    child.layout_weight = 1.0
             collapsed.append(
                 ContentItem(
                     kind="columns",
@@ -421,12 +463,43 @@ def to_content_items(
                 # chart gets in the PDF: the SVG is scaled up to fill its cell,
                 # which also magnifies axis labels and data labels (they are
                 # fixed in chart units, so scaling up makes text readable).
-                if panels >= 5:
-                    chart_width, chart_height = 1250, 520
+                if raw.kind == "plotly":
+                    # Plotly lays out legends, subplot titles and axis titles
+                    # against the figure's own height.  Converting at a smaller
+                    # box re-runs that layout in a squeezed canvas and makes
+                    # legends collide with tick labels, so keep the authored
+                    # size and only fall back when the figure has none.
+                    layout = getattr(raw.payload, "layout", None)
+                    own_width = int(getattr(layout, "width", 0) or 0)
+                    own_height = int(getattr(layout, "height", 0) or 0)
+                    chart_width = min(own_width or 900, 1600)
+                    chart_height = min(own_height or 520, 1200)
+                elif panels >= 5:
+                    chart_width, chart_height = 1100, 460
                 elif panels >= 2:
-                    chart_width, chart_height = 900, 360
+                    chart_width, chart_height = 780, 330
+                elif _is_card_chart(raw):
+                    # Company-card charts are displayed ~470px wide inside a
+                    # card.  Rendering them near that size keeps the labels at
+                    # their authored size; a 760px render was scaled to 62% and
+                    # pushed the tick labels down to ~3.5pt.
+                    chart_width, chart_height = 480, 240
+                elif _wants_full_width(raw.payload):
+                    # Charts that are meant to span the whole page (multi-company
+                    # trend lines) are rendered wide so they fill the row at a
+                    # moderate height instead of being letterboxed.  Vega adds
+                    # ~70px of axis/title space, so 1500x400 exports at roughly
+                    # a 3.2 ratio: 1512px wide and ~475px tall, which still fits
+                    # on the page together with the module's notes.
+                    chart_width, chart_height = 1500, 400
                 else:
-                    chart_width, chart_height = 620, 300
+                    # Single-panel charts are placed two per row.  Vega-Lite adds
+                    # axis/title space on top of the requested plot box, so the
+                    # code below asks for a wide box: the exported SVG then has
+                    # roughly a 2:1 ratio, which fills half a page row at ~350px
+                    # and lets two rows share one page instead of one row per
+                    # page (469-504px rows used to waste half of every page).
+                    chart_width, chart_height = 760, 270
                 plans.append(
                     (
                         module_index,
@@ -478,7 +551,9 @@ def to_content_items(
                             column=raw.extra.get("column"),
                             panels=render.panels,
                             aspect=render.aspect,
-                            **_layout_fields(raw.extra.get("column") or raw.extra.get("layout_card")),
+                            source=raw.kind,
+                            full_width=_wants_full_width(raw.payload),
+                            **_layout_fields(raw.extra.get("layout_card") or raw.extra.get("column")),
                         )
                     )
             elif raw.kind == "dataframe":
@@ -493,7 +568,7 @@ def to_content_items(
                             kind="table",
                             payload=table_html,
                             column=raw.extra.get("column"),
-                            **_layout_fields(raw.extra.get("column") or raw.extra.get("layout_card")),
+                            **_layout_fields(raw.extra.get("layout_card") or raw.extra.get("column")),
                         )
                     )
             elif raw.kind == "image":
@@ -505,7 +580,7 @@ def to_content_items(
                             payload=uri,
                             caption=str(raw.extra.get("caption") or ""),
                             column=raw.extra.get("column"),
-                            **_layout_fields(raw.extra.get("column") or raw.extra.get("layout_card")),
+                            **_layout_fields(raw.extra.get("layout_card") or raw.extra.get("column")),
                         )
                     )
             elif raw.kind == "markdown":
@@ -519,7 +594,7 @@ def to_content_items(
                             kind="html",
                             payload=markup,
                             column=raw.extra.get("column"),
-                            **_layout_fields(raw.extra.get("column") or raw.extra.get("layout_card")),
+                            **_layout_fields(raw.extra.get("layout_card") or raw.extra.get("column")),
                         )
                     )
             elif raw.kind == "metric":
@@ -528,7 +603,7 @@ def to_content_items(
                         kind="metric",
                         payload=raw.payload,
                         column=raw.extra.get("column"),
-                        **_layout_fields(raw.extra.get("column") or raw.extra.get("layout_card")),
+                        **_layout_fields(raw.extra.get("layout_card") or raw.extra.get("column")),
                     )
                 )
         converted.append(

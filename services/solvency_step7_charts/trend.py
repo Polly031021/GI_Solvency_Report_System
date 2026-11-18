@@ -89,11 +89,17 @@ def build_metric_trend_group(
     else:
         y_axis = alt.Axis()
     company_legend = alt.Legend(
-        title="公司",
-        orient="top-right",
-        direction="vertical",
-        columns=1,
+        title=None,
+        # A vertical top-right legend sits on top of the plotted lines once the
+        # chart is scaled for the PDF; a horizontal legend above the plot keeps
+        # the data area clear.
+        orient="top",
+        direction="horizontal",
+        columns=5,
         symbolSize=80,
+        labelFontSize=9,
+        labelLimit=120,
+        titleFontSize=9,
     )
     highlight = str(highlight_company or "").strip()
     line_size = (
@@ -108,14 +114,16 @@ def build_metric_trend_group(
     )
     value_tooltip = alt.Tooltip("数值:Q", format=label_format)
     x_axis = (
-        alt.Axis(labelAngle=0)
+        # labelPadding keeps the period label below the value label that is
+        # drawn just above the lowest point.
+        alt.Axis(labelAngle=0, labelPadding=12)
         if code
         in {
             "ACTUAL_CAPITAL_TO_RECOGNIZED_ASSETS",
             "INVESTMENT_RETURN",
             "NON_LIFE_INSURANCE_RISK_TO_LIABILITIES",
         }
-        else alt.Axis()
+        else alt.Axis(labelPadding=8)
     )
     base = alt.Chart(metric)
     lines = base.mark_line().encode(
@@ -230,7 +238,19 @@ def build_metric_trend_group(
     if group_count > 1:
         title = f"{title} · 第 {group_index}/{group_count} 组（{len(companies)} 家公司）"
         height = 350
-    return apply_report_theme(alt.layer(*trend_layers).properties(title=title, height=height))
+    return apply_report_theme(
+        alt.layer(*trend_layers).properties(
+            title=title,
+            height=height,
+            # Ask the PDF exporter to render this chart at full page width: a
+            # multi-company trend line needs the horizontal room, while its
+            # height must stay moderate so the caption still fits below it.
+            usermeta={"s7_full_width": True},
+            # Keep the x-axis labels clear of the value labels drawn at the
+            # bottom of the plot area.
+            padding={"left": 6, "top": 6, "right": 8, "bottom": 16},
+        )
+    )
 
 
 def prepare_metric_trend(

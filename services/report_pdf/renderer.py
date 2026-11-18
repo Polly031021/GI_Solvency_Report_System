@@ -61,6 +61,74 @@ def _stamp_page_numbers(pdf_bytes: bytes) -> bytes:
         return pdf_bytes
 
 
+def _measure_with(browser, html: str, width: int, height: int) -> dict[int, list[float]]:
+    page = browser.new_page(viewport={"width": width, "height": height})
+    try:
+        page.set_content(html, wait_until="load")
+        page.wait_for_timeout(250)
+        data = page.evaluate(
+            """() => {
+              const out = {};
+              document.querySelectorAll('.s7-block[data-m]').forEach((el) => {
+                const m = el.dataset.m;
+                (out[m] = out[m] || []).push(Math.ceil(el.getBoundingClientRect().height));
+              });
+              return out;
+            }"""
+        )
+    finally:
+        page.close()
+    measured: dict[int, list[float]] = {}
+    for key, values in (data or {}).items():
+        try:
+            measured[int(key)] = [float(value) for value in values]
+        except (TypeError, ValueError):
+            continue
+    return measured
+
+
+def _render_with(browser, html: str, width: int, height: int) -> bytes:
+    page = browser.new_page(viewport={"width": width, "height": height})
+    try:
+        page.set_content(html, wait_until="load")
+        page.wait_for_timeout(300)
+        return page.pdf(
+            width=f"{width}px",
+            height=f"{height}px",
+            print_background=True,
+            margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
+        )
+    finally:
+        page.close()
+
+
+def measure_and_render(
+    probe_html: str,
+    build_report,
+    *,
+    width: int = 1600,
+    height: int = 900,
+) -> tuple[dict[int, list[float]], bytes]:
+    """Measure the probe page, then render the report, in one browser session.
+
+    ``build_report`` receives the measured heights and returns the final HTML.
+    Both steps used to launch (and tear down) their own Chromium instance, which
+    costs 5-10 seconds per export and occasionally leaves a zombie browser.
+    """
+    _ensure_writable_temp()
+    from playwright.sync_api import sync_playwright
+
+    with _LOCK:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                measured = _measure_with(browser, probe_html, width, height)
+                pdf_bytes = _render_with(browser, build_report(measured), width, height)
+            finally:
+                browser.close()
+    return measured, _stamp_page_numbers(pdf_bytes)
+
+
 def measure_blocks(html: str, *, width: int = 1600, height: int = 900) -> dict[int, list[float]]:
     """Measure real block heights of a probe document in Chromium.
 
@@ -73,32 +141,13 @@ def measure_blocks(html: str, *, width: int = 1600, height: int = 900) -> dict[i
     _ensure_writable_temp()
     from playwright.sync_api import sync_playwright
 
-    measured: dict[int, list[float]] = {}
     with _LOCK:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
-                page = browser.new_page(viewport={"width": width, "height": height})
-                page.set_content(html, wait_until="load")
-                page.wait_for_timeout(250)
-                data = page.evaluate(
-                    """() => {
-                      const out = {};
-                      document.querySelectorAll('.s7-block[data-m]').forEach((el) => {
-                        const m = el.dataset.m;
-                        (out[m] = out[m] || []).push(Math.ceil(el.getBoundingClientRect().height));
-                      });
-                      return out;
-                    }"""
-                )
+                return _measure_with(browser, html, width, height)
             finally:
                 browser.close()
-    for key, values in (data or {}).items():
-        try:
-            measured[int(key)] = [float(value) for value in values]
-        except (TypeError, ValueError):
-            continue
-    return measured
 
 
 def render_pdf(html: str, *, width: int = 1600, height: int = 900) -> bytes:
@@ -114,29 +163,7 @@ def render_pdf(html: str, *, width: int = 1600, height: int = 900) -> bytes:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
-                page = browser.new_page(viewport={"width": width, "height": height})
-                page.set_content(html, wait_until="load")
-                # Give embedded SVG fonts a moment to settle before printing.
-                page.wait_for_timeout(300)
-                # Pagination is decided from measured block heights before this
-                # render.  Do not apply a second browser-scale pass: it causes
-                # titles, SVGs and table headers to drift together and hides
-                # layout defects instead of creating a new page.
-                page.evaluate(
-                    """() => {
-                      window.__S7_SCALES = [];
-                      return window.__S7_SCALES;
-                    }"""
-                )
-                if __import__("os").environ.get("S7_EXPORT_DEBUG"):
-                    import sys as _sys
-                    print("[s7-scale]", page.evaluate("() => window.__S7_SCALES || []"), file=_sys.stderr, flush=True)
-                pdf_bytes = page.pdf(
-                    width=f"{width}px",
-                    height=f"{height}px",
-                    print_background=True,
-                    margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
-                )
+                pdf_bytes = _render_with(browser, html, width, height)
             finally:
                 browser.close()
     return _stamp_page_numbers(pdf_bytes)

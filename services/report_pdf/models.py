@@ -31,6 +31,8 @@ class ContentItem:
     layout_index: int | None = None
     layout_total: int = 0
     layout_weight: float = 1.0
+    source: str = ""  # "altair" or "plotly" when the item is a rendered chart
+    full_width: bool = False  # chart asked to span the whole page row
 
 
 @dataclass

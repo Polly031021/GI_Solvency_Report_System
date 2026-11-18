@@ -13,7 +13,7 @@ import streamlit as st
 from .capture import captured_modules, clear_result, result, store_result, to_content_items
 from .html_builder import build_probe_html, build_report_html
 from .models import ReportMeta
-from .renderer import measure_blocks, render_pdf
+from .renderer import measure_and_render
 
 _META = "_s7_pdf_meta"
 
@@ -109,13 +109,13 @@ def _export_pdf(language: str) -> bytes | None:
             0.62, text=_label(language, "正在测量排版…", "Measuring layout…")
         )
         probe_html = build_probe_html(meta, modules)
-        measured = measure_blocks(probe_html)
 
         progress.progress(
             0.72, text=_label(language, "正在排版报告…", "Composing report…")
         )
-        html_text = build_report_html(meta, modules, measured=measured)
-        t2 = time.perf_counter()
+
+        def _build(heights):
+            return build_report_html(meta, modules, measured=heights)
 
         progress.progress(
             0.80,
@@ -125,7 +125,10 @@ def _export_pdf(language: str) -> bytes | None:
                 "Rendering PDF (about 5–10 seconds)…",
             ),
         )
-        pdf = render_pdf(html_text)
+        # One Chromium session: measure the probe, compose, render.
+        t2 = time.perf_counter()
+        measured, pdf = measure_and_render(probe_html, _build)
+        t_render = time.perf_counter()
         progress.progress(
             1.0, text=_label(language, "导出完成", "Export complete")
         )
@@ -151,7 +154,7 @@ def _export_pdf(language: str) -> bytes | None:
             )
         print(
             f"[s7-export] modules={len(modules)} items={sum(len(m.items) for m in modules)} "
-            f"convert={t1-t0:.1f}s html={t2-t1:.1f}s pdf={time.perf_counter()-t2:.1f}s",
+            f"convert={t1-t0:.1f}s html={t2-t1:.1f}s pdf={t_render-t2:.1f}s",
             file=sys.stderr,
             flush=True,
         )
@@ -159,6 +162,16 @@ def _export_pdf(language: str) -> bytes | None:
 
 
 def _render_panel_body(*, key: str, language: str) -> None:
+    switched_at = st.session_state.get("_s7_language_switched_at")
+    if isinstance(switched_at, (int, float)) and time.time() - switched_at < 120:
+        st.warning(
+            _label(
+                language,
+                "报告正在按新语言重新渲染，此过程约需 30–60 秒。完成前点击导出不会生效，请稍候再试。",
+                "The report is re-rendering in the new language and needs 30–60 seconds. "
+                "Clicks on export are ignored until it finishes — please wait a moment.",
+            )
+        )
     label = _label(language, "导出 PDF 报告", "Export PDF report")
     if st.button(
         label,
@@ -175,15 +188,32 @@ def _render_panel_body(*, key: str, language: str) -> None:
 
     ready = result()
     if ready and ready.get("key") == key:
+        # The download button widget is keyed per language: its label, file name
+        # and payload all change with the language, and reusing one key across
+        # those changes leaves Streamlit with stale widget state.
         st.download_button(
             _label(language, "下载 PDF", "Download PDF"),
             data=ready["bytes"],
             file_name=ready["filename"],
             mime="application/pdf",
             icon=":material/download:",
-            key=f"{key}_download_pdf",
+            key=f"{key}_download_pdf_{language}",
             use_container_width=True,
         )
+
+
+def _panel_body_live_language(*, key: str) -> None:
+    """Fragment body that resolves the language itself.
+
+    The language must not be a fragment argument.  When it changes, Streamlit
+    re-registers the fragment, and the click on the freshly rendered export
+    button is dropped — the panel then looks unresponsive until the user
+    interacts with something else.  Keeping the arguments constant and reading
+    the language inside avoids that.
+    """
+    from services.report_i18n import get_language
+
+    _render_panel_body(key=key, language=get_language())
 
 
 def render_export_control(*, key: str, language: str, enabled: bool = True) -> None:
@@ -199,4 +229,5 @@ def render_export_control(*, key: str, language: str, enabled: bool = True) -> N
     if fragment is None:
         _render_panel_body(key=key, language=language)
         return
-    fragment(_render_panel_body)(key=key, language=language)
+    # Only ``key`` is passed: see ``_panel_body_live_language``.
+    fragment(_panel_body_live_language)(key=key)

@@ -1442,7 +1442,12 @@ def localize_plotly(figure: Any, language: str | None = None) -> Any:
         for axis_name in ("xaxis", "yaxis"):
             axis = getattr(figure.layout, axis_name, None)
             if axis is not None and getattr(axis, "title", None) is not None:
-                axis.title.text = translate_text(str(axis.title.text), language)
+                # ``update_xaxes(title=None)`` leaves a title object whose text
+                # is None; translating it would print the literal string
+                # "None" on the chart.
+                current = getattr(axis.title, "text", None)
+                if current:
+                    axis.title.text = translate_text(str(current), language)
         if getattr(figure.layout, "title", None) is not None:
             title = figure.layout.title
             if getattr(title, "text", None):

@@ -3017,6 +3017,30 @@ def render_plan_industry_premium_by_line(
         )
 
 
+def _apply_category_label_wrap(figure, wrapper) -> None:
+    """Force explicit x tick labels so long names never rotate into the legend."""
+    try:
+        raw_labels: list[str] = []
+        for trace in list(getattr(figure, "data", ()) or ()):
+            values = getattr(trace, "x", None)
+            if values is None:
+                continue
+            candidate = [str(value) for value in list(values)]
+            if len(candidate) >= len(raw_labels):
+                raw_labels = candidate
+        if not raw_labels:
+            return
+        figure.update_xaxes(
+            tickmode="array",
+            tickvals=raw_labels,
+            ticktext=wrapper(raw_labels),
+            tickangle=0,
+            automargin=True,
+        )
+    except Exception:  # pragma: no cover - defensive
+        return
+
+
 def render_plan_industry_market_share(
     industry_frame,
     *,
@@ -3287,8 +3311,15 @@ def render_plan_industry_market_share(
         unsafe_allow_html=True,
     )
     profit_chart = build_market_share_profit_bars(data, unit_mode=unit_mode)
+    profit_chart = localize_plotly(profit_chart)
+    if is_english():
+        from services.solvency_step7_charts.industry_market_share import (
+            wrap_category_labels,
+        )
+
+        _apply_category_label_wrap(profit_chart, wrap_category_labels)
     st.plotly_chart(
-        localize_plotly(profit_chart),
+        profit_chart,
         width="stretch",
         key=f"{key_prefix}_market_share_profit_bars",
     )
@@ -3309,48 +3340,52 @@ def render_plan_industry_market_share(
             f"loss categories {underwriting_loss:+,.1f} {unit_name(unit)}.",
         )
     )
-    with st.expander(t("查看分类与公司明细", "View category and company detail")):
-        category_display = data.categories.copy()
-        for column in ("保费", "净利润", "承保利润"):
-            category_display[column] = (
-                pd.to_numeric(category_display[column], errors="coerce") / divisor
-            )
-        # The detail table must use the same denominator as the chart:
-        # a loss-making category therefore shows a negative percentage.
-        for metric in ("净利润", "承保利润"):
-            values = pd.to_numeric(category_display[metric], errors="coerce")
-            total = float(values.abs().sum())
-            category_display[f"{metric}占比"] = (
-                values / total if total else pd.Series(0.0, index=values.index)
-            )
-        category_display = category_display.rename(
-            columns={
-                "保费": f"保费（{unit}）",
-                "净利润": f"净利润（{unit}）",
-                "承保利润": f"承保利润（{unit}）",
-                "保费占比": "保费占比",
-                "净利润占比": "净利润占比",
-                "承保利润占比": "承保利润占比",
-            }
-        )
-        st.dataframe(
-            translate_dataframe(category_display), width="stretch", hide_index=True
-        )
-        if data.company_detail["承保利润测算"].any():
-            st.caption(
-                t(
-                    "承保利润 = 签单保费 ×（1 - 综合成本率）的测算值。",
-                    "Underwriting profit is estimated as signed premium × (1 − combined ratio).",
+    # The detail table is interactive UI, not report content.  Its captions must
+    # not be captured either: the table itself is excluded from the PDF, so a
+    # stray caption ended up as a one-line page of its own.
+    with pdf_capture.suspend():
+        with st.expander(t("查看分类与公司明细", "View category and company detail")):
+            category_display = data.categories.copy()
+            for column in ("保费", "净利润", "承保利润"):
+                category_display[column] = (
+                    pd.to_numeric(category_display[column], errors="coerce") / divisor
                 )
+            # The detail table must use the same denominator as the chart:
+            # a loss-making category therefore shows a negative percentage.
+            for metric in ("净利润", "承保利润"):
+                values = pd.to_numeric(category_display[metric], errors="coerce")
+                total = float(values.abs().sum())
+                category_display[f"{metric}占比"] = (
+                    values / total if total else pd.Series(0.0, index=values.index)
+                )
+            category_display = category_display.rename(
+                columns={
+                    "保费": f"保费（{unit}）",
+                    "净利润": f"净利润（{unit}）",
+                    "承保利润": f"承保利润（{unit}）",
+                    "保费占比": "保费占比",
+                    "净利润占比": "净利润占比",
+                    "承保利润占比": "承保利润占比",
+                }
             )
-        company_display = data.company_detail.copy()
-        for column in ("保费", "净利润", "承保利润"):
-            company_display[column] = (
-                pd.to_numeric(company_display[column], errors="coerce") / divisor
+            st.dataframe(
+                translate_dataframe(category_display), width="stretch", hide_index=True
             )
-        st.dataframe(
-            translate_dataframe(company_display), width="stretch", hide_index=True
-        )
+            if data.company_detail["承保利润测算"].any():
+                st.caption(
+                    t(
+                        "承保利润 = 签单保费 ×（1 - 综合成本率）的测算值。",
+                        "Underwriting profit is estimated as signed premium × (1 − combined ratio).",
+                    )
+                )
+            company_display = data.company_detail.copy()
+            for column in ("保费", "净利润", "承保利润"):
+                company_display[column] = (
+                    pd.to_numeric(company_display[column], errors="coerce") / divisor
+                )
+            st.dataframe(
+                translate_dataframe(company_display), width="stretch", hide_index=True
+            )
 
 
 

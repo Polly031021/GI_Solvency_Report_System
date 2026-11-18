@@ -35,6 +35,7 @@ from services.report_i18n import (
 
 from .ai_analysis import ai_analysis_for_latest_period
 from .selection import company_color_map, metric_title, ordered_companies
+from services.report_pdf import capture as pdf_capture
 
 
 def render_image_override_controls(
@@ -531,12 +532,16 @@ def render_company_chart_grid(
     title_font_size = 12 if company_count >= 8 else 13
     tracked_company = str(highlight_company or "").strip()
     if company_count > 6:
-        st.caption(
-            t(
-                "每家公司固定宽度；左右拖动下方滚动条可查看全部公司。",
-                "Each company keeps a fixed width; drag the horizontal scrollbar below to see every company.",
+        # Screen-only affordance: in the PDF every card is laid out on the page,
+        # so a "drag the scrollbar" note is meaningless (and used to be captured
+        # as a stray text block).
+        with pdf_capture.suspend():
+            st.caption(
+                t(
+                    "每家公司固定宽度；左右拖动下方滚动条可查看全部公司。",
+                    "Each company keeps a fixed width; drag the horizontal scrollbar below to see every company.",
+                )
             )
-        )
 
     def _render_panel(company: object, index: int) -> None:
         company_name = str(company)
@@ -552,30 +557,33 @@ def render_company_chart_grid(
             gap=None,
             key=f"annual_company_panel_{tone}_{key_prefix}_{index}",
         ):
-            st.markdown(
-                "<div class='annual-company-title' "
-                f"style='font-size:{title_font_size}px'>{escape(str(localized_company_name(company_name)))}</div>",
-                unsafe_allow_html=True,
-            )
-            # ★ 把 try/except 移进容器内：图表失败时，公司标题列依然保留
-            try:
-                chart = chart_factory(company_frame)
-            except (ValueError, KeyError) as exc:
-                # The chart builder raises Chinese detail text.  Translate the
-                # detail too, otherwise the English page leaks Chinese here.
-                detail = translate_text(str(exc), "en") if is_english() else str(exc)
-                st.warning(
-                    t(
-                        f"该公司的图表暂不可用：{detail}",
-                        f"Chart unavailable for this company: {detail}",
-                    )
+            # Bind the company title to its chart so the PDF exporter emits them
+            # as one card instead of a pile of titles followed by a pile of charts.
+            with pdf_capture.layout_card():
+                st.markdown(
+                    "<div class='annual-company-title' "
+                    f"style='font-size:{title_font_size}px'>{escape(str(localized_company_name(company_name)))}</div>",
+                    unsafe_allow_html=True,
                 )
-                return
-            render_altair_chart(
-                chart_without_internal_title(chart),
-                width="stretch",
-                key=f"{key_prefix}_{index}",
-            )
+                # ★ 把 try/except 移进容器内：图表失败时，公司标题列依然保留
+                try:
+                    chart = chart_factory(company_frame)
+                except (ValueError, KeyError) as exc:
+                    # The chart builder raises Chinese detail text.  Translate the
+                    # detail too, otherwise the English page leaks Chinese here.
+                    detail = translate_text(str(exc), "en") if is_english() else str(exc)
+                    st.warning(
+                        t(
+                            f"该公司的图表暂不可用：{detail}",
+                            f"Chart unavailable for this company: {detail}",
+                        )
+                    )
+                    return
+                render_altair_chart(
+                    chart_without_internal_title(chart),
+                    width="stretch",
+                    key=f"{key_prefix}_{index}",
+                )
 
     render_horizontal_panel_strip(companies, _render_panel, key_prefix=key_prefix)
 

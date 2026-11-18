@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 import re
+import time
 
 import pandas as pd
 import streamlit as st
@@ -143,7 +144,14 @@ def _sync_language_from_control() -> None:
     control_key = "s7_language_display"
     selected = st.session_state.get(control_key)
     if selected:
-        set_language(LANGUAGE_LABELS.get(str(selected), LANG_ZH))
+        target = LANGUAGE_LABELS.get(str(selected), LANG_ZH)
+        if get_language() != target:
+            # Switching language re-renders the whole report, which can take a
+            # minute.  Clicks on the sidebar export button are dropped while the
+            # script is running, so record when the switch happened and let the
+            # export panel explain the wait.
+            st.session_state["_s7_language_switched_at"] = time.time()
+        set_language(target)
 
 
 def show_step_7_solvency(
