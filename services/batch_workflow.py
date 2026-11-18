@@ -412,6 +412,46 @@ def extract_document_tables(
         page_engines=page_engines,
         page_units=page_units,
     )
+
+    # 公司专属后处理：如平安的合并单元格拆分、经营表跨页补全。
+    extractor_name = ""
+    for match in located:
+        rule_info = (match.table_config or {}).get("_extraction_rule") or {}
+        extractor_name = str(rule_info.get("extractor") or "").strip()
+        if extractor_name:
+            break
+    if extractor_name and outcome.tables:
+        try:
+            from .company_extractors import apply_company_extractor
+
+            outcome.tables = list(
+                apply_company_extractor(
+                    extractor_name,
+                    outcome.tables,
+                    pdf_bytes=pdf_bytes,
+                )
+            )
+            outcome.logs.append(
+                {
+                    "公司": company,
+                    "目标表": "公司专属规则",
+                    "物理页码": "",
+                    "识别方式": f"extractor:{extractor_name}",
+                    "状态": "成功",
+                    "说明": "已应用公司专属提取后处理。",
+                }
+            )
+        except Exception as exc:
+            outcome.logs.append(
+                {
+                    "公司": company,
+                    "目标表": "公司专属规则",
+                    "物理页码": "",
+                    "识别方式": f"extractor:{extractor_name}",
+                    "状态": "失败",
+                    "说明": f"专属后处理异常，已保留通用提取结果：{exc}",
+                }
+            )
     failed_pages = [log for log in outcome.logs if log["状态"] == "失败"]
     if not outcome.tables:
         outcome.status = "失败"

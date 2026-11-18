@@ -16,6 +16,7 @@ company:
   aliases: [中国平安财产保险股份有限公司, 平安财险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
+  extractor: pingan
   notes: 2023 起版式稳定；2022 实际资本/最低资本页码提前较多，依赖全文回退
 
 tables:

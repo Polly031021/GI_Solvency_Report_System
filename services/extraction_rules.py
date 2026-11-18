@@ -63,6 +63,8 @@ class CompanyRule:
     tables: Mapping[str, Mapping[str, Any]]
     structure_versions: tuple[StructureVersion, ...] = ()
     source: str = ""
+    # 公司专属提取器名称（如 pingan）；空表示只用通用规则。
+    extractor: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ class ResolvedRule:
     structure_version: int | None
     tables: Mapping[str, Mapping[str, Any]]
     warnings: tuple[str, ...] = ()
+    extractor: str = ""
 
     def table(self, table_id: str) -> Mapping[str, Any] | None:
         return self.tables.get(table_id)
@@ -263,6 +266,7 @@ def _parse_rule(path: Path, known_tables: set[str]) -> CompanyRule:
         tables=tables,
         structure_versions=tuple(versions),
         source=path.name,
+        extractor=str(company.get("extractor") or "").strip(),
     )
 
 
@@ -386,6 +390,7 @@ def resolve_rule(
         ),
         tables=tables,
         warnings=tuple(warnings),
+        extractor=matched.extractor,
     )
 
 
@@ -432,6 +437,7 @@ def apply_rule_to_tables(
                 "canonical": resolved.canonical,
                 "structure_version": resolved.structure_version,
                 "page_match": rule_config.get("page_match", "prefer"),
+                "extractor": resolved.extractor,
             }
         out.append(merged)
     return out
