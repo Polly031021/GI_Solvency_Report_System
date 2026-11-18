@@ -1,0 +1,66 @@
+# 中华联合：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份季报的 dump 实测（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=17 2023=16 2024=17 2025=17
+#   NON_LIFE_OPERATING_METRICS    2022=19 2023=18 2024=19 2025=19(+20 续)
+#   ACTUAL_CAPITAL                2022=28-29 2023=26-27 2024=27-28 2025=29-30
+#   MINIMUM_CAPITAL               2022=34-35 2023=32-33 2024=33-34 2025=35-36
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无（全册无"近三年"表）2023=17 2024=18 2025=18
+#   LIQUIDITY_MONITORING          2022=18 2023=17 2024=18 2025=18
+#
+# 版式共性问题（由 zhonghua extractor 按页文本重建，见 services/company_extractors/zhonghua.py）：
+#   1) 经营表被页内区域裁剪，只识别到前 12-13 行；2025 签单保费渠道行续到下一页；
+#   2) 流动性监测表与"（四）近三年投资收益率"同页，框架选错表；
+#   3) 实际资本表合计行（4/4.1/4.2/4.3/5）在次页，通用续页识别失败；
+#   4) 最低资本表附加资本 3.x 行多一列、且含【第N页表格分块】占位行。
+
+company:
+  canonical: 中华联合
+  aliases: [中华联合财产保险股份有限公司, 中华联合财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: zhonghua
+  notes: |
+    2022-2025 封面公司名均为"中华联合财产保险股份有限公司"。
+    2022/2023 金额单位为万元（仅 MAIN/LIQ 表内标注），2024/2025 经营与资本明细为元；
+    extractor 不改单位，单位由表格内"（万元）"/"单位：元"与标准单位换算处理。
+    2022 年无近三年投资收益率表，属披露缺失。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [18, 19]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [27, 28]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33, 34]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17, 18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17, 18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]

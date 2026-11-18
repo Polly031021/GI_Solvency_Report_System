@@ -41,6 +41,11 @@ _DIRECT_FIELDS = {
     "unit",
     "notes",
     "columns",
+    # 续页相关：不止一次出现“YAML 里写了却不生效”，这里补进白名单。
+    "include_continuation",
+    "max_pages",
+    "continuation_min_structure_hits",
+    "continuation_min_numeric_lines",
 }
 
 _CACHE: dict[str, Any] = {"signature": None, "rules": None}

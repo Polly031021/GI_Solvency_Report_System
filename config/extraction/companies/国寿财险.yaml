@@ -1,0 +1,71 @@
+# 国寿财险（中国人寿财产保险股份有限公司）：公司级提取规则
+# 封面公司全称固定为“中国人寿财产保险股份有限公司”，四年一致。
+# 页码依据：2022-2024 实测 + 2025 终检（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=23  2023=22  2024=19  2025=18
+#   NON_LIFE_OPERATING_METRICS    2022=25  2023=24  2024=21  2025=20
+#   ACTUAL_CAPITAL                2022=37  2023=34  2024=29  2025=28
+#   MINIMUM_CAPITAL               2022=43  2023=40  2024=35  2025=34
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表  2023=24  2024=21  2025=20
+#   LIQUIDITY_MONITORING          2022=24  2023=23  2024=20  2025=19
+#
+# 四年版式稳定，不按年维护 structure_versions；只有表格结构大改时才追加版本。
+
+company:
+  canonical: 国寿财险
+  aliases: [中国人寿财产保险股份有限公司, 中国人寿财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 版式一致、页码整体下移，固定 ±2 窗口即可覆盖。
+    两处 Profile 默认终止词会截断目标表，故在表级用 end_item 覆盖：
+    经营表的“综合成本率/综合赔付率/费用率”只截到效益类指标第一行，
+    最低资本表的“最低资本合计”会命中“1.1 寿险业务保险风险最低资本合计”。
+    2022 年报告没有“近三年（综合）投资收益率”表（5 表为上限）。
+    guoshou extractor 负责：2022/2023 主表表头、2022/2023 经营表“非车险前五大险种”
+    竖排碎片、2023-2025 近三年收益率表（选帧会误选成经营表）、流动性表两块合并与
+    LCR 四值拆分、剔除自测情景与口径不匹配的公司整体净现金流行。
+  extractor: guoshou
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [19, 22]
+    tolerance: 2
+    page_match: prefer
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [21, 24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    # 经营表实际到“其他渠道签单保费”结束（效益类/规模类两个分组共 30+ 行）。
+    # Profile 默认终止词“综合成本率/综合赔付率/费用率”会在第 15 行截断。
+    end_item: [其他渠道签单保费, 其他渠道]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29, 37]
+    tolerance: 2
+    page_match: prefer
+
+  MINIMUM_CAPITAL:
+    expected_pages: [34, 43]
+    tolerance: 2
+    page_match: prefer
+    # 最低资本表从“1 量化风险最低资本”到“4 最低资本”共 33-34 行。
+    # 表级终止词留空：Profile 的“最低资本合计”会命中“1.1 寿险业务…合计”，
+    # 导致只留 3 行；清空后由页内区域与边界裁剪（start=量化风险最低资本，
+    # end=4 最低资本）负责切分。
+    end_item: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [21, 24]
+    tolerance: 2
+    page_match: prefer
+    # 与经营表同页（(四) 小节），2022 年报告确实没有该表。
+    anchor_terms: [近三年平均（综合）投资收益率, 近三年（综合）投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [20, 23]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]

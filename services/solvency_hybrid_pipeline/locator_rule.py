@@ -15,6 +15,17 @@ from ..solvency_pdf_locator import (
 
 from .locator_vision import _profile_instruction_block, _profile_prompt_values
 
+try:
+    _FITZ_MAJOR = int(str(fitz.VersionBind).split(".")[0])
+except (AttributeError, TypeError, ValueError):  # pragma: no cover
+    _FITZ_MAJOR = 0
+
+# PyMuPDF 2.x 的 Page.find_tables() 在部分页面（如众安 2023 p6）会触发
+# 原生崩溃（access violation 0xC0000005，Python 层 try/except 捕获不到，
+# 进程直接退出）。这个调用只用来判断"本页像不像表格"，数字行与续表词
+# 已能覆盖同类信号，因此在 2.x 上直接停用，1.x 保持原行为。
+_FIND_TABLES_ENABLED = _FITZ_MAJOR < 2
+
 
 def _radar_content_anchor(
     table_id: str,
@@ -50,9 +61,12 @@ def _solvency_radar(
             compressed = " ".join(raw_text.replace("\x00", " ").split())
             summaries.append(f"---PDF物理第{index + 1}页---\n{compressed[:1600]}")
             compact_text = re.sub(r"\s+", "", raw_text)
-            try:
-                has_table = bool(page.find_tables().tables)
-            except Exception:
+            if _FIND_TABLES_ENABLED:
+                try:
+                    has_table = bool(page.find_tables().tables)
+                except Exception:
+                    has_table = False
+            else:
                 has_table = False
             numeric_lines = _numeric_table_lines(raw_text)
             continued = any(term in compact_text for term in ("续表", "（续）", "(续)"))

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, Callable, Sequence
 
 POSTPROCESSORS: dict[str, Callable[..., Sequence[Any]]] = {}
@@ -29,9 +30,14 @@ def get_postprocessor(name: str) -> Callable[..., Sequence[Any]] | None:
     if not key:
         return None
     if key not in POSTPROCESSORS:
-        # 延迟导入，避免启动时加载 fitz 之外的解析逻辑。
-        if key == "pingan":
-            from . import pingan  # noqa: F401
+        # 延迟导入，避免启动时加载 fitz 之外的解析逻辑；
+        # 模块名与 extractor 名一致，例如 pingan → company_extractors/pingan.py。
+        module = "".join(ch for ch in key if ch.isalnum() or ch == "_")
+        if module:
+            try:
+                importlib.import_module(f".{module}", __name__)
+            except ImportError:
+                pass
     return POSTPROCESSORS.get(key)
 
 

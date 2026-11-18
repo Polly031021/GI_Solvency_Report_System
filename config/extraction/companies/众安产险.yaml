@@ -1,0 +1,111 @@
+# 众安产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 公司特点：互联网财险，不设分支机构；偿付能力报告的章节顺序与传统财险一致，
+# 但正文表格由 Word 导出，文本层把“项目名”和“金额”拆成相邻两行，
+# 例如“认可资产\n 5,433,856.13”。这导致通用定位器的
+# “首尾项目闭合”（line_has_item(..., require_value=True)）在众安身上基本失效，
+# 页码只能靠“表题锚点 + 续页判定”，因此本文件把每张表钉死到实测物理页。
+#
+# 2022 版式（物理页，容差 0-2）：
+#   SOLVENCY_MAIN               16      （四、主要指标（一）偿付能力充足率指标）
+#   NON_LIFE_OPERATING_METRICS  17      （（三）主要经营指标，与流动性监测同页）
+#   ACTUAL_CAPITAL              29      （十、实际资本）
+#   MINIMUM_CAPITAL             33      （十一、最低资本）
+#   THREE_YEAR_INVESTMENT_RETURN 无     （2022 年报没有“近三年（综合）投资收益率”）
+#   LIQUIDITY_MONITORING        17      （（二）2. 流动性风险监测指标：标题在 16 页页脚，
+#                                        表体全在 17 页；容差会把 16 页标题页选进来，故容差 0）
+#
+# 2023 起章节整体前移 3 页，见 structure_versions[0]。
+#   2023：主表 13、经营 14-15、实际资本 28、最低资本 32、近三年 15、流动性 14
+#   2024：主表 13、经营 14-15、实际资本 29、最低资本 33、近三年 15、流动性 14
+#   2025：主表 13、经营 14-15、实际资本 27、最低资本 31、近三年 15、流动性 14
+#   实际资本/最低资本用 32/28 作窗口中心 + 容差 2，同时覆盖 2023-2025 的 27-29 / 31-33。
+#
+# 提取路径：众安的“页内区域”裁切反而更差 —— 2024 主表被“（单位：万元）”
+# 那一行切成 5 列、表头变成“（单位：万元）| | |下|季度预测数”；最低资本表的
+# 区域从“最低资本”起止到“最低资本”，只剩 3 行。整页线框识别（pdfplumber）
+# 对同一页给出的是干净表（主表 17 行×4 列、最低资本 35 行×3 列），所以这里把
+# start_item / end_item 同时置空，让 _has_target_region() 返回 False，
+# 走“整页 frames + _select_target_frames()”路径。
+#
+# 流动性监测表把 header_terms 收窄成“上季度可比数”：它既要与主要经营指标
+# 同页共存（“指标名称 / 本季度数 / 上季度数”这类通用词会让
+# _select_target_frames() 串票），又需要表头词参与锚点打分（2022 年监测表
+# 表体在 17 页、标题却在 16 页页脚）。header_terms 不进 _table_terms，
+# 因此既能恢复 17 页锚点，又不会把经营表拼进来。
+
+company:
+  canonical: 众安产险
+  aliases: [众安在线财产保险股份有限公司, 众安财险, 众安保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  # 实际资本/最低资本的单位写在表上方正文“（以下单位均为人民币万元）”，
+  # 通用单位嗅探识别不到，由该提取器补回表级单位，避免 STEP3 按“元”再除以 10000。
+  extractor: zhongan
+  notes: 众安文本层“项目/金额”分行的版式使首尾项目闭合失效，页码按实测钉死；禁用页内区域裁切，改走整页线框 frames
+
+tables:
+  # ---------------- 2022 版式（基准） ----------------
+  SOLVENCY_MAIN:
+    expected_pages: [16]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17]
+    tolerance: 0
+    page_match: prefer
+    start_item: []
+    end_item: []
+    # 只保留监测表独有的表头词：2022 年监测表表体在 17 页、标题落在 16 页页脚，
+    # 无标题页要靠“内容词 + 表头词”才能成为锚点；若表头词清空，
+    # 17 页锚点分数不足会回退全文锚点，把 16 页 LCR 监管表拼进来。
+    # header_terms 不参与整页 frames 选择（_table_terms 只取 title/content/
+    # completeness/signature），因此不会把同页经营表串进来。
+    header_terms: [上季度可比数]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    # 2022 年报没有该表；不设窗口，未命中锚点时自然为空。
+    start_item: []
+    end_item: []
+
+structure_versions:
+  - since: 2023
+    notes: 2023 起四、主要指标整体前移到第 13 页；主要经营指标跨 14-15 两页，近三年收益率在第 15 页下半
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [14, 15]
+      ACTUAL_CAPITAL:
+        expected_pages: [28]
+      MINIMUM_CAPITAL:
+        expected_pages: [32]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [15]
+      LIQUIDITY_MONITORING:
+        expected_pages: [14]
+        tolerance: 2

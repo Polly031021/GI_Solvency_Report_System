@@ -1,22 +1,30 @@
 # 太保产险：公司级提取规则（跨年度复用，不按年维护）
 #
-# 页码依据：2022-2025 样例定位结果（物理页，容差 ±2）
-#   SOLVENCY_MAIN                 10-11
-#   NON_LIFE_OPERATING_METRICS    12-13（2022 延伸到 14 页）
-#   ACTUAL_CAPITAL                20-23（2022=20-22，2023=22-23）
-#   MINIMUM_CAPITAL               25-27
-#   THREE_YEAR_INVESTMENT_RETURN  13（2022 无该表）
-#   LIQUIDITY_MONITORING          11-12
+# 页码依据：2022-2025 实测定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 10-11（2022/2025=10，2023/2024=11）
+#   NON_LIFE_OPERATING_METRICS    12-13（2023/2024 跨页；2022/2025 全在第 12 页）
+#   ACTUAL_CAPITAL                20-22（2022=20-22，2023=22-23，2024/2025=20-21）
+#   MINIMUM_CAPITAL               24-26（2022=25-26，2023=26-27，2024/2025=24-25）
+#   THREE_YEAR_INVESTMENT_RETURN  13（2022 年报无该表）
+#   LIQUIDITY_MONITORING          11-12（2022/2025 监管+监测同页；2023/2024 分两页）
 #
 # 封面公司名固定为“中国太平洋财产保险股份有限公司”，
 # 2025 文件名“太保财险（偿付能力）”不影响路由。
+#
+# 通用规则的已知缺口由 company.extractor=taibao 修复，见
+# services/company_extractors/taibao.py 与 plans/company-太保产险.md。
 
 company:
   canonical: 太保产险
-  aliases: [中国太平洋财产保险股份有限公司, 太保财险]
+  aliases: [中国太平洋财产保险股份有限公司, 太保财险, 太平洋财险]
   profile_id: NON_LIFE_SOLVENCY
-  rule_version: 1
-  notes: 各表页码稳定，2022 经营表延伸至第 14 页
+  rule_version: 2
+  extractor: taibao
+  notes: >-
+    2023/2024 经营表跨第 12/13 页且续页无表头；第 13 页与近三年投资收益率
+    同页，故经营表显式清空 start_item（关闭页内区域裁剪，改用整页帧），
+    再由专属提取器按“主要经营指标”到“备注”重建。最低资本 S05 跨两页，
+    定位器只命中续页，由提取器向前找“十、最低资本”重建主表。
 
 tables:
   SOLVENCY_MAIN:
@@ -29,15 +37,19 @@ tables:
     tolerance: 2
     page_match: prefer
     anchor_terms: [主要经营指标]
+    # 清空 start_item：_has_target_region 要求 start/end 同时非空，
+    # 这样续页第 13 页不会被区域模式误裁，而是保留整页帧供提取器重建。
+    start_item: []
+    end_item: [其他渠道签单保费, 其他渠道]
     required_items: [保险业务收入, 净利润, 综合成本率]
 
   ACTUAL_CAPITAL:
-    expected_pages: [21, 22]
+    expected_pages: [20, 21, 22]
     tolerance: 2
     page_match: prefer
 
   MINIMUM_CAPITAL:
-    expected_pages: [25, 26]
+    expected_pages: [24, 25, 26]
     tolerance: 2
     page_match: prefer
 
@@ -47,6 +59,17 @@ tables:
     page_match: prefer
 
   LIQUIDITY_MONITORING:
-    expected_pages: [12]
+    expected_pages: [11, 12]
     tolerance: 2
     page_match: prefer
+
+structure_versions:
+  - since: 2025
+    notes: 2025 年经营表全部位于第 12 页，第 13 页只有近三年投资收益率
+    tables:
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [12]
+        # 2025 年经营表数据止于第 12 页，第 13 页只剩近三年收益率。
+        # 通用定位仍会把第 13 页并作经营表续页，且该页整页提取失败；
+        # 由 taibao 提取器在确认 PDF 存在该表时补建 THREE_YEAR。
+        notes: 2025 经营表止于第 12 页，第 13 页表由专属提取器补建

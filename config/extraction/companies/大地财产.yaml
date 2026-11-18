@@ -1,0 +1,76 @@
+# 大地财产（中国大地财产保险股份有限公司）：公司级提取规则
+#
+# 封面公司全称四年固定为“中国大地财产保险股份有限公司”，故用 aliases 承接；
+# 文件名是“大地财产.pdf”，canonical 必须是文件名 stem。
+#
+# 页码依据：2022-2025 四份报告实测（物理页）
+#   SOLVENCY_MAIN                 2022=20  2023=17  2024=20  2025=21
+#   NON_LIFE_OPERATING_METRICS    2022=22,23  2023=20  2024=23  2025=24
+#   ACTUAL_CAPITAL                2022=33,34  2023=31,32  2024=33,34  2025=35,36
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表  2023=21  2024=24  2025=25
+#   MINIMUM_CAPITAL               2022=39  2023=37  2024=39  2025=41
+#   LIQUIDITY_MONITORING          2022=22  2023=19  2024=22  2025=23
+#
+# expected_pages 只列实测页，tolerance: 0 使窗口恰好落在 min..max 之间；
+# page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底，未来页码小幅
+# 漂移不会直接漏检。四年版式一致，不按年维护 structure_versions。
+#
+# 表格结构缺陷（经营表只截到综合成本率、最低资本只剩 3 行、实际资本换行
+# 标签丢值、流动性 AA 级标签被拆两行）不在 YAML 里按年维护，统一由
+# services/company_extractors/dadi.py 按正文重建。
+
+company:
+  canonical: 大地财产
+  aliases: [中国大地财产保险股份有限公司, 大地财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: dadi
+  notes: >-
+    2022-2025 版式稳定；页码逐年小幅漂移，已按实测页列窗口。
+    经营表、实际资本、最低资本、流动性监测的结构性问题由 dadi extractor 修复。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [17, 20, 21]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [20, 22, 23, 24]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [31, 32, 33, 34, 35, 36]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本, 实际资本调整过程]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [21, 24, 25]
+    tolerance: 0
+    page_match: prefer
+    # 大地不披露近三年投资收益率的线框表，只有“（五）”小节两行正文。
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [37, 39, 41]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [量化风险最低资本]
+    # Profile 默认终止词“最低资本合计”会命中“1.1 寿险…合计”，导致只留 3 行；
+    # 清空后由页内区域与 dadi extractor 的整表重建负责。
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [19, 22, 23]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]

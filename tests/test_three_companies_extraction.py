@@ -52,6 +52,48 @@ COMPANY_FILES: dict[str, dict[str, str]] = {
         "2024": "Data/pdfs(2024)/太保产险.pdf",
         "2025": "Data/pdfs(2025)/太保财险（偿付能力）.pdf",
     },
+    "国寿财险": {
+        "2022": "Data/pdfs(2022)/国寿财险.pdf",
+        "2023": "Data/pdfs(2023)/国寿财险.pdf",
+        "2024": "Data/pdfs(2024)/国寿财险.pdf",
+        "2025": "Data/pdfs(2025)/国寿财险.pdf",
+    },
+    "众安产险": {
+        "2022": "Data/pdfs(2022)/众安产险.pdf",
+        "2023": "Data/pdfs(2023)/众安产险.pdf",
+        "2024": "Data/pdfs(2024)/众安产险.pdf",
+        "2025": "Data/pdfs(2025)/众安产险（偿付能力）.pdf",
+    },
+    "英大财产": {
+        "2022": "Data/pdfs(2022)/英大财产.pdf",
+        "2023": "Data/pdfs(2023)/英大财产.pdf",
+        "2024": "Data/pdfs(2024)/英大财产.pdf",
+        "2025": "Data/pdfs(2025)/英大财产.pdf",
+    },
+    "大地财产": {
+        "2022": "Data/pdfs(2022)/大地财产.pdf",
+        "2023": "Data/pdfs(2023)/大地财产.pdf",
+        "2024": "Data/pdfs(2024)/大地财产.pdf",
+        "2025": "Data/pdfs(2025)/大地财产.pdf",
+    },
+    "中华联合": {
+        "2022": "Data/pdfs(2022)/中华联合.pdf",
+        "2023": "Data/pdfs(2023)/中华联合.pdf",
+        "2024": "Data/pdfs(2024)/中华联合.pdf",
+        "2025": "Data/pdfs(2025)/中华联合.pdf",
+    },
+    "太平财险": {
+        "2022": "Data/pdfs(2022)/太平财险.pdf",
+        "2023": "Data/pdfs(2023)/太平财险.pdf",
+        "2024": "Data/pdfs(2024)/太平财险.pdf",
+        "2025": "Data/pdfs(2025)/太平产险（偿付能力）.pdf",
+    },
+    "阳光产险": {
+        "2022": "Data/pdfs(2022)/阳光产险.pdf",
+        "2023": "Data/pdfs(2023)/阳光产险.pdf",
+        "2024": "Data/pdfs(2024)/阳光产险.pdf",
+        "2025": "Data/pdfs(2025)/阳光产险（偿付能力）.pdf",
+    },
 }
 
 
@@ -77,6 +119,11 @@ def _parse_args() -> argparse.Namespace:
         "--no-excel",
         action="store_true",
         help="只打印统计，不写 Excel",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default="",
+        help="产物目录；默认 tmp/three_companies_extraction。并行跑多家时请各自指定，避免互相覆盖",
     )
     parser.add_argument(
         "--strict-metrics",
@@ -113,10 +160,10 @@ def _module_breakdown(data: pd.DataFrame) -> str:
 
 
 def _write_workbook(
-    company: str, year: str, standard: dict, path: Path
+    company: str, year: str, standard: dict, path: Path, output_dir: Path = OUTPUT_DIR
 ) -> Path:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    target = OUTPUT_DIR / f"{company}_{year}.xlsx"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / f"{company}_{year}.xlsx"
     workbook = standard.get("workbook_bytes") or b""
     if workbook:
         target.write_bytes(workbook)
@@ -143,6 +190,7 @@ def run_one(
     method: str,
     write_excel: bool,
     keep_unmapped: bool,
+    output_dir: Path = OUTPUT_DIR,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "公司": company,
@@ -247,8 +295,11 @@ def run_one(
     for warning in warnings[:5]:
         print(f"  警告: {warning}")
     if write_excel:
-        target = _write_workbook(company, year, standard, path)
-        row["产物"] = str(target.relative_to(ROOT))
+        target = _write_workbook(company, year, standard, path, output_dir)
+        try:
+            row["产物"] = str(target.relative_to(ROOT))
+        except ValueError:
+            row["产物"] = str(target)
         print(f"产物: {row['产物']}")
     return row
 
@@ -266,6 +317,10 @@ def main() -> int:
 
     rows: list[dict[str, object]] = []
     keep_unmapped = not args.strict_metrics
+    out_dir = Path(args.out_dir) if args.out_dir.strip() else OUTPUT_DIR
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     if keep_unmapped:
         print("指标口径：保留全部提取到的指标（未映射记 RAW_*）；"
               "如需只保留 STEP7 需求清单，加 --strict-metrics")
@@ -288,12 +343,12 @@ def main() -> int:
                     method=args.method,
                     write_excel=not args.no_excel,
                     keep_unmapped=keep_unmapped,
+                    output_dir=out_dir,
                 )
             )
 
     summary = pd.DataFrame(rows)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = OUTPUT_DIR / "summary.csv"
+    summary_path = out_dir / "summary.csv"
     summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
 
     print("\n" + "=" * 100)

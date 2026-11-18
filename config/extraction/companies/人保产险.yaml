@@ -1,51 +1,64 @@
 # 人保产险：公司级提取规则（跨年度复用，不按年维护）
 #
-# 页码依据：2022-2025 样例定位结果（物理页，容差 ±2）
-#   SOLVENCY_MAIN                 17-18（2022/2023=18，2024/2025=17）
-#   NON_LIFE_OPERATING_METRICS    20-21（2023=21-22，2025 修正后=20-21）
-#   ACTUAL_CAPITAL                34-36（2022=34-35，2023/2024/2025=35-36）
-#   MINIMUM_CAPITAL               40-43（逐年 +1 漂移）
-#   THREE_YEAR_INVESTMENT_RETURN  19-20（2022 无该表）
-#   LIQUIDITY_MONITORING          17-19（与偿付能力主表相邻）
+# 页码依据：2022-2025 四份报告实测起始页（物理页）
+#   SOLVENCY_MAIN                 2022/2023=18，2024/2025=17
+#   NON_LIFE_OPERATING_METRICS    2022/2024/2025=20，2023=21
+#   ACTUAL_CAPITAL                2022=34，2023-2025=35
+#   MINIMUM_CAPITAL               2022=40，2023=41，2024/2025=42
+#   THREE_YEAR_INVESTMENT_RETURN  2023=20，2024/2025=19（2022 年无此表）
+#   LIQUIDITY_MONITORING          2022/2023=18，2024/2025=17
 #
-# 只有表结构大改时才在 structure_versions 追加版本。
+# 使用 tolerance: 0 的精确窗口：四年实测页全部列入 expected_pages，
+# 窗口即这些页本身；page_match: prefer 保留“窗口未命中时回退全文锚点”
+# 的兜底能力，因此不会因未来页码小幅漂移而漏检。
+#
+# 结构性缺陷（续页丢行、跨页标签裂行、错列）由公司 extractor 修复，
+# 不在 structure_versions 里按年维护：四年版式一致，只是通用规则未覆盖。
 
 company:
   canonical: 人保产险
   aliases: [中国人民财产保险股份有限公司, 人保财险]
   profile_id: NON_LIFE_SOLVENCY
-  rule_version: 1
-  notes: 2022-2025 版式稳定；各表页码逐年小幅漂移，全部落在 ±2 窗口内
+  rule_version: 2
+  extractor: renbao
+  notes: 2022-2025 版式稳定；页码逐年小幅漂移，已按年列入精确窗口
 
 tables:
   SOLVENCY_MAIN:
     expected_pages: [17, 18]
-    tolerance: 2
+    tolerance: 0
     page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
 
   NON_LIFE_OPERATING_METRICS:
-    expected_pages: [20, 21]
-    tolerance: 2
+    expected_pages: [20, 21, 22]
+    tolerance: 0
     page_match: prefer
     anchor_terms: [主要经营指标]
     required_items: [保险业务收入, 净利润, 综合成本率]
 
   ACTUAL_CAPITAL:
-    expected_pages: [35, 36]
-    tolerance: 2
+    expected_pages: [34, 35]
+    tolerance: 0
     page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
 
   MINIMUM_CAPITAL:
-    expected_pages: [41, 42]
-    tolerance: 2
+    expected_pages: [40, 41, 42, 43]
+    tolerance: 0
     page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
 
   THREE_YEAR_INVESTMENT_RETURN:
     expected_pages: [19, 20]
-    tolerance: 2
+    tolerance: 0
     page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
   LIQUIDITY_MONITORING:
-    expected_pages: [17, 18]
-    tolerance: 2
+    expected_pages: [17, 18, 19]
+    tolerance: 0
     page_match: prefer

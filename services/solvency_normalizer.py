@@ -75,6 +75,13 @@ _INLINE_UNIT_PATTERN = re.compile(
     r"[（(]\s*(亿元|万元|千元|元|%|％|百分比|百分点|人|户|件|次|级)\s*[）)]"
 )
 
+# 行标签里的“单位注解”，例如“经营活动净现金流(单位:万元)”。
+# 只用于标签归一化（匹配时忽略单位），不参与 _unit_from_text 的单位识别，
+# 避免把行标签里的单位误当成整表单位而触发多余的元/万元换算。
+_UNIT_ANNOTATION_PATTERN = re.compile(
+    r"[（(]\s*单位\s*[:：]?\s*(?:亿元|万元|千元|元|%|％|百分比|百分点)?\s*[）)]"
+)
+
 # ★ 单位换算豁免名单
 # 这些指标在 taxonomy 里"数据类型"标为"金额"，但原始单位是"元"（或"元/股"、"元/车"），
 # 不是整表声明的"万元"。Step2 提取时已通过 _RATIO_LABEL_MARKERS 跳过换算，
@@ -440,6 +447,7 @@ def _normalize_label(value: str) -> str:
     # “未考虑特征系数前”是量化风险最低资本的独立口径；保留该后缀，
     # 避免与基础“量化风险最低资本”合并成同一个指标。
     text = _INLINE_UNIT_PATTERN.sub("", text)
+    text = _UNIT_ANNOTATION_PATTERN.sub("", text)
     text = _LEADING_ROW_NUMBER_RE.sub("", text)           # ★ 再剥前导行号
     text = re.sub(r"^\s*其中\s*[:：]?", "", text)          # ★ 剥“其中：”前缀
     text = re.sub(r"[\s：:（）()、，,。·—\-_/]", "", text)
@@ -611,6 +619,21 @@ def _should_exclude_metric(normalized_label: str, code: str) -> bool:
     if not excludes:
         return False
     return normalized_label in {_normalize_label(term) for term in excludes}
+
+
+def _has_substantive_prefix(label: str, alias: str) -> bool:
+    """判断标签是否在匹配段之前多出实质内容（≥2 个别名字符集之外的字符）。
+
+    用于模糊匹配兜底：``百元保费经营活动净现金流`` 与别名
+    ``经营活动净现金流（万元）`` 的相似度很高，但前者多出的“百元保费”
+    说明它是另一个口径，不能当作金额指标。
+    """
+    matcher = SequenceMatcher(None, label, alias)
+    blocks = matcher.get_matching_blocks()
+    if not blocks:
+        return False
+    prefix = label[: blocks[0].a].strip()
+    return len(prefix) >= 2 and not any(ch in alias for ch in prefix)
     
 
 def resolve_metric_match(
@@ -670,10 +693,21 @@ def resolve_metric_match(
             if alias == normalized:
                 score = 2.0
                 exact = True
-            elif alias in normalized or normalized in alias:
+            elif alias in normalized:
+                # 标签比别名多了前缀/后缀修饰（如“百元保费经营活动净现金流”）。
+                # 只有多出来的部分很短（覆盖率 ≥ 0.8）才视为同一指标：比率行、
+                # 百元保费行这类挂靠行不是金额指标，不能被认成主指标。
+                coverage = len(alias) / max(len(normalized), 1)
+                score = coverage + 0.5 if coverage >= 0.8 else 0.0
+            elif normalized in alias:
+                # 标签比别名短（常见于漏写“（万元）”等后缀），维持原逻辑。
                 score = min(len(alias), len(normalized)) / max(len(alias), len(normalized)) + 0.5
             else:
-                score = SequenceMatcher(None, normalized, alias).ratio()
+                ratio = SequenceMatcher(None, normalized, alias).ratio()
+                if ratio >= 0.8 and _has_substantive_prefix(normalized, alias):
+                    score = 0.0
+                else:
+                    score = ratio
             candidate_score = max(candidate_score, score)
         if candidate_score:
             ranked.append((candidate_score, exact, index))
@@ -811,6 +845,9 @@ def _period_header(row: list[str], index: int) -> str:
         "",
         current,
     ).strip()
+    # 表头经常被 PDF 排版拆成“下一季 度预测数”“本季度 末数”，
+    # 逐字匹配前先去掉所有空白，避免整列期间口径识别失败。
+    current = re.sub(r"\s+", "", current)
 
     def _with_qualifier(period: str) -> str:
         result = period

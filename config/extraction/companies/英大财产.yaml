@@ -1,0 +1,57 @@
+# 英大财产（封面全称：英大泰和财产保险股份有限公司）公司级提取规则
+# 四年 PDF 物理页码实测（fitz 扫描 + tmp/tools/dump_tables.py），容差 ±2 覆盖漂移：
+#   SOLVENCY_MAIN                 2022-2024=13，2025=12
+#   NON_LIFE_OPERATING_METRICS    2022-2024=16，2025=15
+#   THREE_YEAR_INVESTMENT_RETURN  2023=16（页尾）、2024=17、2025=16；2022 年报告无此表
+#   ACTUAL_CAPITAL                2022/2023/2025=26-27，2024=28-29（2024 正文整体 +2 页）
+#   MINIMUM_CAPITAL               2022/2023/2025=33，2024=35
+#   LIQUIDITY_MONITORING          2022-2024=13-14，2025=12-13；监测指标正文续到下一页
+# 版式缺口（经营表截断、实际资本续页、近三年子表）由 yingda 后处理补齐。
+
+company:
+  canonical: 英大财产
+  aliases: [英大泰和财产保险股份有限公司, 英大财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: yingda
+  notes: 2024 年报告正文比 2022/2023/2025 多 2 页，实际资本/最低资本页码后移
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [26, 27, 28, 29]
+    tolerance: 2
+    page_match: prefer
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33, 35]
+    tolerance: 2
+    page_match: prefer
+    required_items: [最低资本, 量化风险最低资本, 控制风险最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均（综合）投资收益率, 近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 融资杠杆比例]

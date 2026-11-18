@@ -1,0 +1,70 @@
+# 太平财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 样例定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 14-16（2024=15，2023=14，2022=15-16）
+#   NON_LIFE_OPERATING_METRICS    15-17（2024=16，2023=15-16，2022=16-17）
+#   ACTUAL_CAPITAL                26-32（2024=29-30，2023=27-29，2022=31-32）
+#   MINIMUM_CAPITAL               33-38（2024=36，2023=35，2022=38）
+#   THREE_YEAR_INVESTMENT_RETURN  16-17（2024=17，2023=16；2022 无该表）
+#   LIQUIDITY_MONITORING          14-16（2024=15-16，2023=14-15，2022=16）
+#
+# 每页并存 3-4 张表（偿付能力主表/流动性监管指标/流动性监测指标/经营指标），
+# Profile 的 start_item/end_item 区域定位会把目标表裁短（最低资本仅剩 3 行、
+# 实际资本截断在“银保监会规定的其他调整项目”）。这里显式清空区域端点，
+# 让整页识别保留页面上的全部表格，再由 taiping extractor 按线框网格重建。
+
+company:
+  canonical: 太平财险
+  aliases: [太平财产保险有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: taiping
+  notes: 四年版式高度一致，单页多表；区域定位易截断，改用整页线框网格重建；2022 无近三年投资收益率表
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14, 15, 16]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    start_item: []
+    end_item: []
+
+  ACTUAL_CAPITAL:
+    expected_pages: [26, 27, 28, 29, 30, 31, 32]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33, 35, 36, 38]
+    tolerance: 2
+    page_match: prefer
+    # 表页标题固定为“十一、最低资本”（2022-2025 一致），用于窗口内精确命中；
+    # 否则 profile 的内容项评分不足，会退化为全文锚点。
+    anchor_terms: [十一、最低资本]
+    start_item: []
+    end_item: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14, 15, 16]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []

@@ -28,7 +28,7 @@ def test_repository_rules_load_and_normalize_aliases() -> None:
     )
     assert resolved is not None
     assert resolved.canonical == "人保产险"
-    assert resolved.tables["NON_LIFE_OPERATING_METRICS"]["expected_pages"] == [20, 21]
+    assert resolved.tables["NON_LIFE_OPERATING_METRICS"]["expected_pages"] == [20, 21, 22]
 
     # 2025 文件名带“（偿付能力）”，文件名差异不影响封面路由。
     taibao = rules.resolve_rule(
