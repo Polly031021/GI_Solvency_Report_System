@@ -183,6 +183,30 @@ PYTHONPATH=. ./venv/Scripts/python.exe tmp/compare_pingan_years.py
 
 ---
 
+## 6.5 单文件与批量路径的一致性
+
+两条路径必须共用同一个入口，否则同一年份在 STEP2 单文件上传和批量处理里会得到不同结果。
+
+| 路径 | 入口 | 应用位置 |
+| --- | --- | --- |
+| 批量 | `batch_workflow.extract_document_tables` | 表组装完成后 |
+| 单文件 | `ui/step2_extraction.build_tables_from_page_results` | 返回前（含单表重提取） |
+
+- 共用函数：`services.company_extractors.apply_company_extractor_for_tables()`
+- extractor 名称来源：优先读 `PageMatch.table_config["_extraction_rule"]["extractor"]`；从工作流配置恢复时用 `resolve_rule(封面公司, 年度)` 现场解析
+- 单文件日志会出现一行 `目标表=公司专属规则 / 识别方式=extractor:pingan`，失败时保留通用结果
+- 单表“重新提取”走同一 build 函数，因此也会重新应用 extractor
+
+**勾稽检查（STEP4）注意点**：
+
+- `solvency_validator.PERIOD_GROUP_ALIASES` 把“本季度末数”归入 `当前期末` 组、“上季度末数”归入 `上期末/期初` 组；期间口径统一后不需要改检查逻辑
+- extractor 只修 `rows` / `table_blocks`，不产生新的指标编码或期间，校验结果不会因接入而变化
+- 实际运行时仍会出现两类**既有**告警（与 extractor 无关，人保等未接 extractor 的公司同样存在）：
+  1. `SCHEMA_ALLOWED_PERIOD`：偿付能力主表的“下季度末预测数”、经营表的“本年累计数”不在部分指标字典的允许期间内
+  2. `COMBINED_RATIO` / `CORE_RATIO` 等式勾稽：主表金额为万元整数，比率四舍五入后与披露值相差 0.01–0.05 百分点，超过当前 0.0001 容差
+
+---
+
 ## 7. 平安最终覆盖（2022–2025）
 
 | 年份 | 提取表 | 标准编码 | 未映射 | 目标指标无值 |

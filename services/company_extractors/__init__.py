@@ -45,3 +45,49 @@ def apply_company_extractor(
     if postprocessor is None or not tables:
         return tables
     return postprocessor(tables, pdf_bytes=pdf_bytes)
+
+
+def extractor_from_matches(matches: Sequence[Any] | None) -> str:
+    """从页定位结果的 table_config 里取公司专属 extractor 名称。
+
+    STEP1 应用公司规则时会把 ``_extraction_rule.extractor`` 写进表配置，
+    单文件与批量路径都依赖这个标记，保证两边行为一致。
+    """
+    for match in matches or []:
+        config = getattr(match, "table_config", None)
+        if not isinstance(config, dict):
+            continue
+        info = config.get("_extraction_rule")
+        if isinstance(info, dict):
+            name = str(info.get("extractor") or "").strip()
+            if name:
+                return name
+    return ""
+
+
+def apply_company_extractor_for_tables(
+    tables: Sequence[Any],
+    matches: Sequence[Any] | None = None,
+    *,
+    pdf_bytes: bytes,
+    extractor_name: str = "",
+) -> tuple[Sequence[Any], dict[str, str] | None]:
+    """单文件与批量共用的入口；返回 (tables, 日志信息或 None)。"""
+    name = str(extractor_name or "").strip() or extractor_from_matches(matches)
+    if not name or not tables or not pdf_bytes:
+        return tables, None
+    if get_postprocessor(name) is None:
+        return tables, None
+    try:
+        updated = list(apply_company_extractor(name, tables, pdf_bytes=pdf_bytes))
+        return updated, {
+            "extractor": name,
+            "status": "成功",
+            "message": "已应用公司专属提取后处理。",
+        }
+    except Exception as exc:  # 专属逻辑失败不能阻断通用提取
+        return tables, {
+            "extractor": name,
+            "status": "失败",
+            "message": f"专属后处理异常，已保留通用提取结果：{exc}",
+        }

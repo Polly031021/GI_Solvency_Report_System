@@ -224,6 +224,28 @@ def _frame_contains_all_terms(
     return all(term.replace(" ", "") in flat for term in terms)
 
 
+def _resolve_company_extractor_name() -> str:
+    """单文件路径解析公司专属 extractor。
+
+    优先用 STEP1 写入 table_config 的标记；从工作流配置恢复、未重新定位时，
+    再用封面公司 + 年度现场解析一次，保证与批量路径一致。
+    """
+    from services.company_extractors import extractor_from_matches
+    from services.extraction_rules import resolve_rule
+
+    name = extractor_from_matches(st.session_state.get("page_matches") or [])
+    if name:
+        return name
+    metadata = st.session_state.get("metadata") or {}
+    profile_id = str(st.session_state.get("active_profile_id") or "")
+    rule = resolve_rule(
+        metadata.get("公司", ""),
+        metadata.get("报告年度"),
+        profile_id=profile_id,
+    )
+    return rule.extractor if rule else ""
+
+
 def build_tables_from_page_results(
     results: dict[str, list[tuple]],
     mode_by_page: dict[int, str] | None = None,
@@ -551,6 +573,21 @@ def build_tables_from_page_results(
             table_blocks=table_blocks,
         )
         raw_tables.append(table_obj)
+
+    # 公司专属后处理：与批量路径共用同一函数，保证两条路径的 rows/blocks 一致。
+    pdf_bytes = st.session_state.get("pdf_bytes") or b""
+    extractor_name = _resolve_company_extractor_name() if pdf_bytes else ""
+    if extractor_name and raw_tables:
+        from services.company_extractors import apply_company_extractor_for_tables
+
+        raw_tables, extractor_result = apply_company_extractor_for_tables(
+            raw_tables,
+            pdf_bytes=pdf_bytes,
+            extractor_name=extractor_name,
+        )
+        st.session_state["_company_extractor_result"] = extractor_result
+    else:
+        st.session_state.pop("_company_extractor_result", None)
     return raw_tables
 
 
@@ -812,6 +849,17 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
             mode_by_page,
             whole_page=whole_page,
         )
+        extractor_result = st.session_state.pop("_company_extractor_result", None)
+        if extractor_result:
+            logs.append(
+                {
+                    "目标表": "公司专属规则",
+                    "物理页码": "",
+                    "识别方式": f"extractor:{extractor_result['extractor']}",
+                    "状态": extractor_result["status"],
+                    "说明": extractor_result["message"],
+                }
+            )
         _store_extraction_result(logs, raw_tables)
         status_box.write(_engine_summary(mode_by_page))
     failed_count = sum(1 for log in logs if log["状态"] == "失败")
@@ -1232,6 +1280,17 @@ def _reextract_table(tables: list, index: int, method_option: str) -> None:
             mode_by_page,
             whole_page=whole_page,
         )
+        extractor_result = st.session_state.pop("_company_extractor_result", None)
+        if extractor_result:
+            logs.append(
+                {
+                    "目标表": "公司专属规则",
+                    "物理页码": "",
+                    "识别方式": f"extractor:{extractor_result['extractor']}",
+                    "状态": extractor_result["status"],
+                    "说明": extractor_result["message"],
+                }
+            )
     if not new_tables:
         st.error(
             "重新提取未获得数据，已保留原中间表；请核对页码，或改用其他提取方式（例如图片识别）。"
