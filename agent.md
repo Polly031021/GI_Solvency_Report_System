@@ -197,7 +197,9 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
    - 只有**模块内仅一张图**或显式 `usermeta={"s7_full_width": True}` 的图，才撑满整页宽。
 5. `renderer.measure_and_render(probe_html, build_report)`：**一次 Chromium 会话**内完成
    "测量块高 → 用实测高度生成 HTML → 渲染 PDF"，再用 PyMuPDF 盖页码。
-   容量：首页 `FIRST_PAGE_HEIGHT=712`、续页 `NEXT_PAGE_HEIGHT=780`（对应 `.module-body` 720/790px）。
+   容量：首页 `FIRST_PAGE_HEIGHT=720`、续页 `NEXT_PAGE_HEIGHT=780`（等于 `.module-body` 的 720/790px）。
+   **不要**再给每块追加固定间隔（如 +6px）：`flow-root` 的实测高度已含块自身 margin，
+   再追加会累积成假溢出，把「说明 + 图」拆成两页（曾让投资收益率模块多出一页空说明页）。
    以前 measure 和 render 各起一个浏览器，每次多 5–10 秒且偶发 `unclean kill browser`。
 
 ### 5.2 图表尺寸与卡片列数
@@ -244,6 +246,11 @@ python tools/fast_layout.py            # 之后：只重"测量+排版+渲染"�
 ### 5.5 已知坑（改这块最容易踩）
 
 - Altair 自带的 `properties(width=...)` 若不覆盖，小面板（235×200）在 PDF 里极小 → 由 `_size_spec()` 兜住。
+- **测量块高时 `.s7-block` 必须 `display: flow-root`**：否则内部 `.module-note` 的 margin-top、
+  `.figure` 的 margin-bottom 会折叠到块外，`getBoundingClientRect().height` 少算 8–14px，
+  分页会多塞一块，浏览器把溢出部分裁掉（表现为页面底部文字被切一半）。
+- **英文版说明文字更长**，同一模块常比中文多占 100–200px，容易出现"说明一页、图一页"；
+  落单图合并条件因此只按高度（`est`）判断，不要加字符数限制，否则中英文排版会分叉。
 - **CSS 类名必须和代码生成的类名一致**。曾经代码输出 `half-solo`、样式表写的是 `.half-cell`，
   落单图拿不到 50% 宽和 330 限高，回退到 `max-height:500px`（526px 高），被顶到新页，
   后续所有页码整体后移一页。**改类名时先用 grep 对一遍 CSS。**

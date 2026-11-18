@@ -19,7 +19,7 @@ from .text import label
 PAGE_WIDTH = 1600
 PAGE_HEIGHT = 900
 CONTENT_WIDTH = 1512  # 1600 - 2 * 44px page padding
-FIRST_PAGE_HEIGHT = 712
+FIRST_PAGE_HEIGHT = 720
 NEXT_PAGE_HEIGHT = 780
 MAX_FULL_FIGURE_HEIGHT = 500
 MAX_PAIR_FIGURE_HEIGHT = 330
@@ -861,39 +861,64 @@ def _blocks_for(items: list[ContentItem], *, allow_half: bool = True) -> list[Bl
     flush_row()
     flush_metrics()
     flush_lone()
-    # Two lone charts separated only by a short caption (a legend or one-line
-    # note) belong on one row: when each keeps its own block they land on two
-    # pages that are each half empty.
+    # Two lone charts separated only by short captions (a legend, a one-line
+    # note, a sub-title) belong on one row: when each keeps its own block they
+    # land on two pages that are each half empty.  Up to three short blocks may
+    # sit between them.
+    def _strip_cell(markup: str) -> str:
+        head = '<div class="half-cell">'
+        if not markup.startswith(head):
+            return markup
+        body = markup[len(head):].rstrip()
+        if body.endswith("</div>"):
+            body = body[: -len("</div>")]
+        return body
+
     folded: list[Block] = []
     index = 0
     while index < len(blocks):
-        a = blocks[index]
-        if a.html.startswith('<div class="half-cell">') and index + 2 < len(blocks):
-            mid, b = blocks[index + 1], blocks[index + 2]
+        first = blocks[index]
+        if not first.html.startswith('<div class="half-cell">'):
+            folded.append(first)
+            index += 1
+            continue
+        cursor = index + 1
+        between: list[Block] = []
+        while cursor < len(blocks) and len(between) < 4:
+            candidate = blocks[cursor]
             short_note = (
-                "module-note" in mid.html
-                and mid.est <= 70
-                and len(_plain_text(mid.html)) <= 90
+                "module-note" in candidate.html
+                and "half-cell" not in candidate.html
+                # Only the rendered height matters; English captions are much
+                # longer than the Chinese ones, so a character limit would make
+                # the same layout behave differently per language.
+                and candidate.est <= 130
             )
-            if short_note and b.html.startswith('<div class="half-cell">'):
-                inner_a = a.html[len('<div class="half-cell">'):].rstrip()
-                inner_a = inner_a[: -len("</div>")] if inner_a.endswith("</div>") else inner_a
-                inner_b = b.html[len('<div class="half-cell">'):].rstrip()
-                inner_b = inner_b[: -len("</div>")] if inner_b.endswith("</div>") else inner_b
-                folded.append(mid)
-                folded.append(
-                    Block(
-                        '<div class="figures-row half-pair">'
-                        f'<div class="half-cell">{inner_a}</div>'
-                        f'<div class="half-cell">{inner_b}</div>'
-                        "</div>",
-                        max(a.est, b.est) + 8.0,
-                        2,
-                    )
+            if not short_note:
+                break
+            between.append(candidate)
+            cursor += 1
+        if (
+            between
+            and cursor < len(blocks)
+            and blocks[cursor].html.startswith('<div class="half-cell">')
+            and sum(b.est for b in between) <= 360
+        ):
+            second = blocks[cursor]
+            folded.extend(between)
+            folded.append(
+                Block(
+                    '<div class="figures-row half-pair">'
+                    f'<div class="half-cell">{_strip_cell(first.html)}</div>'
+                    f'<div class="half-cell">{_strip_cell(second.html)}</div>'
+                    "</div>",
+                    max(first.est, second.est) + 8.0,
+                    2,
                 )
-                index += 3
-                continue
-        folded.append(a)
+            )
+            index = cursor + 1
+            continue
+        folded.append(first)
         index += 1
     blocks = folded
     # A half-cell chart may have been emitted right after its own short
@@ -955,7 +980,9 @@ def _paginate(
         height = block.est
         if measured is not None and index < len(measured) and measured[index] > 0:
             height = measured[index]
-        height += 6.0  # block gap from the CSS margin
+        # No extra gap: the probe measures each block with ``display: flow-root``,
+        # so its own margins are already inside ``height`` (adding 6px per block
+        # accumulated into a false overflow and split pages needlessly).
         if current and used + height > capacity:
             pages.append(current)
             current = [block]
@@ -987,7 +1014,11 @@ def _paginate(
 _PROBE_CSS = """
 .probe .report-page { height: auto; overflow: visible; }
 .probe .module-body { height: auto; overflow: visible; }
-.probe .module-content > .s7-block { margin-bottom: 6px; }
+/* ``flow-root`` stops child margins (e.g. .module-note margin-top, .figure
+   margin-bottom) from collapsing out of the block.  Without it
+   getBoundingClientRect().height missed 8-14px per block, so pagination packed
+   one block too many onto a page and the browser clipped the overflow. */
+.probe .module-content > .s7-block { display: flow-root; margin-bottom: 6px; }
 """
 
 
