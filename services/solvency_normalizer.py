@@ -937,33 +937,18 @@ def _normalize_period_alias(period: str, metric_code: str = "") -> str:
         "上期": "上季度数",
     }
     if metric_code in _STOCK_PERIOD_INDICATORS:
-        mapping["本季度数"] = "本季度末数"
-        mapping["上季度数"] = "上季度末数"
-        # ★ 新增：兜底覆盖 _period_header 可能返回的"本季度"/"上季度"
-        mapping["本季度"] = "本季度末数"
-        mapping["上季度"] = "上季度末数"
-        mapping["本期"] = "本季度末数"
-        mapping["上期"] = "上季度末数"
-        # ★ 新增
-        mapping["本季末"] = "本季度末数"
-        mapping["上季末"] = "上季度末数"
-    else:
-        mapping["本季度数"] = "本季度数"
-        mapping["上季度数"] = "上季度数"
-        # ★ 新增
-        mapping["本季度"] = "本季度数"
-        mapping["上季度"] = "上季度数"
-        mapping["本期"] = "本季度数"
-        mapping["上期"] = "上季度数"
-        # ★ 新增
-        mapping["本季末"] = "本季度末数"
-        mapping["上季末"] = "上季度末数"
-    # ★ 品质类兜底：PDF 里 C 列通常是"本年度累计数"，
-    #   若因表头错位被识别为"上季度数"，这里再纠正一次。
-    if metric_code in _QUALITY_PERIOD_CODES and period_base == "上季度数":
-        normalized = "本年累计数"
-    else:
-        normalized = mapping.get(period_base, period_base)
+        pass  # 兼容保留：用户口径已统一，不再区分存量/经营指标
+    # 用户口径（2026-11）：本季度末与本季度数、上季度末与上季度数
+    # 一律统一，避免同一指标在不同公司/年份被拆成两套期间。
+    mapping["本季度数"] = "本季度末数"
+    mapping["上季度数"] = "上季度末数"
+    mapping["本季度"] = "本季度末数"
+    mapping["上季度"] = "上季度末数"
+    mapping["本期"] = "本季度末数"
+    mapping["上期"] = "上季度末数"
+    mapping["本季末"] = "本季度末数"
+    mapping["上季末"] = "上季度末数"
+    normalized = mapping.get(period_base, period_base)
     result = normalized
     if period_qualifier:
         result = f"{result}-{period_qualifier}"

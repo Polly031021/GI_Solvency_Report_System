@@ -30,6 +30,23 @@ SIGNED_PREMIUM_RE = re.compile(
 
 _OPERATING_HEADER = ("指标名称", "本季度数", "本年度累计数")
 
+# 2023 版式把首列表头与期间粘在一起（“类型本季度末”），需要拆回两列。
+_HEADER_PERIOD_TERMS = ("本季度末数", "本季度末", "本季度数", "本季度", "上季度末", "上季度数")
+
+
+def _fix_solvency_header(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+    header = [str(cell or "").strip() for cell in rows[0]]
+    if len(header) >= 2 and header[0]:
+        for term in _HEADER_PERIOD_TERMS:
+            if term in header[0] and not header[0].startswith(term):
+                prefix = header[0].replace(term, "", 1).strip()
+                if prefix:
+                    rows[0] = [prefix, term, *header[1:]]
+                    break
+    return rows
+
 
 def _clean_cell(value: Any) -> str:
     return str(value or "").replace(" ", "").replace("\u3000", "").strip()
@@ -67,8 +84,11 @@ def _fix_solvency_main(rows: list[list[str]]) -> list[list[str]]:
        按数字模式重新拆开。
     """
     fixed: list[list[str]] = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         cells = [str(cell or "").strip() for cell in row]
+        if row_index == 0:
+            fixed.append(cells)
+            continue
         if (
             len(cells) >= 3
             and _looks_like_label(cells[0])
@@ -180,12 +200,16 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         for table in tables:
             table_id = str(getattr(table, "table_id", "") or "")
             if table_id == "SOLVENCY_MAIN":
-                fixed_rows = _fix_solvency_main(list(table.rows or []))
+                fixed_rows = _fix_solvency_main(
+                    _fix_solvency_header(list(table.rows or []))
+                )
                 # 页内表块同样需要拆分，否则 STEP3 仍会读到旧值。
                 for block in list(getattr(table, "table_blocks", None) or []):
                     if isinstance(block, dict) and block.get("rows"):
                         block["rows"] = _fix_solvency_main(
-                            [list(row) for row in block["rows"]]
+                            _fix_solvency_header(
+                                [list(row) for row in block["rows"]]
+                            )
                         )
                 table.rows = fixed_rows
             elif table_id == "NON_LIFE_OPERATING_METRICS":

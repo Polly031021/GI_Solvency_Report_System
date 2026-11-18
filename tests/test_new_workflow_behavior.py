@@ -221,7 +221,7 @@ def test_combined_table_keeps_page_blocks_for_step3() -> None:
         include_derived=False,
     )
     revenue = result.data[result.data["指标编码"] == "INSURANCE_REVENUE"]
-    assert set(revenue["期间口径"]) == {"本季度数", "本年累计数"}, revenue
+    assert set(revenue["期间口径"]) == {"本季度末数", "本年累计数"}, revenue
     assert set(result.data["同业分类"]) == {"前十大"}, result.data["同业分类"]
     print("PASS 合并中间表内部按页内表块识别期间")
 
