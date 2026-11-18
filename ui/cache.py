@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-import fitz
 import pandas as pd
 import streamlit as st
 from services.report_profiles import (
@@ -165,6 +164,8 @@ def render_pdf_page(
     ``highlight`` 为 (x0, top, x1, bottom)（PDF 点）：会画上红框，用于直观确认
     一页多表时系统实际提取的是哪一块区域。
     """
+    import fitz  # 延迟导入：PyMuPDF 约 0.2s，启动时不需要
+
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         if page_number < 1 or page_number > len(document):

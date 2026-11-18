@@ -7,9 +7,13 @@ from threading import Lock
 import pandas as pd
 import streamlit as st
 from services.solvency_normalizer import STANDARD_COLUMNS, upgrade_standard_frame
-from services.solvency_rule_table_extractor import DEFAULT_METHOD, MODE_RULE
 
 from .config import DEFAULT_PROFILE_ID, STANDARD_SCHEMA_VERSION
+
+# 与 services.solvency_rule_table_extractor 保持一致；直接导入该模块会级联
+# 拉入 pdfplumber / openai（启动多等 3 秒以上），这里只复制常量。
+MODE_RULE = "全部规则法（离线，零模型调用）"
+DEFAULT_METHOD = "智能：文字版页走规则法，扫描版页走大模型"
 
 
 def new_state_defaults() -> dict[str, object]:

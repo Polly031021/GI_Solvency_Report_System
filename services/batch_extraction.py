@@ -12,7 +12,6 @@ from types import SimpleNamespace
 import fitz
 import pandas as pd
 import pdfplumber
-from openai import OpenAI
 
 from .table_number_repair import THOUSAND_SEPARATOR_PROMPT_RULE, repair_thousand_separators
 
@@ -333,6 +332,8 @@ def extract_single_page_vision(
             if region_note:
                 prompt += f"\n裁切依据：{region_note}"
 
+        from openai import OpenAI  # 延迟导入：openai 库约 2.7s，启动时不需要
+
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
             model=model_name,
@@ -433,6 +434,8 @@ def extract_single_page(
                 "每张表都必须带自己的表头，绝不能因为换表而省略行。"
             )
         prompt += _NUMBER_FORMAT_RULE
+
+        from openai import OpenAI  # 延迟导入：openai 库约 2.7s，启动时不需要
 
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(

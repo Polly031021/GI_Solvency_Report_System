@@ -281,6 +281,26 @@ python tools/fast_layout.py            # 之后：只重"测量+排版+渲染"�
 
 ---
 
+## 6.5 启动性能（别把重库放回模块级）
+
+冷启动（重启服务后首次渲染）约 14–15 秒，其中约 12.6 秒是 `import`。已做的关键处理：
+
+| 依赖 | 启动成本 | 处理 |
+| --- | --- | --- |
+| `openai` | 约 2.7s | `services/batch_extraction.py` 改为函数内导入 |
+| `pdfplumber` | 约 0.7s | 仍为模块级（改动涉及多处缩进，收益小，未动） |
+| `fitz`(PyMuPDF) | 约 0.2s | `ui/cache.py` 改为函数内导入 |
+| `ui/session.py` | 级联 5.6s | 不再导入 `solvency_rule_table_extractor`，只复制 `MODE_RULE`/`DEFAULT_METHOD` 常量 |
+
+**约定**：新增依赖时先想清楚是否"启动即需要"。`openai`/`pdfplumber`/`playwright`/`vl_convert`/
+`kaleido` 这类只在具体操作里用的库，一律在函数内 import；否则每次重启服务都要多等数秒。
+
+排查手法：
+
+```bash
+./venv/Scripts/python.exe -X importtime -c "import ui.session" 2>&1 | sort -t'|' -k2 -rn | head
+```
+
 ## 7. 快速验证清单
 
 ```bash
