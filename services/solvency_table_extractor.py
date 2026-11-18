@@ -7,36 +7,20 @@ from dataclasses import dataclass, field
 import pandas as pd
 import pdfplumber
 
+from .extraction_config import config_signature, load_table_maps
 from .solvency_pdf_locator import PageMatch
 
-TABLE_SIGNATURES = {
-    "SOLVENCY_MAIN": ("认可资产", "综合偿付能力充足率"),
-    "LIQUIDITY_RISK": ("LCR1", "未来3个月"),
-    "LIQUIDITY_MONITORING": ("综合退保率", "融资杠杆比例"),
-    "OPERATING_METRICS": ("保险业务收入",),
-    "THREE_YEAR_INVESTMENT_RETURN": (
-        "投资收益率",
-        "综合投资收益率",
-    ),
-    "ACTUAL_CAPITAL": ("核心一级资本", "实际资本合计"),
-    "RECOGNIZED_ASSETS": ("投资资产", "认可资产合计"),
-    "RECOGNIZED_LIABILITIES": ("准备金负债", "认可负债合计"),
-    "MINIMUM_CAPITAL": ("量化风险最低资本", "最低资本"),
-}
-TABLE_EXCLUSIONS = {
-    "SOLVENCY_MAIN": ("监管指标名称", "流动性覆盖率", "LCR1", "LCR2", "LCR3"),
-    "OPERATING_METRICS": (
-        "流动性风险监测指标",
-        "流动性风险监管指标",
-        "LCR1",
-        "前五大产品的信息",
-        "报告期内签单保费占前五位的产品",
-        "签单保费占前五位的产品",
-    ),
-    "ACTUAL_CAPITAL": ("认可资产表", "认可负债表", "最低资本表"),
-    "THREE_YEAR_INVESTMENT_RETURN": ("流动性覆盖率", "最低资本表"),
-    "MINIMUM_CAPITAL": ("认可资产表", "认可负债表"),
-}
+_INITIAL_TABLE_MAPS = load_table_maps()
+_CONFIG_SIGNATURE = config_signature()
+
+# 表级定义来自 config/extraction/tables.yaml，缺失字段回退内置默认。
+# 这些字典对象被其他模块直接 import，热更新时只能原地 clear+update，
+# 不能重新赋值，否则外部引用会停留在旧内容。
+TABLE_SIGNATURES: dict[str, tuple[str, ...]] = dict(_INITIAL_TABLE_MAPS["signatures"])
+TABLE_EXCLUSIONS: dict[str, tuple[str, ...]] = dict(_INITIAL_TABLE_MAPS["exclusions"])
+TABLE_HEADERS: dict[str, tuple[str, ...]] = dict(_INITIAL_TABLE_MAPS["headers"])
+TABLE_START_MARKERS: dict[str, tuple[str, ...]] = dict(_INITIAL_TABLE_MAPS["start_markers"])
+TABLE_END_MARKERS: dict[str, tuple[str, ...]] = dict(_INITIAL_TABLE_MAPS["end_markers"])
 
 def header_compare_text(text: object) -> str:
     """表头比对用的归一文本：去掉空白与括号。
@@ -47,57 +31,8 @@ def header_compare_text(text: object) -> str:
     return re.sub(r"[\s\u3000（）()\[\]【】]+", "", str(text or ""))
 
 
-TABLE_HEADERS = {
-    "SOLVENCY_MAIN": (
-        "项目", "指标名称", "本季度数", "本季度末数",
-        "上季度可比数", "上季度末数", "基本情景下的下季度预测数",
-        "下季度预测数", "下季度末预测数",
-    ),
-    "OPERATING_METRICS": ("指标名称", "本季度", "本年累计"),
-    "ACTUAL_CAPITAL": ("行次", "期末数", "期初数"),
-    "THREE_YEAR_INVESTMENT_RETURN": ("投资收益率", "近三年"),
-    "MINIMUM_CAPITAL": ("行次", "期末数", "期初数"),
-}
-
-TABLE_START_MARKERS = {
-    "SOLVENCY_MAIN": ("指标名称", "认可资产"),
-    "OPERATING_METRICS": ("主要经营指标", "效益类指标", "规模类指标", "品质类指标", "保险业务收入"),
-    "ACTUAL_CAPITAL": (
-        "实际资本表",
-        "实际资本明细表",
-        "实际资本汇总",
-        "核心资本",
-        "财务报表资产总额",
-        "认可资产",
-        "核心一级资本",
-    ),
-    "THREE_YEAR_INVESTMENT_RETURN": (
-        "近三年（综合）投资收益率",
-        "近三年平均投资收益率",
-    ),
-    "MINIMUM_CAPITAL": (
-        "最低资本表",
-        "最低资本",
-        "量化风险最低资本",
-        "保险风险最低资本汇总",
-        "市场风险最低资本汇总",
-        "信用风险最低资本汇总",
-    ),
-}
-
-TABLE_END_MARKERS = {
-    "SOLVENCY_MAIN": ("监管指标名称", "流动性覆盖率", "LCR1"),
-    "OPERATING_METRICS": ("流动性风险监测指标", "流动性风险监管指标", "近三年综合投资收益率", "近三年（综合）投资收益率"),
-    "ACTUAL_CAPITAL": (
-        "（三）认可资产",
-        "(三)认可资产",
-        "认可资产表",
-        "认可负债表",
-        "最低资本表",
-    ),
-    "THREE_YEAR_INVESTMENT_RETURN": ("实际资本表", "认可资产表", "最低资本表"),
-    "MINIMUM_CAPITAL": (),
-}
+# TABLE_HEADERS / TABLE_START_MARKERS / TABLE_END_MARKERS 已在文件顶部
+# 从 config/extraction/tables.yaml 加载（见 _INITIAL_TABLE_MAPS）。
 
 
 
@@ -1129,27 +1064,7 @@ def _candidate_fingerprint(rows: list[list[str]]) -> str:
     return "|".join(_row_text(row) for row in rows)
 
 
-_PAGE_STRATEGIES = (
-    (
-        "线框识别",
-        {
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "lines",
-            "snap_tolerance": 4,
-            "join_tolerance": 4,
-            "intersection_tolerance": 5,
-        },
-    ),
-    (
-        "文字对齐识别",
-        {
-            "vertical_strategy": "text",
-            "horizontal_strategy": "text",
-            "min_words_vertical": 2,
-            "min_words_horizontal": 1,
-        },
-    ),
-)
+_PAGE_STRATEGIES = tuple(_INITIAL_TABLE_MAPS["strategies"])
 
 
 def page_table_candidates(
@@ -1164,6 +1079,7 @@ def page_table_candidates(
     ``page`` 可以是整页，也可以是 ``page.crop(bbox)`` 得到的页内区域——
     一页多表时先裁切再识别，可以避免选到相邻的表格。
     """
+    refresh_table_definitions()
     config = dict(table_config or {})
     title_terms = tuple(str(item) for item in (config.get("title_terms") or ()) if str(item).strip())
     content_terms = tuple(
@@ -1380,4 +1296,28 @@ def extract_tables(pdf_bytes: bytes, matches: list[PageMatch]) -> list[Extracted
     """Compatibility API: automatically select the highest-scoring candidate."""
     groups = extract_table_candidates(pdf_bytes, matches)
     return [candidates[0] for candidates in groups.values() if candidates]
+
+
+def refresh_table_definitions() -> None:
+    """配置变更时原地更新模块级表定义，无需重启服务。
+
+    只检测 ``config/extraction/tables.yaml`` 的 mtime + size；未变更时
+    仅做一次 stat，开销可忽略。原地更新保证其他模块 import 的字典引用同步。
+    """
+    global _PAGE_STRATEGIES, _CONFIG_SIGNATURE
+    signature = config_signature()
+    if signature == _CONFIG_SIGNATURE:
+        return
+    maps = load_table_maps(force=True)
+    for target, key in (
+        (TABLE_SIGNATURES, "signatures"),
+        (TABLE_EXCLUSIONS, "exclusions"),
+        (TABLE_HEADERS, "headers"),
+        (TABLE_START_MARKERS, "start_markers"),
+        (TABLE_END_MARKERS, "end_markers"),
+    ):
+        target.clear()
+        target.update(maps[key])
+    _PAGE_STRATEGIES = tuple(maps["strategies"])
+    _CONFIG_SIGNATURE = signature
 

@@ -1,0 +1,127 @@
+# 规则法提取的目标表定义（STEP1 页定位 / STEP2 表格提取共用）
+#
+# 维护说明：
+#   1. 只写需要改的字段；缺失字段回退 services/extraction_config.py 的内置默认。
+#   2. 改完保存即可，STEP2 下一次提取会自动检测文件变更，无需重启服务。
+#   3. table_name / strategy_id / required 仅用于回退与日志展示；
+#      核心识别依据是 signature_terms、header_terms、start_markers、end_markers。
+#   4. 别名 aliases 让 Profile 的 table_id（NON_LIFE_OPERATING_METRICS）
+#      与内置 ID（OPERATING_METRICS）共用同一份定义。
+
+version: 1
+description: 规则法提取的目标表定义；缺失字段回退代码内置默认。
+
+aliases:
+  NON_LIFE_OPERATING_METRICS: OPERATING_METRICS
+
+tables:
+  SOLVENCY_MAIN:
+    table_name: 偿付能力充足率指标
+    strategy_id: life_solvency.solvency_main.v1
+    required: true
+    signature_terms: [认可资产, 综合偿付能力充足率]
+    exclude_terms: [监管指标名称, 流动性覆盖率, LCR1, LCR2, LCR3]
+    header_terms:
+      - 项目
+      - 指标名称
+      - 本季度数
+      - 本季度末数
+      - 上季度可比数
+      - 上季度末数
+      - 基本情景下的下季度预测数
+      - 下季度预测数
+      - 下季度末预测数
+    start_markers: [指标名称, 认可资产]
+    end_markers: [监管指标名称, 流动性覆盖率, LCR1]
+
+  OPERATING_METRICS:
+    table_name: 主要经营指标
+    aliases: [NON_LIFE_OPERATING_METRICS]
+    signature_terms: [保险业务收入]
+    exclude_terms:
+      - 流动性风险监测指标
+      - 流动性风险监管指标
+      - LCR1
+      - 前五大产品的信息
+      - 报告期内签单保费占前五位的产品
+      - 签单保费占前五位的产品
+    header_terms: [指标名称, 本季度, 本年累计]
+    start_markers: [主要经营指标, 效益类指标, 规模类指标, 品质类指标, 保险业务收入]
+    end_markers:
+      - 流动性风险监测指标
+      - 流动性风险监管指标
+      - 近三年综合投资收益率
+      - 近三年（综合）投资收益率
+
+  ACTUAL_CAPITAL:
+    table_name: 实际资本表
+    signature_terms: [核心一级资本, 实际资本合计]
+    exclude_terms: [认可资产表, 认可负债表, 最低资本表]
+    header_terms: [行次, 期末数, 期初数]
+    start_markers:
+      - 实际资本表
+      - 实际资本明细表
+      - 实际资本汇总
+      - 核心资本
+      - 财务报表资产总额
+      - 认可资产
+      - 核心一级资本
+    end_markers:
+      - （三）认可资产
+      - (三)认可资产
+      - 认可资产表
+      - 认可负债表
+      - 最低资本表
+
+  MINIMUM_CAPITAL:
+    table_name: 最低资本表
+    signature_terms: [量化风险最低资本, 最低资本]
+    exclude_terms: [认可资产表, 认可负债表]
+    header_terms: [行次, 期末数, 期初数]
+    start_markers:
+      - 最低资本表
+      - 最低资本
+      - 量化风险最低资本
+      - 保险风险最低资本汇总
+      - 市场风险最低资本汇总
+      - 信用风险最低资本汇总
+    end_markers: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    table_name: 近三年投资收益率
+    signature_terms: [投资收益率, 综合投资收益率]
+    exclude_terms: [流动性覆盖率, 最低资本表]
+    header_terms: [投资收益率, 近三年]
+    start_markers: [近三年（综合）投资收益率, 近三年平均投资收益率]
+    end_markers: [实际资本表, 认可资产表, 最低资本表]
+
+  LIQUIDITY_RISK:
+    table_name: 流动性风险指标
+    signature_terms: [LCR1, 未来3个月]
+
+  LIQUIDITY_MONITORING:
+    table_name: 流动性风险监测指标
+    signature_terms: [综合退保率, 融资杠杆比例]
+
+  RECOGNIZED_ASSETS:
+    table_name: 认可资产表
+    signature_terms: [投资资产, 认可资产合计]
+
+  RECOGNIZED_LIABILITIES:
+    table_name: 认可负债表
+    signature_terms: [准备金负债, 认可负债合计]
+
+extraction_strategies:
+  - name: 线框识别
+    settings:
+      vertical_strategy: lines
+      horizontal_strategy: lines
+      snap_tolerance: 4
+      join_tolerance: 4
+      intersection_tolerance: 5
+  - name: 文字对齐识别
+    settings:
+      vertical_strategy: text
+      horizontal_strategy: text
+      min_words_vertical: 2
+      min_words_horizontal: 1
