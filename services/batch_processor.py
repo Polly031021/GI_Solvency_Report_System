@@ -343,10 +343,25 @@ def process_one_pdf_bytes(
     }
 
     try:
-        # STEP1：定位
+        # STEP1：定位（应用公司级规则，与 locate_one_pdf_bytes 保持一致）
+        metadata = extract_report_metadata(pdf_bytes)
+        resolved_rule = resolve_rule(
+            metadata.get("公司") or company_name,
+            metadata.get("报告年度"),
+            profile_id=getattr(ctx.profile, "profile_id", ""),
+        )
+        feature_config = ctx.feature_config
+        if resolved_rule is not None:
+            feature_config = {
+                **feature_config,
+                "tables": apply_rule_to_tables(
+                    feature_config.get("tables", []), resolved_rule
+                ),
+            }
+            result["规则"] = resolved_rule.label
         matches, _ = locate_tables_hybrid(
             pdf_bytes,
-            ctx.feature_config,
+            feature_config,
             api_key=ctx.api_key, base_url=ctx.base_url, model=ctx.model,
             profile_context=ctx.profile.locator_context(),
         )
