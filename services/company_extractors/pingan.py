@@ -29,6 +29,54 @@ SIGNED_PREMIUM_RE = re.compile(
 )
 
 _OPERATING_HEADER = ("指标名称", "本季度数", "本年度累计数")
+_GROUP_TITLE_RE = re.compile(r"^\d+[.．]\s*(主要|效益|规模|品质)类?指标")
+# 平安报告写“基本情境下，未来3个月LCR1”，标准库写“LCR1未来3个月”，
+# 顺序相反导致子串匹配失败；这里按正则重新拼成标准标签。
+_LCR_LABEL_RE = re.compile(r"未来\s*(3|12)\s*个月\s*LCR([123])")
+
+
+def _fix_liquidity_rows(rows: list[list[str]]) -> list[list[str]]:
+    """把 “未来3个月LCR1” 统一成 “LCR1未来3个月”。"""
+    fixed: list[list[str]] = []
+    for row in rows:
+        cells = [str(cell or "").strip() for cell in row]
+        if len(cells) >= 2:
+            match = _LCR_LABEL_RE.search(cells[1])
+            if match:
+                cells[1] = f"LCR{match.group(2)}未来{match.group(1)}个月"
+        fixed.append(cells)
+    return fixed
+
+
+def _normalize_operating_rows(rows: list[list[str]]) -> list[list[str]]:
+    """统一经营表表头和行结构。
+
+    2022/2023 表头是标准三列；2024/2025 的首行是“1.主要指标”分组标题，
+    pdfplumber 把真正的表头吞掉了，这里统一补齐，并清掉分组标题、占位行。
+    """
+    if not rows:
+        return rows
+    original_header = [str(cell or "").strip() for cell in rows[0]]
+    output: list[list[str]] = []
+    if original_header and original_header[0] == "指标名称":
+        output.append(original_header)
+        data_rows = rows[1:]
+    else:
+        output.append(list(_OPERATING_HEADER))
+        data_rows = rows
+        if original_header and (
+            _GROUP_TITLE_RE.match(original_header[0])
+            or original_header[0].startswith("主要指标")
+        ):
+            data_rows = rows[1:]
+    for row in data_rows:
+        label = str(row[0] if row else "").strip()
+        if not label or label in {"--", "-", "—", "–"}:
+            continue
+        if _GROUP_TITLE_RE.match(label):
+            continue
+        output.append([str(cell or "").strip() for cell in row])
+    return output
 
 # 2023 版式把首列表头与期间粘在一起（“类型本季度末”），需要拆回两列。
 _HEADER_PERIOD_TERMS = ("本季度末数", "本季度末", "本季度数", "本季度", "上季度末", "上季度数")
@@ -157,7 +205,6 @@ def _parse_operating_rows(text: str) -> list[list[str]]:
             index += 1
     return rows
 
-
 def _complete_operating(table: Any, doc) -> list[list[str]]:
     rows = [list(row) for row in getattr(table, "rows", []) or []]
     pages = list(getattr(table, "source_pages", []) or [getattr(table, "page", 1)])
@@ -179,7 +226,7 @@ def _complete_operating(table: Any, doc) -> list[list[str]]:
         match = SIGNED_PREMIUM_RE.search(_page_text(doc, next_page))
         if match:
             rows.append(["签单保费（万元）", "", match.group(1)])
-    return rows
+    return _normalize_operating_rows(rows)
 
 
 def _sync_blocks(table: Any, rows: list[list[str]], page: int) -> None:
@@ -219,6 +266,13 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
                     or [getattr(table, "page", 1)]
                 )
                 _sync_blocks(table, rows, int(pages[0] if pages else 1))
+            elif table_id == "LIQUIDITY_MONITORING":
+                table.rows = _fix_liquidity_rows(list(table.rows or []))
+                for block in list(getattr(table, "table_blocks", None) or []):
+                    if isinstance(block, dict) and block.get("rows"):
+                        block["rows"] = _fix_liquidity_rows(
+                            [list(row) for row in block["rows"]]
+                        )
     finally:
         doc.close()
     return tables
