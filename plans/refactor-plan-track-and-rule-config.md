@@ -507,3 +507,60 @@ structure_versions:
 | 合计 | | 8–10 天（人工核对 PDF 时间另计） |
 
 批次 1–3（提取）与批次 4–5（展示）互不依赖，可并行；建议先做批次 4/5 快速见效，再做提取改造。
+
+---
+
+## 9. 交接状态（2026-11-18）
+
+**分支**：`feature/track-company-and-rule-config`（已推送 origin）
+**基线 tag**：`pre-refactor-2026-11`
+**工作区**：干净；新增文档与代码均已提交
+
+### 已完成
+
+| 项 | 关键提交 |
+| --- | --- |
+| 批次 1：表定义外置 YAML + 别名打通 | `0865d90` |
+| 批次 2：公司规则库 + 三家公司 × 6 张表 + 容差定位 | `6409715`、`1a16600` |
+| 平安专属 extractor（2022–2025 验证） | `8db0dc4`、`f5ae473`、`2cb81ab` |
+| 期间口径统一（本季度末/上季度末） | `2cb81ab` |
+| STEP2 单文件与批量共用 extractor 入口 | `36a0c93` |
+| 批次 4/5：Track 置顶/sticky、五边形叠加 | `ab086ec` |
+| 实战手册 | `plans/company-extraction-playbook.md` |
+
+### 未完成（按优先级）
+
+1. **R4 缺失原因透出**（批次 3 剩余）
+   - 新建 `services/extraction_trace.py`
+   - STEP2 日志增加 `规则来源`、`未命中原因`
+   - STEP3 诊断/标准窄表备注写原因
+   - STEP7 缺口清单说明列透出
+2. **其余 86 家公司**：按 playbook SOP，先批量跑定位/行数，只对异常公司写 extractor
+3. **太保续页**：第 13/14 页整页全表提取失败（无表头续页），指标覆盖偏低（39-51）
+4. **勾稽配置待业务确认**
+   - `config/solvency_taxonomy.xlsx` 允许期间：补“下季度末预测数”“本年累计数”
+   - 比率勾稽容差：0.0001 → 建议 0.1 百分点（主表万元整数舍入导致差 0.01–0.05）
+5. PDF 整本导出回归（10 家 × 18 模块）
+
+### 常用命令
+
+```bash
+# 规则/配置/extractor 测试
+./venv/Scripts/python.exe -m tests.test_extraction_config
+./venv/Scripts/python.exe -m tests.test_company_rule_catalog
+./venv/Scripts/python.exe -m tests.test_company_extractor_integration
+
+# 三家 × 多年体检（写 Excel 到 tmp/three_companies_extraction/）
+./venv/Scripts/python.exe -m tests.test_three_companies_extraction --years 2025
+
+# 依赖 test_workflow_smoke 的测试（Windows 用分号）
+PYTHONPATH="tests;." ./venv/Scripts/python.exe -m tests.test_step7_filter_dropdown
+```
+
+### 接手注意
+
+- 改 extractor 必须同步 `table.rows` 与 `table.table_blocks`（STEP3 优先读 blocks）
+- 期间口径已统一，不要再把 `本季度数/上季度数` 当作唯一判断依据
+- 未配置公司必须保持旧行为（`page_match=anchor_only`）
+- 回归基准：平安 2022 认可资产 50,456,005 万元、2024 54,385,130 万元；2024/2025 均 84 编码
+- 平安 2022 报告封面公司名是“中国财产再保险股份有限公司”（文件名与封面不一致），路由以封面为准

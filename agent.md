@@ -92,8 +92,13 @@ config/                    Profile 工作簿、指标字典、勾稽规则、同
   Step7_指标需求清单.xlsx     STEP7 指标需求的唯一真源
   solvency_validation_rules.xlsx / solvency_taxonomy.xlsx
   solvency_peer_groups.json / non_life_solvency_company_urls.xlsx
+  extraction/tables.yaml   规则法提取的表级定义（表头/签名/起止边界/页内策略）
+  extraction/companies/    公司级规则（页码窗口、锚点、extractor），一家公司一份，跨年度复用
 templates/                 STEP7 展示模块配置、STEP8 注释/刻度模板、标准目标表
-tests/                     29 个脚本式回归测试
+tests/                     35 个脚本式回归测试
+plans/                     **入库**的改造计划与实战手册（docs/ 不入库）
+  refactor-plan-track-and-rule-config.md   改造计划与进度
+  company-extraction-playbook.md           公司专属提取实战手册
 tools/                     离线小工具（STEP7 缺失指标补录表、缺口报告、指标目录生成）
 docs/                      设计文档（pdf_export_design.md）— **不入库，本地参考**
 tmp/                       临时脚本/预览图/样例 PDF，产物不提交
@@ -108,6 +113,7 @@ Data/、gi_solvency_cache/、venv/、*.xlsx  全部在 .gitignore 中
 | PDF 定位 | `solvency_pdf_locator.py`、`semantic_period_fallback.py` | 文字版/扫描版判断、目标页物理页码定位 |
 | 混合流水线 | `solvency_hybrid_pipeline/`（`locator_rule`、`locator_vision`、`page_extract`、`extract`） | 规则法优先，失败转大模型 |
 | 表格提取 | `solvency_rule_table_extractor.py`、`solvency_table_extractor.py`、`solvency_table_region.py`、`solvency_table_boundaries.py`、`table_number_repair.py`、`table_strategy_*.py` | 规则法表格识别、边界、数字修复、策略注册 |
+| 提取配置/规则 | `extraction_config.py`、`extraction_rules.py`、`company_extractors/` | 表级 YAML、公司级页码窗口与别名、公司专属后处理（平安试点） |
 | AI 提取 | `solvency_ai_table_extractor/`（`grid`、`llm`、`units`、`source_profile`） | 图片表格识别、单位换算 |
 | 标准化 | `solvency_step3_standardizer.py`、`solvency_normalizer.py`、`solvency_disclosure_normalizer.py`、`step3_metric_gap.py`、`solvency_metric_registry.py` | 生成标准窄表、派生指标、缺口检查 |
 | 校验 | `solvency_validator.py` | 勾稽规则（公式/跨表/完整性） |
@@ -140,6 +146,10 @@ PDF → STEP0 监控更新 → STEP1 页码定位 → STEP2 表格提取
 列固定为 `公司/同业分类/报告期/一级模块/二级模块/指标编码/指标名称/期间口径/数值/单位/来源类型/...`。
 
 - 指标一律用**编码**（`NET_PROFIT`、`SIGNED_PREMIUM`…），显示名走 `services/report_i18n.py`。
+- **期间口径已统一（2026-11）**：`本季度数/本季度/本期` → `本季度末数`；
+  `上季度数/上季度/上期` → `上季度末数`。不再区分存量/经营指标，
+  见 `solvency_normalizer._normalize_period_alias()`。
+  勾稽检查 `PERIOD_GROUP_ALIASES` 已将“本季度末数”归入 `当前期末` 组，校验逻辑无需改动。
 - 期间口径：年度数据只认 `本年累计数/年度累计数/全年累计数`
   （见 `solvency_step7_charts/industry_premium.py:ANNUAL_SCOPE_ALIASES`）。
 - **同比口径（2026-11 已定稿）**：`Q4` 优先；**部分年度（如 2026Q3）与上一整年不可比，
@@ -167,6 +177,29 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
 - 图表尺寸常量集中在 `step7_solvency/theme.py` 与各 chart 模块顶部；改样式先找常量。
 - 反向坐标（排名类）：`performance.py` 用 `axis.values=[...]` 显式给整数刻度，
   否则 Vega 对恒定排名序列会**抑制全部刻度**，PDF 里变成空白图。
+
+### 4.5 公司级提取规则与专属 extractor（2026-11）
+
+三层结构，行为与配置分离：
+
+```
+config/extraction/tables.yaml              表级定义（所有公司共用，代码内置默认兜底）
+config/extraction/companies/<公司>.yaml    公司级规则（页码窗口、锚点、extractor）
+services/company_extractors/<name>.py      版式特例后处理（可选，当前仅 pingan）
+```
+
+- 路由键：封面 `公司`（别名归一）+ `报告年度`（仅用于选 `structure_versions`）。
+- 页码：`expected_pages` + `tolerance`（默认 2）→ 窗口；窗口内按 `anchor_terms` 命中，
+  窗口外回退全文；`prefer` / `strict` / `anchor_only` 三种模式。
+- extractor 名称经 `_extraction_rule.extractor` 传入；单文件与批量共用
+  `apply_company_extractor_for_tables()`：
+  - 批量：`batch_workflow.extract_document_tables`
+  - 单文件：`ui/step2_extraction.build_tables_from_page_results`（含单表重提取）
+- **必须同步 `table.rows` 与 `table.table_blocks`**：STEP3 `_expand_table_blocks`
+  优先读 blocks，只改 rows 不生效。
+- 调试：`tests/test_three_companies_extraction.py`（三家×多年体检，写 Excel 到 tmp/），
+  `tests/test_company_extractor_integration.py`（extractor 入口/幂等/blocks 同步）。
+- 详细方法论与踩坑记录见 `plans/company-extraction-playbook.md`。
 
 ---
 
@@ -322,6 +355,21 @@ python tools/fast_layout.py            # 之后：只重"测量+排版+渲染"�
 # 语法
 ./venv/Scripts/python.exe -m py_compile services/report_pdf/*.py step7_solvency/*.py
 
+# 提取配置与公司规则
+./venv/Scripts/python.exe -m tests.test_extraction_config
+./venv/Scripts/python.exe -m tests.test_company_rule_catalog
+./venv/Scripts/python.exe -m tests.test_company_extractor_integration
+
+# 三家×多年体检（写 Excel 到 tmp/three_companies_extraction/，约 8-10 分钟）
+./venv/Scripts/python.exe -m tests.test_three_companies_extraction --years 2025
+
+# STEP7 交互与雷达
+./venv/Scripts/python.exe -m tests.test_track_company_order
+./venv/Scripts/python.exe -m tests.test_capability_radar_overlap
+
+# 依赖 test_workflow_smoke 的测试（Windows 用分号）
+PYTHONPATH="tests;." ./venv/Scripts/python.exe -m tests.test_step7_filter_dropdown
+
 # 图表取数
 ./venv/Scripts/python.exe -m tests.test_industry_market_share_logic
 ./venv/Scripts/python.exe -m tests.test_step7_excel_modules
@@ -347,6 +395,16 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 - **PDF 导出改为服务端生成**：矢量图、1600×900 横版、自动分页、封面封底，摆脱浏览器打印。
   导出按钮在选中单个一级/二级模块时也可用（`ui/navigation.py`）。
 - 同比口径统一为"部分年度不参与增速"。
+- 提取表定义外置到 `config/extraction/tables.yaml`，内置常量保留兜底；Profile 的
+  `NON_LIFE_OPERATING_METRICS` 与内置 `OPERATING_METRICS` 通过 aliases 共用定义。
+- 三家公司（人保/平安/太保）各一份跨年度 YAML，覆盖 6 张目标表，页码容差 ±2。
+- 平安专属 extractor：修复表头/行标签/金额粘连、补全经营表、LCR 标签归一；
+  2024/2025 均 6 表 / 187 条 / 84 编码，两年完全一致。
+- 期间口径统一：本季度数/上季度数 → 本季度末数/上季度末数。
+- STEP2 单文件与批量提取共用同一套 extractor 入口，日志显示“公司专属规则”。
+- `keep_unmapped`（默认关闭）：体检脚本可保留未匹配标准指标的原始行（`RAW_*`）。
+- STEP7：Track 公司候选改为类型池、自动并入并置顶、横向滚动 sticky；
+  能力五边形支持“追踪 vs 对比公司”双层填充雷达。
 
 ### 未完成 / 待跟进
 
@@ -361,6 +419,9 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 | 寿险 Profile | 仅有财险工作簿，`LIFE_SOLVENCY` 相关代码路径未验证 |
 | 金标准对比 | `gold_standard/manifest.json` 不在仓库内，该功能默认跳过（本地可自建） |
 | 自动化测试 | 仍是脚本式，未接入 pytest/CI |
+| R4 缺失原因透出 | `RULE_NOT_FOUND` / `PAGE_OUT_OF_TOLERANCE` / `ANCHOR_NOT_FOUND` 等尚未写入 STEP2 日志、STEP3 诊断备注、STEP7 缺口清单 |
+| 其余公司配置 | 仅人保/平安/太保三份 YAML；其余 86 家仍走通用规则 |
+| 勾稽告警配置 | `SCHEMA_ALLOWED_PERIOD`（预测/累计期间不在字典允许范围）、比率勾稽容差 0.0001 过严（舍入差 0.01-0.05 百分点），属既有配置问题，待业务确认 |
 
 ### 近期主要变更（供追溯）
 
@@ -380,3 +441,10 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
   - 修 `localize_plotly()` 把空轴标题 `None` 渲染成字符串 "None" 的 bug。
 - 规模参考：10 家公司、18 个模块约 **39–40 页**（旧版 41–50 页）。
 - `requirements.txt`：新增 `playwright`、`vl-convert-python`。
+- **提取规则体系（2026-11）**：新增 `services/extraction_config.py`、`extraction_rules.py`、
+  `company_extractors/pingan.py`；`locate_tables`
+  支持 `expected_pages/tolerance/page_match`，`PageMatch` 增加 `rule_note`。
+- **期间口径**：`solvency_normalizer` 统一本季度末/上季度末；
+  `test_new_workflow_behavior` 的期间断言同步更新。
+- **STEP7**：`report.py` Track 候选改为类型池并置顶；`rendering.py` 统一排序；
+  `theme.py` 追踪卡片 sticky；`radar.py` 支持面积填充；`plan_renderers.py` 新增叠加对比选择器。
