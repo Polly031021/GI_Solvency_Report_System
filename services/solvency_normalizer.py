@@ -1123,6 +1123,27 @@ def _locate_table_header(
     return index, multi
 
 
+def _unmapped_metric(label: str, table: ExtractedTable) -> dict:
+    """把未命中标准指标库的原始行包装成可输出的指标记录。
+
+    编码用 ``RAW_`` + 标签哈希，保证同一标签跨页稳定；指标名称保留原文，
+    方便在“标准窄表”里直接看到源表写了什么。单位未知，数值不换算。
+    """
+    import hashlib
+
+    text = str(label or "").strip()
+    code = "RAW_" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    return {
+        "指标编码": code,
+        "指标名称": text,
+        "一级模块": "未映射指标",
+        "二级模块": str(getattr(table, "table_name", "") or "原始表格"),
+        "标准单位": "",
+        "数据类型": "金额",
+        "_unmapped": True,
+    }
+
+
 def normalize_tables(
     tables: list[ExtractedTable],
     taxonomy: pd.DataFrame,
@@ -1136,6 +1157,7 @@ def normalize_tables(
     default_peer_group: str = "",
     company_type_map: Mapping[str, str] | None = None,
     period_overrides: Mapping[str, str] | None = None,
+    keep_unmapped: bool = False,
 ) -> pd.DataFrame:
     company_type = normalize_company_type(company_type, allowed_company_types)
     company_identity = resolve_company_identity(
@@ -1287,7 +1309,10 @@ def normalize_tables(
                         "第二候选": decision.runner_up_name,
                         "第二得分": round(decision.runner_up_score, 3),
                     })
-                continue
+                if not keep_unmapped or not label:
+                    continue
+                # 保留未映射行：编码 RAW_*，名称用源表原文。
+                metric = _unmapped_metric(label, table)
             value_start = label_index_used + 1
             for column_index in range(value_start, max_width):
                 raw_value = row[column_index]
@@ -1316,6 +1341,9 @@ def normalize_tables(
                         if not _raw_text:
                             # ★ 用户口径：空白单元格表示 0，不是未填报，
                             #   也不是未披露。文本型指标仍跳过空白。
+                            #   未映射的原始指标不套用该口径：空白即缺失。
+                            if metric.get("_unmapped"):
+                                continue
                             numeric_value = 0.0
                             if _capital_scope:
                                 blank_capital_zero = True

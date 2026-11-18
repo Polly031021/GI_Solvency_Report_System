@@ -444,6 +444,7 @@ def standardize_document_tables(
     tables: Sequence[FlexibleTable],
     context: Any,
     period_overrides: Mapping[str, str] | None = None,
+    keep_unmapped: bool = False,
 ) -> dict[str, Any]:
     """Run STEP3 for one PDF and return its data, workbook and diagnostics."""
     try:
@@ -473,6 +474,7 @@ def standardize_document_tables(
             company_type_map=context.company_type_map,
             include_derived=context.include_derived,
             period_overrides=period_overrides,
+            keep_unmapped=keep_unmapped,
         )
         report_period = str(metadata.get("报告期", "")).strip() or "2025Q4"
         data = append_registered_capital(

@@ -78,6 +78,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="只打印统计，不写 Excel",
     )
+    parser.add_argument(
+        "--strict-metrics",
+        action="store_true",
+        help="只保留 STEP7 需求清单内的指标；默认保留全部提取到的指标（含未映射）",
+    )
     return parser.parse_args()
 
 
@@ -137,6 +142,7 @@ def run_one(
     *,
     method: str,
     write_excel: bool,
+    keep_unmapped: bool,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "公司": company,
@@ -210,12 +216,14 @@ def run_one(
         pdf_bytes=pdf_bytes,
         tables=outcome.tables,
         context=ctx,
+        keep_unmapped=keep_unmapped,
     )
     data = standard.get("data")
     if not isinstance(data, pd.DataFrame):
         data = pd.DataFrame()
     numeric = pd.to_numeric(data.get("数值"), errors="coerce")
     codes = data.get("指标编码", pd.Series(dtype=str)).astype(str).str.strip()
+    raw_codes = codes[codes.str.startswith("RAW_")]
     row.update(
         {
             "状态": standard.get("状态", "失败"),
@@ -223,13 +231,15 @@ def run_one(
             "标准化记录数": len(data),
             "指标编码数": codes[codes.ne("")].nunique(),
             "有值指标数": codes[numeric.notna()].nunique(),
+            "未映射指标数": raw_codes.nunique(),
             "指标样例": _format_metrics(data),
             "模块分布": _module_breakdown(data),
         }
     )
     print(
         f"标准化: {len(data)} 条 / 指标编码 {row['指标编码数']} 个 "
-        f"（有值 {row['有值指标数']}）| {standard.get('状态')}"
+        f"（有值 {row['有值指标数']}，未映射 {row['未映射指标数']}）"
+        f"| {standard.get('状态')}"
     )
     print(f"指标: {row['指标样例']}")
     print(f"模块: {row['模块分布']}")
@@ -255,6 +265,10 @@ def main() -> int:
     ctx = build_context_from_profile(profile, api_key="", base_url="", model="")
 
     rows: list[dict[str, object]] = []
+    keep_unmapped = not args.strict_metrics
+    if keep_unmapped:
+        print("指标口径：保留全部提取到的指标（未映射记 RAW_*）；"
+              "如需只保留 STEP7 需求清单，加 --strict-metrics")
     for company in companies:
         files = COMPANY_FILES.get(company)
         if not files:
@@ -273,6 +287,7 @@ def main() -> int:
                     ctx,
                     method=args.method,
                     write_excel=not args.no_excel,
+                    keep_unmapped=keep_unmapped,
                 )
             )
 
@@ -297,6 +312,7 @@ def main() -> int:
             "标准化记录数",
             "指标编码数",
             "有值指标数",
+            "未映射指标数",
             "状态",
         )
         if column in summary.columns

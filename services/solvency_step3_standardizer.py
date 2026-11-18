@@ -1143,6 +1143,7 @@ def standardize_to_target(
     include_derived: bool,
     template_warnings: Sequence[str] = (),
     period_overrides: Mapping[str, str] | None = None,
+    keep_unmapped: bool = False,
 ) -> Step3StandardizationResult:
     """Fill a target list and return the canonical STEP5-compatible narrow table."""
     # ★ 修复：报告期兜底 —— 从 metadata / 文件名 / 首文文本依次抓
@@ -1171,9 +1172,14 @@ def standardize_to_target(
     required_codes = _dependency_closure(target_codes)
     derived_codes = {definition.code for definition in DERIVED_METRICS}
     normalization_codes = required_codes - derived_codes
-    scoped_taxonomy = taxonomy[
-        taxonomy["指标编码"].astype(str).str.strip().isin(normalization_codes)
-    ].copy()
+    if keep_unmapped:
+        # 不按 STEP7 需求清单裁剪指标库：先尽可能匹配标准编码，
+        # 仍未匹配的原始行由 normalize_tables 以 RAW_* 编码保留。
+        scoped_taxonomy = taxonomy.copy()
+    else:
+        scoped_taxonomy = taxonomy[
+            taxonomy["指标编码"].astype(str).str.strip().isin(normalization_codes)
+        ].copy()
 
     diagnostics: list[dict] = []
     warnings: list[str] = list(template_warnings)   # ★ 提前初始化，供补漏匹配使用
@@ -1193,21 +1199,33 @@ def standardize_to_target(
         default_peer_group=default_peer_group,
         company_type_map=company_type_map,
         period_overrides=period_overrides,
+        keep_unmapped=keep_unmapped,
     )
     enriched = append_derived_metrics(normalized) if include_derived else normalized
-    data = enriched[
-        enriched["指标编码"].astype(str).str.strip().isin(target_codes)
-    ].copy()
+    if keep_unmapped:
+        codes = enriched["指标编码"].astype(str).str.strip()
+        data = enriched[codes.ne("") & codes.ne("nan")].copy()
+    else:
+        data = enriched[
+            enriched["指标编码"].astype(str).str.strip().isin(target_codes)
+        ].copy()
     if not data.empty:
         target_order = {
             code: index
             for index, code in enumerate(target_catalog["指标编码"].astype(str))
         }
         data["_目标顺序"] = data["指标编码"].map(target_order)
-        data = data.sort_values(
-            ["_目标顺序", "期间口径", "来源页码"],
-            kind="stable",
-        ).drop(columns="_目标顺序")
+        if keep_unmapped:
+            data["_目标顺序"] = data["_目标顺序"].fillna(len(target_order))
+            data = data.sort_values(
+                ["_目标顺序", "一级模块", "指标名称", "期间口径", "来源页码"],
+                kind="stable",
+            ).drop(columns="_目标顺序")
+        else:
+            data = data.sort_values(
+                ["_目标顺序", "期间口径", "来源页码"],
+                kind="stable",
+            ).drop(columns="_目标顺序")
     data = data.reindex(columns=STANDARD_COLUMNS).reset_index(drop=True)
 
     
