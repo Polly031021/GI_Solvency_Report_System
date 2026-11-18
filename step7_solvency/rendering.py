@@ -34,7 +34,12 @@ from services.report_i18n import (
 )
 
 from .ai_analysis import ai_analysis_for_latest_period
-from .selection import company_color_map, metric_title, ordered_companies
+from .selection import (
+    company_color_map,
+    merge_tracked_company,
+    metric_title,
+    ordered_companies,
+)
 from services.report_pdf import capture as pdf_capture
 
 
@@ -528,9 +533,12 @@ def render_company_chart_grid(
     if not companies:
         st.warning(t("当前筛选范围没有可绘制的公司数据。", "No company data to plot in the current selection."))
         return
+    tracked_company = str(highlight_company or "").strip()
+    # 追踪公司置顶是报告级约定：调用方（report.py）已排过序，这里再兜底
+    # 一次，避免其他入口或后续改动漏掉。
+    companies = merge_tracked_company(companies, tracked_company)
     company_count = len(companies)
     title_font_size = 12 if company_count >= 8 else 13
-    tracked_company = str(highlight_company or "").strip()
     if company_count > 6:
         # Screen-only affordance: in the PDF every card is laid out on the page,
         # so a "drag the scrollbar" note is meaningless (and used to be captured

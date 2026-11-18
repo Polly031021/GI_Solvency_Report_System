@@ -33,6 +33,7 @@ from services.solvency_step7_charts import (
     UPLOAD_SOURCE,
     annual_period_order,
     build_loss_expense_panel_chart,
+    build_capability_radar_chart,
     build_capability_radar_grid,
     build_company_line_trend_chart,
     build_industry_premium_mix_chart,
@@ -2101,6 +2102,115 @@ def render_plan_capability_radar(
             "dashed pentagon is the industry median for each axis.",
         )
     )
+
+    # ---------- 追踪公司 × 对比公司：双层填充叠加 ----------
+    # 候选池与 Track 一致（当前公司类型池），不绕过类型筛选；对比公司
+    # 可以不勾选在“展示公司”里，但必须属于当前类型池。
+    tracked_for_compare = str(highlight_company or "").strip()
+    type_pool = tuple(
+        str(value).strip()
+        for value in (st.session_state.get("_s7_company_type_pool") or ())
+        if str(value).strip()
+    )
+    if not type_pool:
+        type_pool = tuple(dict.fromkeys(score_full["公司"].astype(str)))
+    compare_candidates = [
+        company for company in type_pool if company != tracked_for_compare
+    ]
+    compare_key = f"s7_capability_compare_{key_prefix}"
+    compare_options = ["无", *compare_candidates]
+    if (
+        compare_key in st.session_state
+        and st.session_state[compare_key] not in compare_options
+    ):
+        st.session_state.pop(compare_key, None)
+    compare_company = st.selectbox(
+        t("叠加对比公司", "Overlay comparison company"),
+        compare_options,
+        key=compare_key,
+        format_func=lambda value: (
+            t("无（不叠加）", "None (no overlay)")
+            if value == "无"
+            else str(localized_company_name(value))
+        ),
+        help=t(
+            "候选仅限当前公司类型筛选后的公司；可不勾选在“展示公司”中。",
+            "Candidates are limited to the current company-type filter; the company does not need to be selected under display companies.",
+        ),
+    )
+
+    if (
+        tracked_for_compare
+        and tracked_for_compare != "无"
+        and compare_company
+        and compare_company != "无"
+    ):
+        pair_frame = score_full[
+            score_full["公司"].astype(str).isin(
+                [tracked_for_compare, compare_company]
+            )
+        ].copy()
+        pair_frame["_order"] = pair_frame["公司"].astype(str).map(
+            {tracked_for_compare: 0, compare_company: 1}
+        )
+        pair_frame = (
+            pair_frame.sort_values("_order")
+            .drop(columns="_order")
+            .reset_index(drop=True)
+        )
+        if len(pair_frame) == 2:
+            pair_colors = {
+                tracked_for_compare: "#00338D",
+                compare_company: "#ED2124",
+            }
+            try:
+                overlay_chart = build_capability_radar_chart(
+                    pair_frame,
+                    axes_labels,
+                    pair_colors,
+                    max_score=100.0,
+                    panel_width=560,
+                    panel_height=560,
+                    show_legend=True,
+                    label_font_size=13,
+                    reference_scores=industry_reference,
+                    fill=True,
+                    fill_opacity=0.16,
+                )
+                with st.container(
+                    key=f"s7_capability_compare_chart_{key_prefix}",
+                    horizontal_alignment="center",
+                ):
+                    render_altair_chart(
+                        overlay_chart,
+                        width="stretch",
+                        key=f"{key_prefix}_radar_compare",
+                    )
+                st.caption(
+                    t(
+                        f"蓝色为追踪公司 {localized_company_name(tracked_for_compare)}，"
+                        f"红色为对比公司 {localized_company_name(compare_company)}；"
+                        "半透明面积重叠处可直观看出能力结构差异，灰色虚线为全行业各顶点中位数。",
+                        f"Blue is the tracked company {localized_company_name(tracked_for_compare)}; "
+                        f"red is the comparison company {localized_company_name(compare_company)}. "
+                        "Overlapping translucent areas highlight structural differences; "
+                        "the grey dashed pentagon is the industry median.",
+                    )
+                )
+            except (ValueError, KeyError) as exc:
+                st.warning(
+                    t(
+                        f"叠加对比图暂不可用：{exc}",
+                        f"Overlay comparison unavailable: {exc}",
+                    )
+                )
+        else:
+            st.caption(
+                t(
+                    "所选公司缺少五维评分数据，无法生成叠加对比图。",
+                    "The selected company has no five-axis scores, so no overlay chart is drawn.",
+                )
+            )
 
     # ---------- 按分类逐组渲染 ----------
     # 每个分面图最多 10 家（2 行 × 5 列），兼顾渲染速度与打印分页。

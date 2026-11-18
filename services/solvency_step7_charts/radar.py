@@ -161,6 +161,8 @@ def _radar_layers(
     show_legend: bool,
     legend_name: str,
     shared_data: pd.DataFrame | None = None,
+    fill: bool = False,
+    fill_opacity: float = 0.16,
 ) -> alt.LayerChart:
     scale_limit = max_score * 1.30
     domain = [-scale_limit, scale_limit]
@@ -285,14 +287,27 @@ def _radar_layers(
         .encode(x=x_enc, y=y_enc, text="label:N")
     )
 
-    return (
-        ring_layer
-        + axis_layer
-        + median_layer
-        + poly_layer
-        + vertex_layer
-        + label_layer
+    # 双层填充面积：只在“追踪 vs 对比”这类需要看面积重叠的场景启用。
+    # 不画描边（line=False），描边仍由 poly_layer 负责，避免双重锯齿。
+    area_layer = (
+        _source("poly")
+        .mark_area(
+            line=False,
+            opacity=float(fill_opacity),
+        )
+        .encode(
+            x=x_enc,
+            y=y_enc,
+            color=alt.Color("公司:N", scale=color_scale, legend=None),
+            detail="公司:N",
+            order=alt.Order("idx:Q"),
+        )
     )
+
+    chart = ring_layer + axis_layer + median_layer
+    if fill:
+        chart = chart + area_layer
+    return chart + poly_layer + vertex_layer + label_layer
 
 
 def build_capability_radar_chart(
@@ -308,6 +323,8 @@ def build_capability_radar_chart(
     ring_color: str = "#CBD5E1",  # ★ 网格颜色可调
     median_color: str = "#64748B",  # ★ 中位线颜色可调
     reference_scores: Sequence[float] | None = None,  # ★ 参考五边形（默认 50 分）
+    fill: bool = False,  # ★ 追踪 vs 对比时打开面积填充
+    fill_opacity: float = 0.16,
 ) -> alt.Chart:
     """能力五边形雷达图（Altair 手绘极坐标→笛卡尔）。
 
@@ -337,6 +354,8 @@ def build_capability_radar_chart(
         median_color=median_color,
         show_legend=show_legend,
         legend_name="capability_company_legend_select",
+        fill=fill,
+        fill_opacity=fill_opacity,
     )
     return apply_report_theme(
         layers.properties(

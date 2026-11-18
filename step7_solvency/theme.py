@@ -472,6 +472,14 @@ def render_report_style() -> None:
             background:rgba(0,51,141,.03)!important;
             border:1.5px solid rgba(0,51,141,.35)!important;
         }
+        /* 追踪公司卡片在横向滚动时钉在左侧（仅屏幕；打印时滚动容器已释放）。 */
+        [class*="st-key-annual_company_grid_scroll_"] [data-testid="stColumn"]:has([class*="st-key-annual_company_panel_tracked_"]) {
+            position:sticky!important;
+            left:0!important;
+            z-index:6!important;
+            background:#FFFFFF!important;
+            box-shadow:6px 0 10px -6px rgba(0,51,141,.28);
+        }
         [class*="st-key-s7_report_module_"] [data-testid="stTable"] table,
         [class*="st-key-s7_report_module_"] [data-testid="stDataFrame"] {
             font-family:Microsoft YaHei, 微软雅黑, sans-serif!important;

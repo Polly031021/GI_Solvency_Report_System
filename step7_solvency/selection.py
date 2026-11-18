@@ -353,3 +353,25 @@ def module_by_chart_name(modules: list[Step7Module], chart_name: str) -> Step7Mo
         if m.chart_name == chart_name:
             return m
     return None
+
+
+def merge_tracked_company(
+    companies: Iterable[str],
+    highlight_company: str,
+    allowed: Iterable[str] | None = None,
+) -> list[str]:
+    """Pin the tracked company at the front of a company list.
+
+    ``allowed`` is the current company-type pool.  When given, a tracked
+    company outside it is ignored (Track must not bypass the type filter).
+    """
+    tracked = str(highlight_company or "").strip()
+    ordered = [str(company) for company in companies if str(company).strip()]
+    if not tracked or tracked == "无":
+        return ordered
+    allowed_set = {str(item) for item in allowed} if allowed is not None else set(ordered)
+    if tracked not in allowed_set:
+        return ordered
+    if tracked in ordered:
+        return [tracked, *[company for company in ordered if company != tracked]]
+    return [tracked, *ordered]

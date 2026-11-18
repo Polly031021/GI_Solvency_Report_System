@@ -63,6 +63,7 @@ from .plans import render_combination_analysis
 from .rendering import render_image_override_controls, render_report_metric
 from .selection import (
     company_scope_for_types,
+    merge_tracked_company,
     metric_sort_options,
     multiselect_popover,
     module_by_chart_name,
@@ -273,6 +274,9 @@ def show_step_7_solvency(
             frame,
             selected_types_raw,
         )
+        # 能力五边形的“叠加对比公司”候选与 Track 共用同一类型池，
+        # 不允许绕过公司类型筛选。
+        st.session_state["_s7_company_type_pool"] = list(all_companies)
         company_selection_key = sync_company_selection_state(
             selected_types_raw,
             all_companies,
@@ -295,7 +299,12 @@ def show_step_7_solvency(
                 format_func=unit_name,
             )
         with c3:
-            highlight_options = ["无", *selected_companies]
+            # 追踪候选 = 当前公司类型池（受类型筛选限制，不受展示多选限制）。
+            # 不得绕过类型筛选：类型以外的公司不进入下拉。
+            highlight_options = ["无", *all_companies]
+            previous_highlight = str(
+                st.session_state.get("s7_highlight_company") or ""
+            ).strip()
             valid_state("s7_highlight_company", highlight_options)
             highlight_company = st.selectbox(
                 t("特定追踪", "Track company"),
@@ -303,6 +312,17 @@ def show_step_7_solvency(
                 key="s7_highlight_company",
                 format_func=_company_option_label,
             )
+            if (
+                previous_highlight
+                and previous_highlight != "无"
+                and previous_highlight not in highlight_options
+            ):
+                st.caption(
+                    t(
+                        "追踪公司不在当前公司类型范围内，已重置为“无”。",
+                        "The tracked company is outside the selected company types; reset to none.",
+                    )
+                )
         with c4:
             enable_ai = st.toggle(
                 t("一键AI分析", "One-click AI commentary"),
@@ -368,6 +388,27 @@ def show_step_7_solvency(
             all_periods[-1],
             descending=sort_order == SORT_DESCENDING,
         )
+        # 追踪公司置顶：在类型池内但未被勾选展示时自动并入；已在展示列表
+        # 时仅调整顺序，不改变用户的多选状态（下次仍按用户勾选展示）。
+        tracked_company = str(highlight_company or "").strip()
+        if (
+            tracked_company
+            and tracked_company != "无"
+            and tracked_company in all_companies
+        ):
+            was_selected = tracked_company in selected_companies
+            selected_companies = merge_tracked_company(
+                selected_companies,
+                tracked_company,
+                all_companies,
+            )
+            if not was_selected:
+                st.caption(
+                    t(
+                        f"追踪公司“{localized_company_name(tracked_company)}”已自动加入展示并置顶。",
+                        f"Tracked “{localized_company_name(tracked_company)}” was added to the display list and pinned first.",
+                    )
+                )
 
         st.markdown("#### " + t("手动上传图片（PNG/JPG）", "Manual image upload (PNG/JPG)"))
         image_overrides = render_image_override_controls(available_chart_names, notes)
