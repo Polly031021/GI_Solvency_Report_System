@@ -35,6 +35,10 @@ from services.batch_workflow import (
     standardize_document_tables,
 )
 from services.semantic_period_fallback import resolve_period_labels_with_llm
+from services.step3_metric_gap import (
+    Step7MetricGapReport,
+    build_step7_metric_gap,
+)
 
 from .batch_workspace import (
     batch_documents,
@@ -60,6 +64,75 @@ from .step7_metric_check import (
     batch_company_periods,
     render_step7_metric_check,
 )
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_batch_step7_gap(
+    data: pd.DataFrame,
+    taxonomy: pd.DataFrame | None,
+) -> Step7MetricGapReport:
+    """STEP7 缺口报告缓存。
+
+    st.cache_data 会对 data 按内容做哈希，因此页面 rerun 时只要合并结果
+    没变就不会重复执行缺口计算；口径与页面上方的 STEP7 检查保持一致。
+    """
+    return build_step7_metric_gap(
+        data,
+        taxonomy=taxonomy,
+        require_expected_period=True,
+    )
+
+
+def _render_batch_step7_gap_hint(
+    data: pd.DataFrame,
+    taxonomy: pd.DataFrame | None,
+) -> None:
+    """Show the STEP7 gap near the batch download button and in an expander."""
+    report = _cached_batch_step7_gap(data, taxonomy)
+    if not report.missing_count:
+        st.success(
+            "STEP7 必需基础指标均已覆盖；导出 Excel 的“缺失指标清单”会标注“未发现缺口”。",
+            icon=":material/check_circle:",
+        )
+        return
+
+    missing_companies = int(report.missing["公司"].nunique())
+    st.warning(
+        f"STEP7 必需指标仍有 **{report.missing_count}** 个“公司×指标”缺口，"
+        f"涉及 **{missing_companies}** 家公司，基础指标覆盖率 "
+        f"**{report.coverage_ratio:.1%}**。缺失项已写入导出 Excel 的"
+        "“缺失指标清单”，可在 STEP7 导出补录表。",
+        icon=":material/rule:",
+    )
+    with st.expander(
+        f"查看 STEP7 缺失指标汇总（{report.missing_count} 条）",
+        expanded=False,
+    ):
+        st.caption(
+            "缺失项已写入导出 Excel 的“缺失指标清单”；"
+            "可在 STEP7 导出补录表，填写“数值”后上传合并。"
+        )
+        st.markdown("**缺口最多的指标**")
+        st.dataframe(
+            report.missing_summary(),
+            width="stretch",
+            hide_index=True,
+        )
+        company_summary = report.coverage.copy()
+        if not company_summary.empty:
+            company_summary = company_summary.sort_values(
+                ["缺失基础指标数", "公司"],
+                ascending=[False, True],
+            )
+            company_summary["覆盖率"] = company_summary["覆盖率"].map(
+                lambda value: f"{float(value):.1%}"
+            )
+        st.markdown("**按公司汇总**")
+        st.dataframe(
+            company_summary,
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _render_step3_focus_panel() -> None:
@@ -1182,6 +1255,8 @@ def _render_shared_batch_standardization(
             merged,
             summary_frame,
             diagnostics_frame,
+            taxonomy=taxonomy,
+            require_expected_period=True,
         )
         st.session_state.validation_results = pd.DataFrame()
         st.session_state.validation_evidence = pd.DataFrame()
@@ -1370,12 +1445,16 @@ def _render_shared_batch_standardization(
         company_periods=batch_company_periods(documents),
     )
 
+    _render_batch_step7_gap_hint(merged_current, taxonomy)
+
     st.download_button(
         "下载全部公司标准数据（与单份流程同格式，含 STEP7 补录）",
         lambda: batch_result_workbook_bytes(
             merged_current,
             summary_current,
             diagnostics_current,
+            taxonomy=taxonomy,
+            require_expected_period=True,
         ),
         f"{active_profile.profile_id}_全部公司标准数据.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1384,7 +1463,8 @@ def _render_shared_batch_standardization(
         key="batch_download_merged_standard_workbook",
     )
     st.caption(
-        "文件包含“标准数据”“填报汇总”“匹配诊断”三个工作表，"
+        "文件包含“标准数据”“_系统字段”“填报汇总”“匹配诊断”四个基础工作表，"
+        "并追加“缺失指标清单”“公司覆盖汇总”两个 STEP7 缺口工作表，"
         "与单份流程下载的 STEP3 Excel 格式一致。"
     )
     preview_columns = [

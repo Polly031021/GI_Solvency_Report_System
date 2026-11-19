@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 CONFIG_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "extraction" / "tables.yaml"
@@ -333,6 +333,42 @@ def load_table_maps(
     _CACHE["signature"] = signature
     _CACHE["maps"] = maps
     return maps
+
+
+def build_table_configs(
+    table_configs: Sequence[Mapping[str, Any]],
+    *,
+    maps: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """构建带有效 ``signature_terms`` 的表配置副本。
+
+    公司 YAML / Profile 表配置里显式写的 ``signature_terms`` 优先；
+    未写时回填 config/extraction/tables.yaml（或内置默认）的全局值。
+    其余字段保持不变。
+    """
+    table_maps = maps if maps is not None else load_table_maps()
+    signatures = table_maps.get("signatures") or {}
+    aliases = table_maps.get("aliases") or {}
+    configs: list[dict[str, Any]] = []
+    for config in table_configs:
+        merged = dict(config)
+        table_id = str(merged.get("table_id") or "").strip()
+        if "signature_terms" in merged:
+            merged["signature_terms"] = list(
+                _as_terms(
+                    merged.get("signature_terms"),
+                    field="signature_terms",
+                    table_id=table_id or "<unknown>",
+                )
+            )
+        else:
+            canonical = str(aliases.get(table_id, table_id))
+            value = signatures.get(canonical)
+            if value is None:
+                value = signatures.get(table_id)
+            merged["signature_terms"] = list(value or ())
+        configs.append(merged)
+    return configs
 
 
 def clear_cache() -> None:

@@ -193,3 +193,20 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m tests.test_three_companies_
 - 不要移除三张表的空起止词：一旦继承 Profile 默认词，经营表/最低资本会重新截断、流动性会重新混入收益率行。
 - 不要给 THREE_YEAR 补表头：该表在 PDF 中无表头，标准化按标签映射，补表头只会多出噪声行。
 - 若未来共享层修复了 §7 的两处 locator 问题，本 YAML 的 aliases 仍应保留全称，以覆盖封面文本可读后的精确匹配。
+
+## 10. 专属 extractor（后续补充）
+
+YAML + 通用规则已能取到 6 张表，残留两个标签/单位问题：
+
+- `LIQUIDITY_MONITORING` 指标名列带 `一、`~`十、` 章节号与“指标值”后缀
+  （`一、经营活动净现金流指标值`），关键词字典命不中；
+- `THREE_YEAR_INVESTMENT_RETURN` 与流动性同页，整页帧单位是“元”，但内容是百分比。
+
+已增加 `services/company_extractors/dajia.py`（`@register("dajia")`）：
+
+- 流动性表：剥章节号与“指标值”后缀；
+- 近三年表：内容以 `%` 结尾时把表级单位改为 `%`。
+
+不改行、不改数值。启用方式：YAML `company.extractor: dajia`。
+验证：2024 流动性命中 经营活动净现金流 -42,814.13 万、规模保费同比增速 10.94%、
+流动资产占比 3.63%、季均融资杠杆比例 0.70%；2023 同样命中。

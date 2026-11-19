@@ -190,3 +190,20 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m tests.test_three_companies_
   （工作簿表名：标准数据 / _系统字段 / 填报汇总 / 匹配诊断）。
 - YAML 校验：`python -m tests.test_extraction_config` 通过；`load_company_rules()` 可正常加载
   含本公司在内的全部公司规则。
+
+## 9. 专属 extractor（后续补充）
+
+通用规则 + YAML 已能定位/提取全部 6 张表，但流动性表的指标名列自带章节号与
+“指标值”后缀（`一、经营活动净现金流指标值（万元）`、`二、百元保费经营活动净现金 流指标值（元）`），
+关键词字典无法直接命中；实际资本表 2022 年跨页合并还会插入 `【第39页表格分块】` 占位行。
+
+已在 `services/company_extractors/zijin.py` 增加 `@register("zijin")` 后处理：
+
+- `LIQUIDITY_MONITORING`：剥掉章节号与“指标值”、合并被换行拆开的中文词（成对空格），
+  保留 `（万元）/（元）/（%）` 单位注解；
+- `ACTUAL_CAPITAL`：去掉跨页占位行；
+- `THREE_YEAR_INVESTMENT_RETURN`：内容为百分比，把表级单位从“万元”修正为“%”。
+
+只改标签与单位，不改行、不改数值。启用方式是 YAML `company.extractor: zijin`。
+验证：2024 流动性 4 编码×2 期（经营活动净现金流 138,506.18 万、规模保费同比增速 10.56%、
+现金及流动性管理工具占比 27.40%、现金及流动性管理工具 647,087.22 万），2025 同样命中。

@@ -34,7 +34,7 @@ streamlit run app.py
 | STEP0 报告监控 | 读取本地财险公司清单，单家或并发检查披露页面是否已更新目标报告期 | `ui/step0_monitor.py`、`services/solvency_pdf_locator.py` |
 | STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览 | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
 | STEP2 表格提取 | 按确认页码逐页并发提取，默认“智能模式”：文字版页面优先规则法（离线零 token），规则未通过或扫描版页面自动转大模型；默认开启“整页全表提取”，一页多表时合并为同一张中间表展示（内部保留独立表块），不做目标表首尾边界裁切，避免指标被截断；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
-| STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；标准化后按 STEP7 指标需求清单检查缺口，可导出缺失指标补录表并回填合并；批量：定位→核对页码→提取三阶段处理多家公司，同样执行 STEP7 缺口检查 | `ui/step3_standardization.py`、`ui/step7_metric_check.py`、`services/solvency_step3_standardizer.py`、`services/step3_metric_gap.py`、`services/batch_processor.py` |
+| STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；标准化后按 STEP7 指标需求清单检查缺口，可导出缺失指标补录表并回填合并；批量：定位→核对页码→提取三阶段处理多家公司，同样执行 STEP7 缺口检查，页面提示缺口、导出工作簿附「缺失指标清单」「公司覆盖汇总」两页 | `ui/step3_standardization.py`、`ui/step7_metric_check.py`、`services/solvency_step3_standardizer.py`、`services/step3_metric_gap.py`、`services/batch_processor.py` |
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |
 | STEP5 数据集成 | 两种互斥接入方式：上传标准窄表，或上传外部宽表（CROSS，仅寿险）精确映射；确认后成为 STEP6–STEP8 的数据源 | `ui/step5_integration.py`、`services/solvency_dataset_adapter.py` |
 | STEP6 自定义分析 | 任选指标/公司/报告期，生成簇状柱、折线、散点、横向条形等对比图，图例与配色可自定义 | `ui/step6_analysis.py`、`services/solvency_step6_analysis.py` |
@@ -60,6 +60,18 @@ python tools/build_step7_fill_sheet.py "偿付能力行业集成数据_公司名
 - 若根目录 `Data/pdfs(YYYY)` 存在，输出会附 `年度公司数` 页，对照 PDF 文件数与汇总数据公司数；
 - 输出另含 `期间口径核对` 页，逐项列出建议期间、实际期间分布、期间缺口公司和完全缺失公司；
 - 输出文件默认在源文件旁：`*_STEP7缺失指标_可粘贴补录表_全部.xlsx`。
+
+### STEP3 缺失指标提示（界面 + Excel）
+
+批量 STEP3 跑完后，页面在「下载全部公司标准数据」上方自动做 STEP7 必需指标缺口检查：
+
+- 有缺口时显示黄色提示（缺口条数 / 涉及公司数 / 基础指标覆盖率），展开可看图例化汇总；
+- 无缺口时显示绿色提示，Excel 的「缺失指标清单」页写一行“未发现缺口”说明；
+- 下载的 Excel 在原有 4 个工作表之外新增：
+  - `缺失指标清单`：每条缺口的公司、报告期、指标编码/名称、模块、期间口径、补录优先级；
+  - `公司覆盖汇总`：每家公司必需基础指标数、已提取数、缺失数、覆盖率与缺失编码列表。
+
+口径与页面 STEP7 检查一致（`require_expected_period=True`，如 ROE 需要“本年累计数”）。
 
 ### 新年度接入检查脚本（页码体检）
 

@@ -2017,17 +2017,116 @@ def target_template_workbook_bytes(
         _format_workbook(writer)
     return output.getvalue()
 
+
+def _batch_company_periods_from_data(data: pd.DataFrame) -> list[dict]:
+    """Return the (company, report period) pairs that actually appear in data.
+
+    ``build_step7_metric_gap`` can derive the same pairs itself; passing them
+    explicitly keeps the exported workbook on the same basis as the STEP3 page
+    and guarantees every company present in the batch is checked.
+    """
+    if (
+        not isinstance(data, pd.DataFrame)
+        or data.empty
+        or "公司" not in data.columns
+        or "报告期" not in data.columns
+    ):
+        return []
+    frame = data[["公司", "报告期"]].copy()
+    frame["公司"] = frame["公司"].fillna("").astype(str).str.strip()
+    frame["报告期"] = frame["报告期"].fillna("").astype(str).str.strip()
+    total_names = {"行业合计", "合计", "行业总计", "总计"}
+    frame = frame[frame["公司"].ne("") & ~frame["公司"].isin(total_names)]
+    frame = frame.drop_duplicates(subset=["公司", "报告期"], keep="first")
+    return [
+        {"公司": row["公司"], "报告期": row["报告期"]}
+        for row in frame.to_dict("records")
+    ]
+
+
+def _missing_gap_note_frame(
+    columns: Sequence[str],
+    gap_warnings: Sequence[str],
+    *,
+    failed: bool = False,
+) -> pd.DataFrame:
+    """One explanatory row used when the missing list is empty or the check failed."""
+    note = {column: "" for column in columns}
+    note["数据类型"] = "说明"
+    if failed:
+        note["指标名称"] = "缺口检查失败"
+        message = "STEP7 指标缺口检查失败，未能生成缺失清单，请检查导出提示。"
+    else:
+        note["指标名称"] = "未发现缺口"
+        message = "未发现缺口：STEP7 必需的基础指标均已提取，无需补录。"
+    if gap_warnings:
+        message += "检查提示：" + "；".join(str(item) for item in gap_warnings)
+    note["备注"] = message
+    return pd.DataFrame([note], columns=list(columns))
+
+
 def batch_result_workbook_bytes(
     data: pd.DataFrame,
     target_summary: pd.DataFrame,
     diagnostics: pd.DataFrame,
+    *,
+    taxonomy: pd.DataFrame | None = None,
+    company_periods: Sequence[dict] | None = None,
+    require_expected_period: bool = False,
 ) -> bytes:
     """Build the same multi-sheet workbook as the single-file STEP3 result.
 
     Batch output used to be a single-sheet merge, which made the downloaded
     file incompatible with the single-file flow.  This keeps the shared
-    standard-data sheet plus the 填报汇总 and 匹配诊断 sheets.
+    standard-data sheet plus the 填报汇总 and 匹配诊断 sheets, and appends the
+    STEP7 gap sheets (缺失指标清单 / 公司覆盖汇总) so batch users see what still
+    needs backfilling before STEP7.
     """
+    # 延迟导入：step3_metric_gap 在模块顶层导入了本模块的
+    # convert_amount_to_target_unit，顶层互相导入会形成循环。
+    from .step3_metric_gap import (
+        COVERAGE_SHEET_NAME,
+        MISSING_COLUMNS,
+        MISSING_SHEET_NAME,
+        _COVERAGE_COLUMNS,
+        _style_sheet,
+        build_step7_metric_gap,
+    )
+
+    gap_company_periods = (
+        list(company_periods)
+        if company_periods is not None
+        else _batch_company_periods_from_data(data)
+    )
+    gap_failed = False
+    try:
+        gap_report = build_step7_metric_gap(
+            data,
+            taxonomy=taxonomy,
+            company_periods=gap_company_periods,
+            require_expected_period=require_expected_period,
+        )
+        missing_frame = gap_report.missing.reindex(columns=MISSING_COLUMNS)
+        coverage_frame = gap_report.coverage.reindex(columns=_COVERAGE_COLUMNS)
+        gap_warnings = gap_report.warnings
+    except Exception as exc:  # pragma: no cover - 导出不能因缺口检查失败而中断
+        gap_failed = True
+        missing_frame = pd.DataFrame(columns=MISSING_COLUMNS)
+        coverage_frame = pd.DataFrame(columns=_COVERAGE_COLUMNS)
+        gap_warnings = (f"STEP7 指标缺口检查失败：{exc}",)
+    if missing_frame.empty:
+        missing_frame = pd.concat(
+            [
+                missing_frame,
+                _missing_gap_note_frame(
+                    MISSING_COLUMNS,
+                    gap_warnings,
+                    failed=gap_failed,
+                ),
+            ],
+            ignore_index=True,
+        )
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         write_standard_workbook_sheets(writer, data)
@@ -2040,7 +2139,21 @@ def batch_result_workbook_bytes(
             )
         else:
             diagnostics.to_excel(writer, sheet_name="匹配诊断", index=False)
+        missing_frame.to_excel(
+            writer,
+            sheet_name=MISSING_SHEET_NAME,
+            index=False,
+        )
+        coverage_frame.to_excel(
+            writer,
+            sheet_name=COVERAGE_SHEET_NAME,
+            index=False,
+        )
         _format_workbook(writer)
+        # 与 STEP7 补录表保持同样的表头样式；放在通用格式化之后，
+        # 以免这两个 sheet 的列宽被 _format_workbook 覆盖。
+        _style_sheet(writer.book[MISSING_SHEET_NAME])
+        _style_sheet(writer.book[COVERAGE_SHEET_NAME])
     return output.getvalue()
 
 

@@ -463,6 +463,41 @@ def validate_rule_page_rows(
     return True, "已通过逐页完整性校验"
 
 
+def _rule_whole_page_outcome(pdf_bytes: bytes, page_number: int) -> PageExtractionOutcome:
+    """整页线框识别：保留本页所有表格，不做目标表边界裁剪。"""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            if page_number < 1 or page_number > len(pdf.pages):
+                return PageExtractionOutcome(
+                    engine=ENGINE_RULE,
+                    status="失败",
+                    note=f"{RULE_FAILURE_PREFIX}页码超出 PDF 范围",
+                )
+            table_rows, whole_note = extract_page_all_tables(
+                pdf.pages[page_number - 1]
+            )
+    except Exception as exc:
+        return PageExtractionOutcome(
+            engine=ENGINE_RULE,
+            status="失败",
+            note=f"{RULE_FAILURE_PREFIX}整页解析失败：{exc}",
+        )
+    if not table_rows:
+        return PageExtractionOutcome(
+            engine=ENGINE_RULE,
+            status="失败",
+            note=f"{RULE_FAILURE_PREFIX}{whole_note}",
+        )
+    frames = tuple(pd.DataFrame(rows) for rows in table_rows)
+    return PageExtractionOutcome(
+        frame=frames[0],
+        frames=frames,
+        engine=ENGINE_RULE,
+        status="成功",
+        note=f"{whole_note}；已完整保留本页所有表格，未做目标表边界裁剪",
+    )
+
+
 def _rule_attempt(
     *,
     pdf_bytes: bytes,
@@ -475,37 +510,7 @@ def _rule_attempt(
     whole_page: bool = False,
 ) -> PageExtractionOutcome:
     if whole_page:
-        try:
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                if page_number < 1 or page_number > len(pdf.pages):
-                    return PageExtractionOutcome(
-                        engine=ENGINE_RULE,
-                        status="失败",
-                        note=f"{RULE_FAILURE_PREFIX}页码超出 PDF 范围",
-                    )
-                table_rows, whole_note = extract_page_all_tables(
-                    pdf.pages[page_number - 1]
-                )
-        except Exception as exc:
-            return PageExtractionOutcome(
-                engine=ENGINE_RULE,
-                status="失败",
-                note=f"{RULE_FAILURE_PREFIX}整页解析失败：{exc}",
-            )
-        if not table_rows:
-            return PageExtractionOutcome(
-                engine=ENGINE_RULE,
-                status="失败",
-                note=f"{RULE_FAILURE_PREFIX}{whole_note}",
-            )
-        frames = tuple(pd.DataFrame(rows) for rows in table_rows)
-        return PageExtractionOutcome(
-            frame=frames[0],
-            frames=frames,
-            engine=ENGINE_RULE,
-            status="成功",
-            note=f"{whole_note}；已完整保留本页所有表格，未做目标表边界裁剪",
-        )
+        return _rule_whole_page_outcome(pdf_bytes, page_number)
 
     candidates, reason = prepare_rule_candidates(
         pdf_bytes,
@@ -516,10 +521,19 @@ def _rule_attempt(
         source_text="",
     )
     if not candidates:
+        # 区域法（页内裁切）对“无表头续页”“线与线框缺失的续页”常常生成 0 候选；
+        # 这类页整页线框识别仍然可用。区域法失败时回退整页，避免整表消失。
+        fallback = _rule_whole_page_outcome(pdf_bytes, page_number)
+        if fallback.status == "成功":
+            fallback.note = (
+                f"区域法未识别到目标表（{reason[:120]}）→已回退整页；"
+                f"{fallback.note}"
+            )
+            return fallback
         return PageExtractionOutcome(
             engine=ENGINE_RULE,
             status="失败",
-            note=f"{RULE_FAILURE_PREFIX}{reason}",
+            note=f"{RULE_FAILURE_PREFIX}{reason}；整页回退也未识别到表格",
         )
     first_gate = ""
     for candidate in candidates:

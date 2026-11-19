@@ -236,11 +236,15 @@ PYTHONPATH=. ./venv/Scripts/python.exe tmp/compare_pingan_years.py
 
 ## 8. 已知限制
 
-1. **专属 extractor 只在批量路径生效**（`batch_workflow.extract_document_tables`）；STEP2 单文件上传仍是通用逻辑。
+1. **专属 extractor 单文件与批量共用同一入口**（`batch_workflow.extract_document_tables`），STEP2 单文件上传同样生效。
 2. 平安 2022 无可提取的“近三年投资收益率”独立表，2023 起才有。
 3. 目标指标无值清单里的 `LOSS_RATIO` / `EXPENSE_RATIO` 等：报告只披露综合成本率，未拆分子项，属应缺。
 4. 部分 ANC/POLICY_SURPLUS 明细在报告中为 `-`，按资本明细空白=0 口径处理，需人工确认。
 5. 文本重建的经营表依赖 PDF 文字层，扫描版报告需走视觉法。
+6. **行次不参与指标消歧**：指标字典只按标签文本匹配。`2.4 / 3.8 / 4.3 减：超限额应扣除的部分`、`1.2.4 递延所得税` 这类与别处同文但行次不同的行，会保持未映射（`RAW_`）并在匹配诊断中可见；不要靠猜行次强行补映射，否则会破坏下游按“编码+期间”合并。
+7. **公司可覆盖全局表签名**：公司 YAML 的 `tables[].signature_terms` 优先于 `config/extraction/tables.yaml` 的全局签名（显式 `[]` 表示清除），用于“综合退保率 / 季均融资杠杆比例”这类公司版式差异；未配置时行为不变。配套的 `start_item/end_item` 只在已选页 ±1 内做边界闭合，避免全文档重扫误命中管理层小表。
+8. **STEP3 缺口双通道可见**：批量 STEP3 页面在下载按钮上方提示缺口条数/公司数/覆盖率；导出的 Excel 在 4 个基础工作表后追加 `缺失指标清单` 与 `公司覆盖汇总`，口径与 STEP7 必需期一致（`require_expected_period=True`）。
+9. **扫描版页面**：无文字层的表（如诚泰 2022 的四张表）规则法无法提取，只保留可读表；批量流程默认不自动转视觉大模型，需要时在 STEP2 手动切换。
 
 ---
 

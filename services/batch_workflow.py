@@ -52,6 +52,7 @@ class BatchExtractionOutcome:
     status: str = ""
     note: str = ""
     traceback: str = ""
+    missing_tables: list[dict[str, Any]] = field(default_factory=list)
 
 
 def upload_signature(uploaded: Any) -> tuple[str, int | None, str]:
@@ -105,7 +106,13 @@ def _table_terms(match: PageMatch) -> tuple[str, ...]:
             for value in values
             if str(value).strip()
         )
-    terms.extend(TABLE_SIGNATURES.get(str(match.table_id), ()))
+    config_signatures = config.get("signature_terms")
+    if isinstance(config_signatures, str):
+        config_signatures = re.split(r"[|\n\r]+", config_signatures)
+    if config_signatures:
+        terms.extend(str(value).strip() for value in config_signatures if str(value).strip())
+    else:
+        terms.extend(TABLE_SIGNATURES.get(str(match.table_id), ()))
     terms.append(str(match.table_name or "").strip())
     return tuple(dict.fromkeys(term for term in terms if term))
 
@@ -118,10 +125,25 @@ def _flat_rows(rows: Iterable[Iterable[Any]]) -> str:
     )
 
 
+def _signature_terms_for_match(match: PageMatch) -> tuple[str, ...]:
+    """优先使用公司/表配置里的签名；未配置时回退全局 tables.yaml 签名。"""
+    config = getattr(match, "table_config", None) or {}
+    if not isinstance(config, dict):
+        config = {}
+    value = config.get("signature_terms")
+    if isinstance(value, str):
+        value = re.split(r"[|\n\r]+", value)
+    terms = tuple(str(item).strip() for item in (value or ()) if str(item).strip())
+    if terms:
+        return terms
+    return tuple(TABLE_SIGNATURES.get(str(getattr(match, "table_id", "")), ()))
+
+
 def _select_target_frames(
     frames: Sequence[Sequence[Sequence[Any]]],
     terms: Sequence[str],
     table_id: str,
+    signatures: Sequence[str] | None = None,
 ) -> list[list[list[str]]]:
     normalized = [
         [
@@ -136,9 +158,13 @@ def _select_target_frames(
 
     exact: list[list[list[str]]] = []
     matched: list[list[list[str]]] = []
+    effective_signatures = (
+        tuple(signatures) if signatures is not None
+        else TABLE_SIGNATURES.get(str(table_id), ())
+    )
     signature_terms = [
         term.replace(" ", "")
-        for term in TABLE_SIGNATURES.get(str(table_id), ())
+        for term in effective_signatures
     ]
     normalized_terms = [term.replace(" ", "") for term in terms]
     for rows in normalized:
@@ -175,22 +201,25 @@ def _rows_have_metric_header(rows: Sequence[Sequence[str]]) -> bool:
 def _assemble_tables(
     *,
     matches: Sequence[PageMatch],
-    page_frames: Mapping[int, list[list[list[str]]]],
+    frames_by_target: Mapping[tuple[str, int], list[list[list[str]]]],
     page_engines: Mapping[int, str],
     page_units: Mapping[int, str],
-) -> list[FlexibleTable]:
+) -> tuple[list[FlexibleTable], list[dict[str, Any]]]:
     tables: list[FlexibleTable] = []
+    missing: list[dict[str, Any]] = []
     for match in matches:
         pages = [int(page) for page in (match.pages or [])]
         blocks: list[dict[str, Any]] = []
         rows: list[list[str]] = []
         width = 0
         for page in pages:
-            frames = page_frames.get(page) or []
+            # 每张表只使用“用本表配置提取出来”的帧，避免同页相邻表互相串数据。
+            frames = frames_by_target.get((str(match.table_id), page)) or []
             selected = _select_target_frames(
                 frames,
                 _table_terms(match),
                 str(match.table_id),
+                _signature_terms_for_match(match),
             )
             for frame_rows in selected:
                 if not frame_rows:
@@ -202,6 +231,14 @@ def _assemble_tables(
                 rows.extend(frame_rows)
                 blocks.append({"page": page, "rows": frame_rows})
         if not rows:
+            missing.append(
+                {
+                    "table_id": str(match.table_id),
+                    "table_name": str(match.table_name),
+                    "pages": pages,
+                    "reason": "本表所在页未提取到可用表格行（解析失败或该页确无表格）",
+                }
+            )
             continue
         canonical_headers = [
             str(item).strip()
@@ -282,7 +319,7 @@ def _assemble_tables(
                 table_blocks=blocks,
             )
         )
-    return tables
+    return tables, missing
 
 
 def extract_document_tables(
@@ -314,10 +351,17 @@ def extract_document_tables(
 
     tasks: list[tuple[int, PageMatch]] = []
     if whole_page:
-        tasks = [
-            (page, page_matches[0])
-            for page, page_matches in sorted(page_to_matches.items())
-        ]
+        # 整页模式下同一页可能承载多张目标表（经营/流动性/近三年同页）。
+        # 以前每页只取第一个 match，其余表要么拿错帧、要么直接消失；
+        # 现在按 (页, 表) 各提一次，各表只用自己的配置与帧。
+        seen: set[tuple[int, str]] = set()
+        for page, page_matches in sorted(page_to_matches.items()):
+            for match in page_matches:
+                key = (page, str(match.table_id))
+                if key in seen:
+                    continue
+                seen.add(key)
+                tasks.append((page, match))
     else:
         tasks = [
             (int(page), match)
@@ -363,7 +407,7 @@ def extract_document_tables(
             result.note = f"扫描页自动转视觉大模型；{result.note}"
         return page, match, result
 
-    page_frames: dict[int, list[list[list[str]]]] = {}
+    frames_by_target: dict[tuple[str, int], list[list[list[str]]]] = {}
     page_engines: dict[int, str] = {}
     page_units: dict[int, str] = {}
     try:
@@ -374,14 +418,14 @@ def extract_document_tables(
             }
             for future in as_completed(futures):
                 page, match, result = future.result()
-                label = str(match.table_name) if not whole_page else "整页全表"
+                label = str(match.table_name)
                 if result.succeeded:
                     frames = [
                         frame.fillna("").astype(str).values.tolist()
                         for frame in (result.frames or (result.frame,))
                         if frame is not None and not frame.empty
                     ]
-                    page_frames[page] = frames
+                    frames_by_target[(str(match.table_id), page)] = frames
                     page_engines[page] = result.engine
                     page_units[page] = (
                         sniff_unit_from_text(page_source_text(pdf_bytes, page))
@@ -406,12 +450,23 @@ def extract_document_tables(
         outcome.traceback = traceback.format_exc()
         return outcome
 
-    outcome.tables = _assemble_tables(
+    outcome.tables, outcome.missing_tables = _assemble_tables(
         matches=located,
-        page_frames=page_frames,
+        frames_by_target=frames_by_target,
         page_engines=page_engines,
         page_units=page_units,
     )
+    for item in outcome.missing_tables:
+        outcome.logs.append(
+            {
+                "公司": company,
+                "目标表": str(item["table_name"]),
+                "物理页码": "、".join(map(str, item["pages"])),
+                "识别方式": "",
+                "状态": "缺失",
+                "说明": str(item["reason"]),
+            }
+        )
 
     # 公司专属后处理：单文件与批量共用同一入口。
     from .company_extractors import apply_company_extractor_for_tables
@@ -436,12 +491,17 @@ def extract_document_tables(
     if not outcome.tables:
         outcome.status = "失败"
         outcome.note = "未提取到任何目标表。"
-    elif failed_pages:
+    elif failed_pages or outcome.missing_tables:
         outcome.status = "部分成功"
-        outcome.note = f"提取 {len(outcome.tables)} 张表；{len(failed_pages)} 页失败。"
+        parts = [f"提取 {len(outcome.tables)} 张表"]
+        if failed_pages:
+            parts.append(f"{len(failed_pages)} 页失败")
+        if outcome.missing_tables:
+            parts.append(f"{len(outcome.missing_tables)} 张表缺帧")
+        outcome.note = "；".join(parts) + "。"
     else:
         outcome.status = "成功"
-        outcome.note = f"提取 {len(outcome.tables)} 张表，共 {len(page_frames)} 页。"
+        outcome.note = f"提取 {len(outcome.tables)} 张表，共 {len(page_engines)} 页。"
     return outcome
 
 

@@ -557,9 +557,47 @@ def _expand_to_item_boundaries(
 ) -> list[tuple[int, float, list[str]]]:
     """Use first/last business items to deterministically close cross-page ranges."""
     table_id = str(table.get("table_id", ""))
-    variants = tuple(table.get("boundary_variants") or boundary_variants(table_id))
+
+    def configured_terms(field: str) -> tuple[str, ...]:
+        value = table.get(field) or ()
+        if isinstance(value, str):
+            value = [value]
+        return tuple(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in value
+                if str(item or "").strip()
+            )
+        )
+
+    # 公司 YAML / Profile 同时给出首尾项目时，边界只按这组词搜索，并把
+    # occurrences 限制在已选页 ±1，避免全文档重扫把管理层分析里的小表
+    # （如华安 2022 p33）误当成目标表。未配置时完全沿用原有版式。
+    configured_start = configured_terms("start_item_terms")
+    configured_end = configured_terms("end_item_terms")
+    configured_boundary = bool(configured_start) and bool(configured_end)
+    if configured_boundary:
+        variants = (
+            {
+                "name": "配置首尾项目版式",
+                "start_items": configured_start,
+                "end_items": configured_end,
+            },
+        )
+    else:
+        variants = tuple(
+            table.get("boundary_variants") or boundary_variants(table_id)
+        )
     if not variants:
         return selected
+
+    scoped_pages: set[int] | None = None
+    if configured_boundary:
+        scoped_pages = set()
+        for page_number, _score, _hits in selected:
+            for candidate in (page_number - 1, page_number, page_number + 1):
+                if 1 <= candidate <= len(page_texts):
+                    scoped_pages.add(candidate)
 
     anchor = selected[0][0] if selected else 1
     max_pages = max(1, int(table.get("max_pages", 1)))
@@ -603,6 +641,8 @@ def _expand_to_item_boundaries(
     def occurrences(items: tuple[str, ...]) -> list[tuple[int, int]]:
         hits: list[tuple[int, int]] = []
         for page_number, text in enumerate(page_texts, start=1):
+            if scoped_pages is not None and page_number not in scoped_pages:
+                continue
             lines = (text or "").splitlines()
             for line_number, line in enumerate(lines):
                 for item in items:
@@ -727,8 +767,17 @@ def _expand_to_item_boundaries(
     end_page = best_range["end_page"]
 
     existing = {page: (score, hits) for page, score, hits in selected}
+    page_numbers = list(range(start_page, end_page + 1))
+    if configured_boundary:
+        # 续页扩展已经选中的相邻页不因边界词在上一页提前命中而被丢掉。
+        for selected_page, _score, _hits in selected:
+            if (
+                start_page <= selected_page <= end_page + 1
+                and selected_page not in page_numbers
+            ):
+                page_numbers.append(selected_page)
     expanded: list[tuple[int, float, list[str]]] = []
-    for page in range(start_page, end_page + 1):
+    for page in sorted(page_numbers):
         score, hits = existing.get(page, (5.0, []))
         page_hits = list(hits)
         if page == start_page:

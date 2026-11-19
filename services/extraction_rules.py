@@ -15,7 +15,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .extraction_config import ExtractionConfigError, load_table_maps
+from .extraction_config import (
+    ExtractionConfigError,
+    build_table_configs,
+    load_table_maps,
+)
 
 RULES_DIR = (
     Path(__file__).resolve().parent.parent / "config" / "extraction" / "companies"
@@ -31,6 +35,8 @@ _RULE_TO_CONFIG_FIELDS = {
     "start_item": "start_item_terms",
     "end_item": "end_item_terms",
     "exclude_terms": "exclude_item_terms",
+    # 公司可覆盖 tables.yaml 的全局签名，仍按“全部命中”判断。
+    "signature_terms": "signature_terms",
 }
 # 原样写入 table_config 的字段。
 _DIRECT_FIELDS = {
@@ -46,6 +52,8 @@ _DIRECT_FIELDS = {
     "max_pages",
     "continuation_min_structure_hits",
     "continuation_min_numeric_lines",
+    # 与 _RULE_TO_CONFIG_FIELDS 同步放行；最终值统一由 _as_terms 规范。
+    "signature_terms",
 }
 
 _CACHE: dict[str, Any] = {"signature": None, "rules": None}
@@ -422,13 +430,16 @@ def apply_rule_to_tables(
     """把公司规则合并进 Profile 表配置，返回新列表（不修改原对象）。"""
     if resolved is None:
         return [dict(config) for config in table_configs]
-    aliases = load_table_maps()["aliases"]
+    table_maps = load_table_maps()
+    aliases = table_maps["aliases"]
     out: list[dict[str, Any]] = []
     for config in table_configs:
         merged = dict(config)
         table_id = str(config.get("table_id") or "").strip()
         rule_config = _rule_table_for(table_id, resolved, aliases) if table_id else None
         if rule_config:
+            # 先回填全局 signature_terms，规则里的显式值随后覆盖。
+            merged = build_table_configs([merged], maps=table_maps)[0]
             for field_name in _DIRECT_FIELDS:
                 if field_name in rule_config:
                     merged[field_name] = rule_config[field_name]
