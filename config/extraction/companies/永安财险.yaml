@@ -1,0 +1,81 @@
+# 永安财险（永安财产保险股份有限公司）：公司级提取规则
+#
+# 封面公司全称四年固定为“永安财产保险股份有限公司”，故用 aliases 承接；
+# 文件名是“永安财险.pdf”，canonical 必须是文件名 stem。
+#
+# 页码依据：2022-2025 四份报告实测（物理页）
+#   SOLVENCY_MAIN                 2022=16  2023=16  2024=16  2025=15
+#   NON_LIFE_OPERATING_METRICS    2022=18  2023=18  2024=18  2025=17
+#   ACTUAL_CAPITAL                2022=32,33  2023=32,33  2024=33,34  2025=30,31
+#   MINIMUM_CAPITAL               2022=39,40  2023=39,40  2024=40,41  2025=37,38
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表  2023=17  2024=17  2025=16
+#   LIQUIDITY_MONITORING          2022=17  2023=17  2024=17  2025=16
+#
+# expected_pages 取四年实测页的并集，tolerance: 2 覆盖逐年 ±2 页漂移；
+# page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底。
+# 四年版式一致，不按年维护 structure_versions。
+#
+# 表格结构缺陷不在 YAML 里按年维护，统一由 services/company_extractors/yongan.py
+# 按正文重建：
+#   - 经营表被页内“四、主要经营指标 / （十一）效益类指标”等分组标题顶掉表头，
+#     通用只识别前 13 行；
+#   - 实际资本表（S02）、最低资本表（S05）跨两页，通用只取首页；
+#   - 流动性监测表与“（四）近三年（综合）投资收益率”同页，整页模式只取到
+#     近三年两行；
+#   - 近三年投资收益率为非线框正文两行，通用表格识别拿不到。
+
+company:
+  canonical: 永安财险
+  aliases: [永安财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: yongan
+  notes: >-
+    2022-2025 版式稳定，仅页码小幅漂移；经营表、实际资本、最低资本、
+    流动性监测、近三年投资收益率的版式问题由 yongan extractor 按正文重建。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [17, 18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [30, 31, 32, 33, 34]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [37, 38, 39, 40, 41]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    # 非线框表，只有“（四）近三年（综合）投资收益率”小节两行正文；
+    # 2022 年报告确无此表，按 brief 允许缺省。
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    # 该表 10 行，经营活动净现金流以元计、其余为百分比，单位由 extractor 显式设“元”。
+    required_items: [经营活动净现金流, 季均融资杠杆比例]

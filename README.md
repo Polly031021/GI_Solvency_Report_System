@@ -61,6 +61,20 @@ python tools/build_step7_fill_sheet.py "偿付能力行业集成数据_公司名
 - 输出另含 `期间口径核对` 页，逐项列出建议期间、实际期间分布、期间缺口公司和完全缺失公司；
 - 输出文件默认在源文件旁：`*_STEP7缺失指标_可粘贴补录表_全部.xlsx`。
 
+### 新年度接入检查脚本（页码体检）
+
+每年新报告出来后，先跑一遍页码体检，确认各公司 YAML 里的 `expected_pages` 是否仍然对得上：
+
+```bash
+python tools/new_year_check.py --pdf-dir "Data/pdfs(2026)" --year 2026
+```
+
+- 逐份 PDF 用封面识别公司与报告年度，路由到 `config/extraction/companies/<公司>.yaml`，再按规则法定位；
+- 对每张表比对 `expected_pages ± tolerance`，判定为 `窗口内` / `窗口外回退` / `缺失` / `strict未命中` / `未配置公司规则`；
+- 明细写入 `tmp/new_year_check.csv`，其中 `建议expected_pages` 列给出本次实际命中的页码，可直接填回公司 YAML；
+- 有漂移、缺失或未配置规则时，脚本以退出码 2 结束；全部窗口内则退出码 0；
+- 只检查部分公司：加 `--companies 众安产险,大地财产`；自定义输出路径：加 `--csv`；扫描版报告可用 `--mode hybrid`。
+
 ### 大文件读取性能
 
 - 标准窄表按文件 SHA256 缓存到系统临时目录，同一文件首次解析后再次读取不再重新打开 Excel。

@@ -29,10 +29,22 @@ _GROUP_RE = re.compile(
     r"|^（(?:十一|十二)）(?:效益类|规模类)指标$"
 )
 _CAPITAL_HEADER = ["指标名称", "期末数", "期初数"]
+# 流动性表把章节号（一、二、……十、）和“指标值”字样写进了指标名称列，
+# 例如“一、经营活动净 现金流指标值”；清洗后才是可匹配的指标名。
+_LIQ_SECTION_RE = re.compile(r"^\s*[一二三四五六七八九十]{1,3}\s*[、.．]\s*")
+_LIQ_METRIC_SUFFIX_RE = re.compile(r"\s*指标值\s*$")
 
 
 def _clean(value: Any) -> str:
     return str(value or "").replace("\u3000", " ").strip()
+
+
+def _clean_liquidity_label(value: Any) -> str:
+    """去掉流动性表指标名称里的章节号和“指标值”后缀。"""
+    text = _clean(value)
+    text = _LIQ_SECTION_RE.sub("", text)
+    text = _LIQ_METRIC_SUFFIX_RE.sub("", text)
+    return text
 
 
 def _page_lines(page: Any) -> list[str]:
@@ -215,7 +227,7 @@ def _fix_liquidity(table: Any) -> None:
     kept: list[dict[str, Any]] = []
     for block in blocks[start:]:
         rows = [
-            [_clean(cell) for cell in row]
+            [_clean_liquidity_label(row[0])] + [_clean(cell) for cell in row[1:]]
             for row in block["rows"]
             if not (row and _MARKER_RE.match(_clean(row[0])))
         ]

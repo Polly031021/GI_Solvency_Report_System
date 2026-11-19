@@ -1,0 +1,83 @@
+# 中银保险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份季报的 dump 实测（PDF 物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=15 2023=14 2024=15 2025=14
+#   NON_LIFE_OPERATING_METRICS    2022=17 2023=16 2024=17 2025=16
+#   ACTUAL_CAPITAL                2022=33 2023=35 2024=31 2025=30
+#   MINIMUM_CAPITAL               2022=36-37 2023=38-39 2024=34-35 2025=33-34
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无（全册无“近三年”表）2023=15 2024=16 2025=15
+#   LIQUIDITY_MONITORING          2022=16 2023=15 2024=16 2025=15
+#
+# 版式共性问题（前 3 项由 zhongyin extractor 按页文本重建，见 services/company_extractors/zhongyin.py）：
+#   1) 经营表被页内区域裁剪，只识别到前 13 行（1.综合成本率），29 个数据行只取到 13 行；
+#   2) 流动性监测表与“（二）监管指标”“（四）近三年投资收益率”同页，整页提取只拿到近三年 2 行；
+#   3) 最低资本表跨页，续页 3.1-3.4 行多一列，且混入【第N页表格分块】占位行；
+#   4) 实际资本表标签被换行拆成带空格文本，归一化后可用，不重建。
+
+company:
+  canonical: 中银保险
+  aliases: [中银保险有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: zhongyin
+  notes: |
+    2022-2025 封面公司名均为“中银保险有限公司”，2022 年报为 2022Q4。
+    四年版式一致：同一套 S01-S05 表、经营表列头“本季度数/本年度累计数”、
+    流动性“监管指标+监测指标+近三年投资收益”三表同页；仅页码随正文长度平移，
+    用 expected_pages ± 2 加 anchor_terms 吸附，不按年拆分 structure_versions。
+    2022 年全册没有“近三年（综合）投资收益率”表，属披露缺失；2023-2025 该表
+    与流动性监测表同页，由 extractor 按文本行重建流动性两段，避免整页取错。
+    2022 年最低资本表 33 个数据行，2023 起多“量化风险最低资本（未考虑特征系数前）”
+    一行（34 行）；extractor 只做结构清理，不改数值和单位。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14, 15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率]
+    required_items: [认可资产, 实际资本, 最低资本]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 综合成本率, 签单保费, 其他渠道签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [30, 31, 33, 35]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33, 34, 36, 38]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    include_continuation: true
+    max_pages: 2
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]
+
+structure_versions:
+  - since: 2022
+    notes: |
+      2022-2025 版式稳定，无表结构版本差异：经营表 3 个分组标题 + 29 个数据行；
+      流动性页固定为监管 11 行（输出剔除 1 行上季度复述）、监测 10 行、近三年 2 行三段。
+      2022 年缺近三年表，其余年份仅页码平移，均落在 expected_pages ± 2 内。

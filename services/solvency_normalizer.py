@@ -431,6 +431,10 @@ _FORMULA_SUFFIX_RE = re.compile(r"[（(]\s*=\s*[^）)]*[）)]")
 
 # ★ 剥掉前导行号，同时支持阿拉伯数字（1、1.2、3.4.1）
 #   和中文数字（一、二、三、……、十、十一、）
+# 指标名后追加的同义后缀：部分报告写“经营活动净现金流指标值”，
+# 与字典正式名“经营活动净现金流”指向同一指标。
+_BENIGN_LABEL_SUFFIXES = frozenset({"指标值", "指标"})
+
 _LEADING_ROW_NUMBER_RE = re.compile(
     r"^\s*"
     r"(?:"
@@ -697,8 +701,12 @@ def resolve_metric_match(
                 # 标签比别名多了前缀/后缀修饰（如“百元保费经营活动净现金流”）。
                 # 只有多出来的部分很短（覆盖率 ≥ 0.8）才视为同一指标：比率行、
                 # 百元保费行这类挂靠行不是金额指标，不能被认成主指标。
+                # 例外：标签在别名后追加“指标值/指标”属于同义后缀（如
+                # “经营活动净现金流指标值”），不算修饰前缀。
                 coverage = len(alias) / max(len(normalized), 1)
-                score = coverage + 0.5 if coverage >= 0.8 else 0.0
+                suffix = normalized[len(alias):] if normalized.startswith(alias) else ""
+                benign_suffix = suffix in _BENIGN_LABEL_SUFFIXES
+                score = coverage + 0.5 if coverage >= 0.8 or benign_suffix else 0.0
             elif normalized in alias:
                 # 标签比别名短（常见于漏写“（万元）”等后缀），维持原逻辑。
                 score = min(len(alias), len(normalized)) / max(len(alias), len(normalized)) + 0.5

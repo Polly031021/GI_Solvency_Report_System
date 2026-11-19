@@ -1,0 +1,149 @@
+# 大家财险（大家财产保险有限责任公司）：公司级提取规则
+#
+# 本目录仅含 2023-2025 三份报告（无 2022），因此 structure_versions
+# 从 2023 起维护。两段版式：
+#   2023          31 页，六张目标表比 2024-2025 整体后移 1 页
+#   2024-2025     32 页，两年页码完全一致
+#
+# 页码依据：2023-2025 三份报告实测（PDF 物理页）
+#   table_id                        2023        2024        2025
+#   SOLVENCY_MAIN                   11          10          10
+#   NON_LIFE_OPERATING_METRICS      14          13          13
+#   ACTUAL_CAPITAL                  26          27          27
+#   THREE_YEAR_INVESTMENT_RETURN    13          12          12
+#   MINIMUM_CAPITAL                 29          30          30
+#   LIQUIDITY_MONITORING            13          12          12
+#
+# 封面只有“偿付能力季度报告摘要 / 大家财产保险有限责任公司 / 2023 年第4 季度”，
+# extract_report_metadata 解析不出公司名（metadata["公司"] 为空）；定位入口用
+# 传入的公司名/文件名兜底后即可命中本规则，故 aliases 仍登记法定全称备用。
+#
+# 通用规则在本公司的三处结构性缺口，全部用 YAML 关闭“页内区域裁剪”修复，
+# 不需要专属 extractor：
+#   1. 经营表：Profile 的首尾项目（保险服务收入→综合成本率）把整页线框表裁到
+#      13 行；清空 start_item/end_item 后走整页帧，30+ 行完整保留（含效益类、
+#      规模类指标与 5.1-5.4 分渠道签单保费）。
+#   2. 最低资本表：终止词“最低资本合计”命中“寿险业务保险风险最低资本合计”，
+#      只剩 4 行（表头+3）；清空后整页帧保留 S05 全表 35 行（表头+34）。
+#   3. 2023/2024/2025 的“（三）流动性风险监测指标”与“（四）近三年（综合）
+#      投资收益率”同页，且两者相邻。清空 THREE_YEAR 的首尾项目后，整页帧
+#      同时保留两张表，按表内关键词各取所需；若不处理，区域裁剪只留收益率
+#      两行，流动性监测表会被错配成同一组收益率数据。
+
+company:
+  canonical: 大家财险
+  aliases: [大家财产保险有限责任公司, 大家财产保险, 大家保险财产保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2023-2025 版式稳定，仅 2023 页码整体比 2024/2025 后移 1 页。
+    经营表、最低资本表与同页“流动性监测+近三年收益率”用清空首尾项目的方式
+    保留整页帧，避免 Profile 默认区域裁剪丢行、错配。
+
+tables: {}
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年版式；31 页，主要指标起于第 11 页，最低资本表在第 29 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [11]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [14]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        # 清空首尾项目：关闭页内区域裁剪，保留整页线框表（33 行含表头）。
+        start_item: []
+        end_item: []
+        required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+      ACTUAL_CAPITAL:
+        expected_pages: [26]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本]
+        required_items: [核心一级资本, 实际资本合计]
+
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [13]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率]
+        # 与流动性风险监测指标同页；清空首尾项目让整页帧同时保留两张表。
+        start_item: []
+        end_item: []
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+      MINIMUM_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        # 终止词“最低资本合计”会截断 S05，清空后保留整页 35 行（表头+34）。
+        start_item: []
+        end_item: []
+        required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+      LIQUIDITY_MONITORING:
+        expected_pages: [13]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        required_items: [经营活动净现金流, 融资杠杆比例]
+
+  - since: 2024
+    notes: 2024/2025 版式一致；32 页，主要指标起于第 10 页，最低资本表在第 30 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [10]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [13]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        start_item: []
+        end_item: []
+        required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+      ACTUAL_CAPITAL:
+        expected_pages: [27]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本]
+        required_items: [核心一级资本, 实际资本合计]
+
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率]
+        start_item: []
+        end_item: []
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+      MINIMUM_CAPITAL:
+        expected_pages: [30]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        start_item: []
+        end_item: []
+        required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+      LIQUIDITY_MONITORING:
+        expected_pages: [12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        required_items: [经营活动净现金流, 融资杠杆比例]

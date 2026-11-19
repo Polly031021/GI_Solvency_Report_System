@@ -1,0 +1,94 @@
+# 申能财险：公司级提取规则（2024–2025，跨年度复用）
+#
+# 页码依据：Data/pdfs(2024)/申能财险.pdf 与 Data/pdfs(2025)/申能财险.pdf 实测
+# （物理页，容差 ±2）：
+#   table_id                      2024        2025
+#   SOLVENCY_MAIN                 11          12
+#   NON_LIFE_OPERATING_METRICS    13-14       14-15
+#   ACTUAL_CAPITAL                26-27       23-24
+#   MINIMUM_CAPITAL               32          29
+#   THREE_YEAR_INVESTMENT_RETURN  13          14
+#   LIQUIDITY_MONITORING          13          14
+#
+# 版式特点：
+# 1. 封面公司名为“申能财产保险股份有限公司”，2024 年四季度起受让并开展业务，
+#    因此只有 2024、2025 两期报告，structure_versions 从 2024 起。
+# 2. 主要经营指标（第 13/14 页下半页起）无表格线框，通用规则识别不到，
+#    同页上半页的流动性监测表会被误当成经营表/近三年收益率表；本配置对
+#    经营表显式清空 start_item（关闭页内区域裁剪、保留整页帧），再由
+#    company.extractor=shenneng 从 PDF 文本按“主要经营指标”重建。
+# 3. 实际资本表与最低资本 S05 虽然有线框，但同页/邻近页存在多张表且
+#    “行次/项目”两列会被拆行，通用规则会丢行或串入下一节，同样由
+#    shenneng 提取器按行次重建。
+# 4. 报告没有独立的“近三年（综合）投资收益率”表，该数据是主要经营指标
+#    表内的两行（2024 年为“-”，2025 年因开业未满三年按当年实际数填列），
+#    由提取器从经营表行抽取并补建 THREE_YEAR_INVESTMENT_RETURN。
+#
+# 详见 plans/company-申能财险-extraction.md。
+
+company:
+  canonical: 申能财险
+  aliases: [申能财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: shenneng
+  notes: >-
+    2024/2025 两期版式基本一致，仅物理页码整体相差约 1-3 页。经营表与
+    近三年投资收益率同页且无表格线，实际资本表/最低资本表行次列会被拆行，
+    通用规则在这些位置丢表或丢行；统一由 shenneng 提取器从 PDF 文本重建，
+    区域裁剪仅用于定位整页，不再用于裁剪数据。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 清空 start_item：_has_target_region 要求 start/end 同时非空。
+    # 这样整页帧（含上半页流动性监测表）会保留下来，交给 shenneng 按
+    # “主要经营指标”标题之后的文本重建，避免误抓同页流动性表。
+    start_item: []
+    end_item: [车险车均保费]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [26, 27]
+    tolerance: 2
+    page_match: prefer
+
+  MINIMUM_CAPITAL:
+    expected_pages: [32]
+    tolerance: 2
+    page_match: prefer
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+
+structure_versions:
+  - since: 2025
+    notes: 2025 年报告共 33 页，各表页码较 2024 整体前移
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [12]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [14, 15]
+      ACTUAL_CAPITAL:
+        expected_pages: [23, 24]
+      MINIMUM_CAPITAL:
+        expected_pages: [29]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [14]
+      LIQUIDITY_MONITORING:
+        expected_pages: [14]

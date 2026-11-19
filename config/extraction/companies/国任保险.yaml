@@ -1,0 +1,130 @@
+# 国任保险：公司级提取规则（2022-2025 跨年度复用，不按年维护）
+#
+# 路由：财险公司清单写作「国任财险」，PDF 文件名是「国任保险」，
+#       封面公司名为「国任财产保险股份有限公司」；canonical 取文件名，
+#       别名覆盖清单名与封面名，路由不依赖文件名。
+#
+# 页码依据：2022-2025 实测定位结果（物理页，容差 ±2）：
+#   SOLVENCY_MAIN                 2022/2023=11，2024=12-13，2025=15
+#   NON_LIFE_OPERATING_METRICS    2022/2023=12-13，2024=14-15，2025=17-18
+#   ACTUAL_CAPITAL                2022/2023=19-20，2024=21-22，2025=28-29
+#   MINIMUM_CAPITAL               2022/2023=25-26，2024=27-28，2025=35-36
+#   THREE_YEAR_INVESTMENT_RETURN  2022 年报无此表；2023=12，2024=13，2025=16
+#   LIQUIDITY_MONITORING          2022/2023=12，2024=13，2025=16
+#
+# 为什么六张表都清空 start_item / end_item：
+#   通用规则一旦同时配置 start_item 与 end_item，就会走「页内区域裁剪」，
+#   而本报告多张表同页（如 2024 第 13 页 = 主表续页 + 流动性监管 + 流动性监测
+#   + 近三年收益率 + 经营表开头），区域法找不到候选时整页提取失败且不回退，
+#   2024 因此丢掉 THREE_YEAR / LIQUIDITY 两张表、主表只剩半张。
+#   清空后走整页帧路径，六张表都先拿到表对象，再由 company.extractor=guoren
+#   按 PDF 行带 + 表头列边界重建 rows / table_blocks。
+#
+# 2022 年确实没有「近三年（综合）投资收益率」表（全册无「近三年」字样），
+# 不硬指别的表；该年 THREE_YEAR 定位为空即视为缺失。
+
+company:
+  canonical: 国任保险
+  aliases: [国任财产保险股份有限公司, 国任财险, 国任财产保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: guoren
+  notes: >-
+    主表三年口径不同：2022/2023/2024 为「本季度数 / 上季度可比数 / 下季度预测数」，
+    2025 直接给同一口径的三列金额；单位 2022-2024 为万元、2025 为元，均由
+    normalizer 按整表单位换算。经营表首列标签在 PDF 里会折行（3.5/5.1 等），
+    流动性监测表缺「综合退保率」，2022 年无近三年投资收益率表，均由
+    services/company_extractors/guoren.py 处理。
+
+tables:
+  SOLVENCY_MAIN:
+    page_match: prefer
+    anchor_terms: [主要偿付能力充足率指标, 偿付能力充足率指标]
+    required_items: [认可资产, 综合偿付能力充足率]
+    start_item: []
+    end_item: []
+    notes: 表头三列口径逐年一致（2025 数值无百分号），标签折行由提取器合并
+
+  NON_LIFE_OPERATING_METRICS:
+    page_match: prefer
+    # 2023 版式把第 14/15 页误判为续页（无表格帧，整页提取报失败）；
+    # 经营表统一两页，续页内容由提取器按 PDF 行带补齐。
+    include_continuation: false
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入]
+    start_item: []
+    end_item: []
+    notes: 2022-2024 前缀为「四、」，2025 为「六、」；跨页且续页无表头
+
+  ACTUAL_CAPITAL:
+    page_match: prefer
+    anchor_terms: [S02-实际资本表, 实际资本表]
+    required_items: [核心一级资本, 实际资本合计]
+    start_item: []
+    end_item: []
+    notes: 2025 版式通用线框网格会丢掉「行次」列，提取器按表头竖线恢复 4 列
+
+  MINIMUM_CAPITAL:
+    page_match: prefer
+    anchor_terms: [S05-最低资本表, 最低资本表]
+    required_items: [量化风险最低资本, 最低资本]
+    start_item: []
+    end_item: []
+    notes: 续页含各险类保费/准备金风险与巨灾风险子表，止于「4 最低资本」
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年（综合）投资收益率]
+    required_items: [近三年平均综合投资收益率]
+    start_item: []
+    end_item: []
+    notes: 2022 年报无此表；2023-2025 与流动性指标同页，无表头无单位
+
+  LIQUIDITY_MONITORING:
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 持有关联方资产占比]
+    start_item: []
+    end_item: []
+    notes: 只有 10 行「一、」到「十、」，无「综合退保率」，故清空区域裁剪避免签名不成立时取错表
+
+structure_versions:
+  - since: 2022
+    notes: 2022 版式：主表第 11 页，经营表 12-13 页，S02 19-20 页，S05 25-26 页，无近三年表
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [11]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [12, 13]}
+      ACTUAL_CAPITAL: {expected_pages: [19, 20]}
+      MINIMUM_CAPITAL: {expected_pages: [25, 26]}
+      LIQUIDITY_MONITORING: {expected_pages: [12]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: []}
+
+  - since: 2023
+    notes: 2023 版式：页码同 2022，新增第 12 页「近三年（综合）投资收益率」
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [11]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [12, 13]}
+      ACTUAL_CAPITAL: {expected_pages: [19, 20]}
+      MINIMUM_CAPITAL: {expected_pages: [25, 26]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12]}
+      LIQUIDITY_MONITORING: {expected_pages: [12]}
+
+  - since: 2024
+    notes: 2024 版式：主表跨 12-13 页，经营表 14-15 页，S02 21-22 页，S05 27-28 页，近三年与流动性监测在第 13 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [12, 13]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14, 15]}
+      ACTUAL_CAPITAL: {expected_pages: [21, 22]}
+      MINIMUM_CAPITAL: {expected_pages: [27, 28]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13]}
+      LIQUIDITY_MONITORING: {expected_pages: [13]}
+
+  - since: 2025
+    notes: 2025 版式：主表第 15 页（单位：元），经营表 17-18 页，S02 28-29 页，S05 35-36 页，近三年与流动性监测在第 16 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [17, 18]}
+      ACTUAL_CAPITAL: {expected_pages: [28, 29]}
+      MINIMUM_CAPITAL: {expected_pages: [35, 36]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [16]}
+      LIQUIDITY_MONITORING: {expected_pages: [16]}

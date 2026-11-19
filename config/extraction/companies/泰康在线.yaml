@@ -1,0 +1,93 @@
+# 泰康在线财产保险股份有限公司 2022–2025 年偿付能力报告提取规则。
+#
+# 页码依据（PDF 物理页，从 1 开始）：
+#   SOLVENCY_MAIN                  10（2022–2025 均在第 10 页）
+#   LIQUIDITY_MONITORING           10–11（2023 年在 11，2024/2025 跨 10–11）
+#   THREE_YEAR_INVESTMENT_RETURN   11（2022 年报告没有该表）
+#   NON_LIFE_OPERATING_METRICS     12（2025 年 5.x 渠道签单保费在续页 13）
+#   ACTUAL_CAPITAL                 22（2022/2024）/ 23（2023/2025）
+#   MINIMUM_CAPITAL                25（2022/2024）/ 26（2023/2025），主表跨页
+#
+# 泰康在线是互联网财险，2022–2025 版式高度一致：
+#   * 第 10 页“三、主要指标表”依次是偿付能力充足率指标、流动性风险监管指标、
+#     流动性风险监测指标的前几行；监测指标在 11 页续完，2023 年起 11 页还带
+#     “近三年（综合）投资收益率”。
+#   * 第 12 页“财产保险公司主要经营指标”整页一张表；2025 年 5.x 渠道签单
+#     保费跨到 13 页。
+#   * 最低资本 S05 主表跨 25/26 或 26/27 两页，其后紧跟非寿险保费和准备金
+#     风险等明细表，通用规则会在明细页串行。
+#
+# 通用规则在 5 张表上丢行/串表（见 plans/company-泰康在线-extraction.md），
+# 由 services/company_extractors/taikang.py 从 PDF 文本重建；只有实际资本表
+# 沿用通用提取结果（其行标签跨行产生的空格由标准化器清洗）。
+company:
+  canonical: 泰康在线
+  aliases:
+    - 泰康在线财产保险股份有限公司
+    - 泰康在线财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: taikang
+  notes: >
+    2022–2025 年四份报告均为第四季度（审计后）。主要指标表（第 10 页）金额
+    单位 2022–2025 年均为万元、百分比行单独标注（%）；实际资本表、最低资本
+    表、主要经营指标表的金额单位为元。近三年投资收益率表 2022 年缺失，
+    其余年份在 11 页。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要指标, 偿付能力充足率]
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    # 2025 年表体跨 12–13 页（5.x 渠道签单保费在续页）。
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    # 2025 年 13 页只有表尾 5.x 行、没有表头，规则法在该页会整页失败并把
+    # 整次提取标记为“部分成功”。这里只定位 12 页，13 页由公司提取器从
+    # PDF 文本续读（_parse_operating 固定检查下一页），结果不变。
+    include_continuation: false
+    max_pages: 1
+    anchor_terms: [财产保险公司主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    # 2022/2024 在 22 页，2023/2025 在 23 页。
+    expected_pages: [22, 23]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    # S05 主表首页在 25/26 页，附加资本行与“4 最低资本”在续页。
+    expected_pages: [25, 26]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    anchor_terms: [最低资本表, 量化风险最低资本]
+    required_items: [量化风险最低资本, 非寿险业务保险风险最低资本合计, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    # 2023–2025 在 11 页；2022 年报告确实没有该表，允许未定位。
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年（综合）投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    # 表头（流动性风险监测指标）在 10 页底部，2022/2024 部分数据行在 11 页；
+    # 2023 年整表在 11 页；2025 年 10 页只有标题、表体全在 11 页。
+    expected_pages: [10, 11]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 百元保费, 持有关联方资产占比]

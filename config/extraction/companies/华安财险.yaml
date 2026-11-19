@@ -1,0 +1,91 @@
+# 华安财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022–2025 四份四季度报告实测（PDF 物理页）
+#   SOLVENCY_MAIN                  2022=20  2023=20  2024=21  2025=16
+#   NON_LIFE_OPERATING_METRICS     2022=21  2023=21  2024=22  2025=17
+#   ACTUAL_CAPITAL                 2022=36  2023=35  2024=35  2025=32
+#   MINIMUM_CAPITAL                2022=40  2023=39  2024=39  2025=37
+#   THREE_YEAR_INVESTMENT_RETURN   2022 无此表（全册无“近三年”字样）
+#                                  2023=21  2024=22  2025=17
+#   LIQUIDITY_MONITORING           2022=20（监测表续到 21）
+#                                  2023=20（续到 21）
+#                                  2024=21（与监管指标同表，续到 22）
+#                                  2025=16（续到 17）
+#
+# 使用 tolerance: 0 的精确窗口：四年实测页全部列入 expected_pages，
+# 窗口即这些页本身；page_match: prefer 保留“窗口未命中时回退全文锚点”
+# 的兜底能力（2022 的近三年表就靠它判为缺失，而不是等宽窗口误命中）。
+#
+# 通用区域裁剪覆盖不到华安的“一页多表”排版，公司 extractor
+# services/company_extractors/huaan.py 从 PDF 文本重建：
+#   * 经营表被通用终止项“综合成本率”截断 → 本 YAML 的 start_item/end_item
+#     已修好（32 行完整），无需 extractor；
+#   * 最低资本表被定位器的边界扩展改写成偿付能力主表（2022 为管理层分析
+#     第 33 页小表），页码窗口写对也无效（services/solvency_pdf_locator.py:553
+#     用内置 boundary_variants 覆盖 YAML 的 start_item/end_item）；
+#   * 流动性监测表取成偿付能力主表、近三年收益率表取成经营表，同由 extractor
+#     按标题/行标签重建。
+# 四年版式基本一致（2025 只是页码前移、改为摘要版），故不按年维护
+# structure_versions，只留一条 since 2022 作为版式基线。
+
+company:
+  canonical: 华安财险
+  aliases: [华安财产保险股份有限公司, 华安财产保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: huaan
+  notes: >-
+    2022–2025 版式稳定：偿付能力主表与流动性两张指标表同页（2024 起监管
+    指标与监测指标合并成一张“类别/序号/项目”表），经营表与近三年收益率
+    表同页。2025 年起改为“报告摘要”版，页码整体前移约 5 页，表结构不变。
+    2022 年无近三年（综合）投资收益率表，属披露缺失，不是提取遗漏。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16, 20, 21]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [17, 21, 22]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 通用配置以“综合成本率/综合赔付率”为终止项，会把第 12 行之后的
+    # 效益类/规模类分组标题、签单保费、前五大险种、分渠道明细整段裁掉
+    # （实测四年都只留 12 行）。这里显式改成经营表最后一行。
+    start_item: [保险业务收入]
+    end_item: [其他渠道签单保费]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [32, 35, 36]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [37, 39, 40]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表, （一）最低资本表]
+    required_items: [量化风险最低资本, 控制风险的最低资本, 偿付能力最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17, 21, 22]
+    tolerance: 0
+    page_match: prefer
+    # 原文标题“近三年（综合）投资收益率”，表内两行“近三年平均投资收益率/
+    # 近三年平均综合投资收益率”；2022 年全册无此表，定位为空即按缺失处理。
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [16, 20, 21]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 季均融资杠杆比例]

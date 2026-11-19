@@ -1,0 +1,72 @@
+# 鼎和财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测起始页（PDF 物理页）
+#   SOLVENCY_MAIN                 2022=13，2023/2024=16，2025=15
+#   NON_LIFE_OPERATING_METRICS    2022=14，2023/2024=17，2025=16（均续到下一页）
+#   ACTUAL_CAPITAL                2022=24，2023/2024=27，2025=25
+#   MINIMUM_CAPITAL               2022=27，2023/2024=30，2025=28
+#   THREE_YEAR_INVESTMENT_RETURN  2023/2024=18，2025=17；2022 年报告无此表
+#   LIQUIDITY_MONITORING          2022=14，2023=17，2024=16(标题)/17(表体)，2025=16
+#
+# 四年版式一致，页码只有小幅漂移，因此把四年实测页併成一个精确窗口
+# （tolerance: 0），page_match: prefer 仍保留“窗口未命中回退全文锚点”的兜底。
+#
+# 通用网格提取的系统性缺口由 dinghe extractor 修复：
+#   1. 经营表续页（各渠道签单保费等）没有表头，通用流程不跨页；
+#   2. 最低资本表(S05)含“行次”列且列线把标签切碎，通用提取只取到 3–4 行；
+#   3. 2025 实际资本表表头“项目”被拆成“项/目”两行，丢“行次”列；
+#   4. 近三年（综合）投资收益率是文本行（非表格），整页提取取不到；
+#   5. 2024 流动性监测表标题在页尾、表体在下一页，整页提取把主表拼进来；
+#   6. 2022/2023 偿付能力主表表头“预测下季度（末）数”被标准化器剥成
+#      “预测下季度数”，整列期间识别失败，需改写成“下季度末预测数”。
+# 以上均属版式修补，不按年写 structure_versions。
+
+company:
+  canonical: 鼎和财险
+  aliases: [鼎和财产, 鼎和财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: dinghe
+  notes: 2022-2025 版式稳定；经营表跨页、最低资本表网格断裂、近三年收益率为文本行，由 dinghe extractor 重建
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13, 15, 16]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14, 16, 17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24, 25, 27]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [27, 28, 30]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本总表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17, 18]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年（综合）投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14, 16, 17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 季均融资杠杆比例]

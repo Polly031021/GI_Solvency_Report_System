@@ -1,0 +1,101 @@
+# 永诚保险（永诚财产保险股份有限公司）：公司级提取规则
+# 封面公司全称四年固定为“永诚财产保险股份有限公司”，金额单位全部为元（标签内联“（元）”）。
+# 页码依据 2022-2025 实测（物理页，容差 ±2）：
+#   SOLVENCY_MAIN                 2022=16  2023=17  2024=17  2025=14
+#   NON_LIFE_OPERATING_METRICS    2022=17-18  2023=18-19  2024=18-19  2025=15-16
+#   ACTUAL_CAPITAL                2022=29-30  2023=32-33  2024=31-32  2025=28-29
+#   MINIMUM_CAPITAL               2022=33  2023=36  2024=35  2025=32
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表  2023=19  2024=19  2025=16
+#   LIQUIDITY_MONITORING          2022=17  2023=18  2024=18  2025=15
+#
+# 四年版式稳定（同一套公开披露模板），不按年维护 structure_versions；仅当表格
+# 结构大改时才追加版本。
+#
+# 通用流程在永诚报告上有五处系统性缺口，由 extractor=yongcheng 修复：
+#   1. 监测指标表、流动性监管指标与经营表同页，整页网格会把三张表拼在一起，
+#      金额还会被列线切成“1,”+“420,001,430.14”；2025 年经营表续页（代理/
+#      直销/经纪/其他渠道）未被定位。
+#   2. 实际资本表/最低资本表第二页是无表头续页，通用流程混入
+#      “【第N页表格分块】”占位行并丢失后页；最低资本表还会被 Profile 终止词
+#      “最低资本合计”误截断在“1.1 寿险业务保险风险最低资本合计”子行。
+#   3. 近三年收益率表与经营表续页同页，通用网格只取到渠道行。
+#   4. 流动性监测表把“一、……十、”章节号和“指标值”写进指标名列，长标签跨行。
+#   5. 2023/2024 的近三年收益率表与经营表续页同页，整页提取在那一页整体失败，
+#      该表在组装阶段被“无行即丢弃”的规则丢掉；extractor 按 PDF 标题补建本表
+#      （2022 无此表，补不出来，按缺失处理）。
+# 主表（SOLVENCY_MAIN）通用提取已正确，extractor 不动它。
+
+company:
+  canonical: 永诚保险
+  aliases: [永诚财产保险股份有限公司, 永诚财产保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 四年版式一致，四张资本/经营表均为“行次 + 项目 + 期末数 + 期初数”
+    的纯文本行式，金额都是千分位完整数字（无需拆列），因此 extractor 直接从
+    PDF 文本行重建，不依赖网格。2022 年报告确实没有“（五）近三年平均投资收益率
+    及综合投资收益率水平”表，该年该表按缺失处理（清空行，避免把经营表续页错当
+    本表）；2023-2025 均有该表。
+  extractor: yongcheng
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 主要偿付能力指标]
+    content_terms: [认可资产, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 18]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 3
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润]
+    # Profile 的终止词“综合成本率/综合赔付率/费用率”会在效益类指标第一行截断，
+    # 经营表实际到“其他渠道（元）”结束（2022 到 p18，2023-2025 到次页）。
+    start_item: [保险业务收入]
+    end_item: [其他渠道签单保费, 其他渠道]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [28, 32]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 3
+    anchor_terms: [实际资本各项指标对比表, 实际资本明细表, 实际资本表]
+    content_terms: [核心一级资本, 实际资本合计, 认可资产]
+    start_item: [会计报表资产, 核心一级资本]
+    end_item: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [32, 36]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [量化风险最低资本, 最低资本]
+    content_terms: [量化风险最低资本, 控制风险, 附加资本]
+    # Profile 的终止词“最低资本合计”会命中“1.1 寿险业务保险风险最低资本合计”，
+    # 2022 年只剩 3 行；清空后由表标题与下一页“保费和准备金风险最低资本表”闭合。
+    end_item: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [16, 19]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    content_terms: [近三年平均投资收益率, 近三年平均综合收益率]
+    # 该表与经营表续页同页，页内裁剪会把整表裁空；整页交给 extractor 按标题重建。
+    start_item: []
+    end_item: []
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [15, 18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标, 监测指标]
+    header_terms: [监测指标, 指标名称, 本季度（末）数, 上季度（末）数]
+    content_terms: [经营活动净现金流, 规模保费同比增速, 现金及流动性管理工具占比, 季均融资杠杆比例]
+    start_item: [经营活动净现金流]
+    end_item: [持有关联方资产占比]

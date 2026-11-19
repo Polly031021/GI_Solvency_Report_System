@@ -1,0 +1,83 @@
+# 紫金财产：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份季报实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=18  2023=18  2024=18  2025=16
+#   NON_LIFE_OPERATING_METRICS    2022=21  2023=21  2024=21  2025=19
+#   ACTUAL_CAPITAL                2022=38-39（39 为无表头续页） 2023=37  2024=33  2025=32
+#   MINIMUM_CAPITAL               2022=43-44  2023=41-42  2024=37-38  2025=36-37
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表（全册无“近三年”字样） 2023=22  2024=22  2025=20
+#   LIQUIDITY_MONITORING          2022=20  2023=20  2024=20  2025=18（19/17 页是 LCR 监管指标表，勿用）
+#
+# 封面公司名四年一致：“紫金财产保险股份有限公司”；报告均为四季度报告，单位为万元。
+#
+# 两处 profile 通用规则与本公司版式不匹配，全部用 YAML 修正，不需要专属 extractor：
+#   1) 经营表：profile 以“综合成本率/综合赔付率/费用率”为终止项，会把 2022-2025
+#      第 11-12 行之后的分组行（效益类/规模类）与签单保费、车均保费、分渠道明细
+#      整段裁掉；四年表格实际都结束于“其他渠道签单保费”，显式改终止项即可保留全表。
+#   2) 实际资本表：2022 年跨 38/39 两页且第 39 页无表头、只有 3.5-5 行。profile 的
+#      区域定位在无表头续页上准备 0 个候选，导致第 39 页失败、缺“5 实际资本合计”。
+#      清空 start_item/end_item 关闭区域优先，改走整页线框识别，第 39 页可整表取到
+#      9 行并与第 38 页合并；2023-2025 单页整表同样不受影响。
+
+company:
+  canonical: 紫金财产
+  aliases: [紫金财产保险股份有限公司, 紫金财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022 年三季度起披露新会计准则经营指标，2022 年经营表多“效益类指标/规模类指标”
+    两个分组标题行，2023 年起取消分组、序号直接排到 20；两种版式由“其他渠道签单保费”
+    终止项统一保留。2022 年无近三年投资收益率表，属披露缺失，不是提取遗漏。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16, 18]
+    tolerance: 2
+    page_match: prefer
+    # 2025 年第 20 页 S01 表也含“核心/综合偿付能力充足率”，仅用短词会被抢走；
+    # 用章节标题“偿付能力充足率指标”钉住第 16/18 页。
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [19, 21]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 2022 的保险服务收入行名称写作“保险业务收入”，两个起项都列上；
+    # 终止项取四年共同的最后一行“其他渠道签单保费（万元）”。
+    start_item: [保险业务收入, 保险服务收入]
+    end_item: [其他渠道签单保费, 其他渠道]
+    required_items: [保险业务收入, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [32, 33, 37, 38]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    # 关闭区域优先：2022 第 39 页无表头，区域/候选路径 0 候选；整页线框识别可完整取到
+    # 3.5-5 行（含“5 实际资本合计 916,753.81/881,565.01”）。
+    start_item: []
+    end_item: []
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [36, 37, 41, 43]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [20, 22]
+    tolerance: 2
+    page_match: prefer
+    # 原文标题为“近三年平均投资收益率/近三年平均综合投资收益率”。
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17, 19]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
