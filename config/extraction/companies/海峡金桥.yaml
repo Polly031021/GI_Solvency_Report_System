@@ -1,0 +1,87 @@
+# 海峡金桥（海峡金桥财产保险股份有限公司）：公司级提取规则
+# 封面公司全称固定为“海峡金桥财产保险股份有限公司”，2022-2025 四年一致。
+# 页码依据：2022-2025 实测（物理页，容差见各表 tolerance）：
+#   SOLVENCY_MAIN                 2022=10      2023=9-10   2024=9-10   2025=10
+#   NON_LIFE_OPERATING_METRICS    2022=11-12   2023=11     2024=10-11  2025=11-12
+#   ACTUAL_CAPITAL                2022=21      2023=21     2024=22     2025=27
+#   MINIMUM_CAPITAL               2022=26-27   2023=26-27  2024=27-28  2025=32-33
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表  2023=12     2024=11     2025=12
+#   LIQUIDITY_MONITORING          2022=19-20   2023=19-20  2024=20     2025=25
+#
+# 四年版式稳定，不按年维护 structure_versions；只有表格结构大改时才追加版本。
+
+company:
+  canonical: 海峡金桥
+  aliases: [海峡金桥财产保险股份有限公司, 海峡金桥财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    四年 PDF 均为无框线版式：偿付能力主表与经营表、流动性表在正文文本层是
+    “标签 + 金额”一行一条指标，网格识别会把同一行拆散（2024 主表整页错列、
+    2023 主表首列丢失），故由 haixia extractor 用 pdfplumber 正文行重建。
+    最低资本主表有完整线框（行次/项目/本季度（末）数/上季度（末）数），
+    用 find_tables 重建 31 行主表；同页“保险风险最低资本”与“巨灾风险”交叉子表
+    不在六个目标表口径内，不并入。
+    Profile 默认终止词“综合成本率”会把经营表截到 13 行，故表级用 end_item 覆盖。
+  extractor: haixia
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 主要偿付能力指标]
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+    # 主表从“指标名称 本季度数 上季度数 下季度预测数”到“综合偿付能力充足率”，
+    # 2023/2024 跨页（p9 表头 + p10 尾行）。start_item/end_item 不覆盖：
+    # 2023 第 9 页同时印有“薪酬区间/董事人数”表，用 start_item 反而会选错表；
+    # 行内容由 haixia extractor 用正文行重建。
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [10, 11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    # 经营表实际到“其他渠道签单保费”结束；Profile 默认终止词“综合成本率”
+    # 只截到效益类指标第一行（2023 实测仅 13 行）。
+    end_item: [其他渠道签单保费, 其他渠道]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [21, 22]
+    tolerance: 5
+    page_match: prefer
+    anchor_terms: [实际资本表, 核心一级资本]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [26, 27]
+    tolerance: 6
+    page_match: prefer
+    anchor_terms: [最低资本表, 量化风险最低资本]
+    required_items: [量化风险最低资本, 最低资本]
+    # 表级终止词留空：Profile 的“最低资本合计”会命中“1.1 寿险业务…合计”，
+    # 导致只留 3 行。主表边界交给 extractor 的 find_tables 重建。
+    start_item: [量化风险最低资本]
+    end_item: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [11, 12]
+    tolerance: 1
+    page_match: prefer
+    # 与经营表同页（(四) 小节），2022 年报告确实没有该表。
+    anchor_terms: [近三年（综合）投资收益率, 近三年平均投资收益率]
+    start_item: [近三年（综合）投资收益率, 近三年平均投资收益率]
+    end_item: [近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [19, 20]
+    tolerance: 6
+    page_match: prefer
+    # 不覆盖 anchor_terms：主要指标章的“流动性风险监管及监测指标”标题会把
+    # 第 11/12 页（监测指标表）顶到最高分，Profile 默认标题词才能选中
+    # 管理层讨论段的监管指标表。
+    required_items: [流动性覆盖率]
+    # 管理层讨论段的监管指标表共 8 行；同段还有“监测指标”表在主要指标章，
+    # 不在本表定位范围内。extractor 剔除同页鉴证表并规范 LCR 标签。
+    end_item: [公司净现金流, 公司净现金流（元）]

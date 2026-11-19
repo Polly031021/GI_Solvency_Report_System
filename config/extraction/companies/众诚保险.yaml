@@ -1,0 +1,74 @@
+# 众诚保险（众诚汽车保险股份有限公司）：公司级提取规则
+# 封面公司全称固定为“众诚汽车保险股份有限公司”（URTRUST INSURANCE CO.,LTD），四年一致。
+# 页码依据：2022/2023 设计 + 2024 验证 + 2025 终检（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=11  2023=10  2024=10  2025=11
+#   NON_LIFE_OPERATING_METRICS    2022=12-13  2023=11-12  2024=11-12  2025=12-13
+#   ACTUAL_CAPITAL                2022=23-24  2023=22-23  2024=22-23  2025=23-24
+#   MINIMUM_CAPITAL               2022=29  2023=28-29  2024=28-29  2025=29
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表  2023=12  2024=12  2025=13
+#   LIQUIDITY_MONITORING          2022=12  2023=11  2024=10  2025=12
+#
+# 四年版式一致（2024 起页码整体 +1、2025 部分表再 +1），不按年维护 structure_versions。
+
+company:
+  canonical: 众诚保险
+  aliases: [众诚汽车保险股份有限公司, 众诚财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    四年版式要点：目标页没有逐行表格线（只有 0.5-1pt 短横线段和交点小方块），
+    pdfplumber 线框网格会把一行切成 9 个竖排碎片、金额断成两截、主表多出空列；
+    同一页文字层却是“一条指标一行、标签与金额同行”，因此由 zhongcheng extractor
+    按文字层重建 6 张表（含 2024 最低资本“标签行/行次行/数值行”三行分离形态）。
+    2022 年报告没有“近三年（综合）投资收益率”表（5 表为上限）。
+    最低资本主表后紧跟 p30/p31 的“保费和准备金风险”“巨灾风险”明细表，须截断。
+    单位：2022/2023 为元，2024/2025 为万元（表内自带“（元）/（万元）”或“单位：元”）。
+  extractor: zhongcheng
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要偿付能力充足率指标, 认可资产]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标, 保险业务收入]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    # 经营表到“其他渠道签单保费”结束（效益类 19 行 + 规模类 14 行）。
+    # Profile 默认终止词“综合成本率/综合赔付率/费用率”会在第 14 行截断效益类小表。
+    end_item: [其他渠道签单保费, 其他渠道]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [22, 24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [28, 29]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表, 量化风险最低资本]
+    # 显式首尾项目：把边界闭合限定在规则窗口命中页 ±1 内。否则会退回 Profile
+    # 的“最低资本共性版”，在全文档扫到 p10 偿付能力主表的“最低资本（万元）”
+    # 行，把最低资本表定位到 p10（2024 实测）。切分行仍由 extractor 的
+    # “4 最低资本”行与明细表标题边界负责。
+    start_item: [量化风险最低资本]
+    end_item: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    # 与经营表同页（(五) 小节），2022 年报告确实没有该表。
+    anchor_terms: [近三年（综合）投资收益率, 近三年平均投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10, 12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标, 季均融资杠杆比例]

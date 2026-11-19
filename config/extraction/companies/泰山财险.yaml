@@ -1,0 +1,84 @@
+# 泰山财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测定位结果（物理页）
+#   SOLVENCY_MAIN                 2022/2023=19，2024/2025=18
+#   NON_LIFE_OPERATING_METRICS    2022=22，2023=22-23，2024/2025=21-22
+#   ACTUAL_CAPITAL                2022=40-41，2023=42-43，2024=34-35，2025=33-34
+#   MINIMUM_CAPITAL               2022=46-47，2023=48-49，2024=40-41，2025=39-40
+#   THREE_YEAR_INVESTMENT_RETURN  2023=21，2024/2025=20（2022 年报无独立表）
+#   LIQUIDITY_MONITORING          2022/2023=20-21，2024/2025=18-19
+#
+# 使用 tolerance: 0 的精确窗口：四年实测页全部列入 expected_pages，窗口即
+# 这些页本身；page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底能力，
+# 因此不会因未来页码小幅漂移而漏检。
+#
+# 封面公司名固定为“泰山财产保险股份有限公司”，文件名不影响路由。
+#
+# 通用规则的已知缺口（主表按期间列被拆行/标签黏值、经营表区域裁剪、流动性
+# 监管表与监测表同页混帧）由 company.extractor=taishan 修复，见
+# services/company_extractors/taishan.py 与 plans/company-泰山财险-extraction.md。
+
+company:
+  canonical: 泰山财险
+  aliases: [泰山财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: taishan
+  notes: >-
+    2022-2025 版式一致。四处由专属提取器处理：① 偿付能力主表按列坐标重建
+    （通用规则把期间列拆成两行、标签黏上首个数值）；② 经营指标补回被区域
+    裁剪丢掉的表头，并清掉【第N页表格分块】标记行；③ 实际资本表按文本重建
+    并补回行次列（文字识别把行次列丢了），同名明细按所在节补全名称；
+    ④ 流动性监管指标（LCR1 在上一页）与监测指标（三列“组名/项目/数值”）
+    按文本重建。⑤ 最低资本表剔除险种级“保费风险/准备金风险”二维子表
+    （指标库无对应编码，且两个值列会被归到同一期间，产生同期间重复取值）。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [18, 19]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [21, 22]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # Profile 默认终止项目是“综合成本率”，落在表体第 13 行，会把这之后的
+    # 综合费用率/赔付率/规模类/渠道类全部裁掉（2022 年只剩 13 行）。改到
+    # 表尾“其他渠道签单保费”，同时让 boundary 首尾词齐全，续页 23 页不被
+    # “终止项目已命中”提前关闭；max_pages=2 防止把 2023 年第 24 页的
+    # 「偿付能力状况表」当续页并入。
+    end_item: [其他渠道签单保费, 其他渠道]
+    max_pages: 2
+    required_items: [保险业务收入, 净利润, 综合成本率, 综合费用率, 综合赔付率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [33, 34, 35, 40, 41, 42, 43]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 实际资本合计, 附属一级资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [39, 40, 41, 46, 47, 48, 49]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # 续页（2022 第 47 页等）另含险种级保费/准备金二维子表与巨灾风险子表；
+    # 前者由 extractor 整块剔除，后者保留（巨灾各行原样落 RAW）。
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [20, 21]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [18, 19, 20, 21]
+    tolerance: 0
+    page_match: prefer
+    required_items: [LCR1未来3个月, LCR2未来3个月, 净现金流]

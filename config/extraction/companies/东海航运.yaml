@@ -1,0 +1,109 @@
+# 东海航运：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四期报告实测定位（物理页，容差 0）
+#   SOLVENCY_MAIN                 15（四期均在第 15 页）
+#   NON_LIFE_OPERATING_METRICS    18（四期均在第 18 页）
+#   ACTUAL_CAPITAL                2022=34-35，2023=35-36，2024=36-37，2025=32-33
+#   MINIMUM_CAPITAL               2022=40-41，2023=41-42，2024=42-43，2025=38-39
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表；2023=19，2024=18-19，2025=18
+#   LIQUIDITY_MONITORING          2022=16，2023=17，2024=16，2025=16
+#
+# 封面公司名固定为“东海航运保险股份有限公司”，文件名“东海航运.pdf”与
+# canonical 一致；四期版式稳定，用 structure_versions 只维护页码差异。
+#
+# 通用规则缺口由 company.extractor=donghai 修复，见
+# services/company_extractors/donghai.py 与 plans/company-东海航运-extraction.md：
+#   1) 实际资本表、最低资本表跨页且续页无表头，通用提取只取到续页片段；
+#   2) 2025 最低资本第 39 页被“最低资本”终值锚点提前截断，漏“附加资本/最低资本”；
+#   3) 2024 近三年收益率跨第 18/19 页，通用提取误抓第 18 页整张经营表；
+#   4) 部分单元格带空格（2023）或零值 0.00，需按值/行次顺序解析。
+
+company:
+  canonical: 东海航运
+  aliases: [东海航运保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: donghai
+  notes: >-
+    2022-2025 四期版式一致；实际资本表与最低资本表均为两页续页且无表头，
+    由专属提取器按“行次/项目/期末数/期初数”重解析；2024 近三年收益率分列
+    第 18/19 页，2025 最低资本跨第 38/39 页。页码容差取 0，避免相邻表格误命中。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [15]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 认可资产]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [18]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    unit: 元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [34, 35]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+    unit: 元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [40, 41]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    unit: 元
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [19]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    unit: "%"
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [16]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [综合退保率, 融资杠杆比例]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年报表整体后移一页；近三年收益率首次出现于第 19 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [16], tolerance: 0}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [19], tolerance: 0}
+      ACTUAL_CAPITAL: {expected_pages: [35, 36], tolerance: 0}
+      MINIMUM_CAPITAL: {expected_pages: [41, 42], tolerance: 0}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [19], tolerance: 0}
+      LIQUIDITY_MONITORING: {expected_pages: [17], tolerance: 0}
+
+  - since: 2024
+    notes: 2024 年实际资本/最低资本各后移一页；近三年收益率首行在第 18 页，次行在第 19 页，由提取器跨页读取
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 0}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [18], tolerance: 0}
+      ACTUAL_CAPITAL: {expected_pages: [36, 37], tolerance: 0}
+      MINIMUM_CAPITAL: {expected_pages: [42, 43], tolerance: 0}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 0, include_continuation: false, max_pages: 1}
+      LIQUIDITY_MONITORING: {expected_pages: [16], tolerance: 0}
+
+  - since: 2025
+    notes: 2025 年实际资本/最低资本前移至第 32/38 页；近三年收益率回到第 18 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 0}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [18], tolerance: 0}
+      ACTUAL_CAPITAL: {expected_pages: [32, 33], tolerance: 0}
+      MINIMUM_CAPITAL: {expected_pages: [38, 39], tolerance: 0}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 0}
+      LIQUIDITY_MONITORING: {expected_pages: [16], tolerance: 0}

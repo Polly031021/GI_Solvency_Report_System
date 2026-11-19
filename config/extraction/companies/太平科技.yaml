@@ -1,0 +1,82 @@
+# 太平科技：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022–2024 三份可解析年报的实测物理页（2025 为纯扫描件，无文本层，
+# 无法实测页码；窗口沿用 2022–2024 的版式，若后续拿到可解析版本需复核）。
+#   SOLVENCY_MAIN                 14（2022/2023/2024 相同）
+#   NON_LIFE_OPERATING_METRICS    15–16（2022 跨 15/16；2023/2024 跨 15/16）
+#   ACTUAL_CAPITAL                32（2022 明细表）/ 31（2023）/ 30（2024）
+#   MINIMUM_CAPITAL               36（2022/2024）/ 37（2023）
+#   THREE_YEAR_INVESTMENT_RETURN  15（2023/2024；2022 年报无此表）
+#   LIQUIDITY_MONITORING          15（2022/2023/2024）
+#
+# 封面公司名固定为“太平科技保险股份有限公司”。与同目录的太平财险/太平产险
+# （太平财产保险有限公司，extractor=taiping）不是同一法人，规则与提取器独立。
+#
+# 版式缺口（行次与项目粘连、第 15 页多表裂列、实际资本跨页、最低资本被区域
+# 裁剪截断）由 company.extractor=taipingkj 用文本行重建，见
+# services/company_extractors/taipingkj.py 与 plans/company-太平科技-extraction.md。
+
+company:
+  canonical: 太平科技
+  aliases: [太平科技保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: taipingkj
+  notes: >-
+    2022–2024 版式一致；2025 报告为纯图像扫描件（仅第 4 页董事会声明有文字），
+    文本层无法定位任何目标表，已在计划文档中记为“扫描件不可提取”。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 表格只跨 15/16 两页；p17 是“五、风险管理能力”，继续扫描会多出一页空表。
+    max_pages: 2
+    # 清空区域裁剪：p15 同时排了流动性监测/投资收益率/经营指标三张表，
+    # 保留整页帧交给 taipingkj 按“主要经营指标”标题重建。
+    start_item: []
+    end_item: []
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [30, 31, 32]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [核心一级资本调整明细表, 实际资本]
+    start_item: []
+    end_item: []
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [36, 37]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [投资收益率指标, 近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    start_item: []
+    end_item: []
+    required_items: [经营活动净现金流, 现金及流动性管理工具占比, 持有关联方资产占比]

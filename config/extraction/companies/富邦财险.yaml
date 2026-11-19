@@ -1,0 +1,82 @@
+# 富邦财险（富邦财产保险有限公司）：公司级提取规则
+#
+# 封面公司全称四年固定为“富邦财产保险有限公司”（Fubon Property and Casualty
+# Insurance Company Limited），文件名是“富邦财险.pdf”，canonical 必须是文件名 stem。
+#
+# 页码依据：2022-2025 四份报告实测（物理页，报告摘要 21/23/26/23 页）
+#   SOLVENCY_MAIN                 2022/2023=11  2024/2025=10
+#   NON_LIFE_OPERATING_METRICS    2022/2023=12（续 13）  2024=11（续 12）  2025=11（续 12）
+#   ACTUAL_CAPITAL                2022=19  2023=21  2024=24  2025=21
+#   MINIMUM_CAPITAL               2022=19（续 20）  2023=21（续 22,23）
+#                                 2024=24（续 25,26）  2025=21（续 22）
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表  2023=13  2024/2025=12
+#   LIQUIDITY_MONITORING          2022/2023=12  2024/2025=11
+#
+# expected_pages 列四年实测“起始页”的并集，tolerance: 0 使窗口恰好覆盖
+# min..max；page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底。
+# 2022 与 2023 年报结构不同（主表 3 列 vs 4 列、经营表单位元 vs 万元），
+# 但差异都在行内，不需要 structure_versions 按年维护。
+#
+# 十、实际资本 / 十一、最低资本 两节被 pdfplumber 的 text-strategy 拆成
+# 单字列（如 `| 认可 | 资 | 产 |`），通用规则无法还原行列，统一由
+# services/company_extractors/fubang.py 按正文重建；经营表的分块标记行、
+# 重复表头和 2022/2023 的“元”口径也由该 extractor 同步。
+
+company:
+  canonical: 富邦财险
+  aliases: [富邦财产保险有限公司, 富邦产险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: fubang
+  notes: >-
+    2022-2025 版式稳定，页码只在 10-13 / 19-24 两段内漂移，已按实测页列窗口。
+    资本两表与经营表的结构性问题由 fubang extractor 修复。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [19, 21, 24]
+    tolerance: 0
+    page_match: prefer
+    # 两节同页：实际资本在前、最低资本在后；锚点用“实际资本”，
+    # 终止项用“十一、最低资本”，避免把最低资本长表并进来。
+    anchor_terms: [实际资本]
+    start_item: [十、实际资本, 实际资本]
+    end_item: [十一、最低资本]
+    required_items: [认可资产, 认可负债, 实际资本, 核心一级资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [19, 21, 24]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本]
+    start_item: [十一、最低资本, 最低资本]
+    end_item: [十二、]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [11, 12]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 应收款项占比]

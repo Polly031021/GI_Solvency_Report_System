@@ -1,0 +1,103 @@
+# 爱和谊日生同和财产保险（中国）有限公司：公司级提取规则
+#
+# 四年 PDF 均为“偿付能力数据补充/更正公告”（审计后重述），封面公司解析器
+# 返回空，文件名恒为“爱和谊.pdf”，canonical 取文件名 stem。
+# 正文首页可读到全称“爱和谊日生同和财产保险（中国）有限公司”。
+#
+# 页码依据：2022-2025 四份报告实测（物理页，总页数 27/28/29/27）
+#   SOLVENCY_MAIN                 2022=10  2023=10（续 11）  2024=11  2025=10
+#   NON_LIFE_OPERATING_METRICS    2022=11（续 12）  2023=12（续 13）
+#                                 2024=12（续 13）  2025=11（续 12）
+#   ACTUAL_CAPITAL                2022=18（续 19）  2023=19（续 20）
+#                                 2024=20（续 21）  2025=18（续 19）
+#   MINIMUM_CAPITAL               2022=25  2023=26  2024=27  2025=25
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表  2023=13  2024=13  2025=12
+#   LIQUIDITY_MONITORING          2022=11  2023=11  2024=12  2025=11
+#
+# expected_pages 取四年实测页的并集，tolerance: 0 让窗口恰好覆盖并集
+# min..max；page_match: prefer 保留窗口未命中时的全文锚点兜底。
+#
+# 版式差异（不按 structure_versions 拆分，均在一份 extractor 内处理）：
+# * 2023 偿付能力主表跨 10-11 页，且 10 页上方有薪酬区间表、首列“行次+项目”
+#   被合并、本季度数被拆成“2 | 81,327.94”；11 页沿用 11 列错位版式。
+# * 经营指标表四年都没有表格线，pdfplumber 只能走文字对齐，列会被拆散；
+#   首段（1-6 行）与续段（7 行以后）常落在不同页。
+# * 2022 年没有“近三年（综合）投资收益率”表。
+# 以上结构性问题由 services/company_extractors/aiheyi.py 统一修复，
+# YAML 只负责页码窗口、锚点、边界开关和签名覆盖。
+
+company:
+  canonical: 爱和谊
+  aliases:
+    - 爱和谊日生同和财产保险（中国）有限公司
+    - 爱和谊日生同和财产保险(中国)有限公司
+    - 爱和谊日生同和财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: aiheyi
+  notes: >-
+    2022-2025 页码只在 10-13 / 18-21 / 25-27 三段内漂移，已按实测页列窗口。
+    2022 年无“近三年（综合）投资收益率”，属漏表而非提取失败。主表、经营表、
+    流动性监测表的结构性问题由 aiheyi extractor 修复。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 主要指标]
+    start_item: [认可资产]
+    end_item: [综合偿付能力充足率]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 首段（1-6 行）与续段（7 行以后）分处两页时，续段页命中的“总资产、
+    # 净资产、签单保费”等词更多，会把锚点抢到续段页（2024 年即如此）。
+    # 只保留首段独有、续段没有的指标，确保锚点落在真正的首段页。
+    content_terms: [保险业务收入, 净利润, 保险合同负债, 基本每股收益]
+    start_item: [保险业务收入]
+    end_item: [其他渠道]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [18, 19, 20]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本]
+    start_item: [财务报表资产总额, 认可资产, 核心一级资本]
+    end_item: [实际资本合计]
+    required_items: [实际资本合计, 核心一级资本, 认可资产]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [25, 26, 27]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本]
+    # 清空首尾项：S05 单页成表，走整页线框识别可完整保留 34 行；
+    # 若走页内区域，区域从节标题“十一、最低资本”起裁，只剩 3-4 行。
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    start_item: [近三年平均投资收益率]
+    end_item: [近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [11, 12]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    # 本公司监测表没有“综合退保率”，全局签名永远不命中，这里换成
+    # 经营活动净现金流 + 规模保费同比增速。
+    signature_terms: [经营活动净现金流, 规模保费同比增速]
+    required_items: [经营活动净现金流, 应收款项占比, 融资杠杆比例]

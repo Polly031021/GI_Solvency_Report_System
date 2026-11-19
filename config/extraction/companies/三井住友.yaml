@@ -1,0 +1,98 @@
+company:
+  canonical: 三井住友
+  aliases:
+    - 三井住友海上火灾保险（中国）有限公司
+    - 三井住友海上火灾保险(中国)有限公司
+    - Mitsui Sumitomo Insurance (China) Company, Limited
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: "2026.11-sumitomo-1"
+  extractor: sumitomo
+  notes: |
+    三井住友海上火灾保险（中国）有限公司（财险，偿付能力季度报告摘要）。
+    2022–2025 版式逐年稳定但整体前移一页：2022/2023 主要指标起于 p12，
+    2024/2025 起于 p11；实际资本章节 2022 p27 / 2023 p29 / 2024 p26 / 2025 p26；
+    最低资本章节 2022 p29 / 2023 p31 / 2024 p28 / 2025 p28。
+    该 PDF 的表格线框会把最左“指标名称/项目”标签列切丢（主要经营指标、
+    流动性风险监测指标提取后只剩数值列），最低资本表还会裂成残行，
+    仅靠 YAML 无法恢复，故配 extractor=sumitomo 按文本行重建六张表。
+    单位：金额表为元，收益率表为 %（extractor 不改单位，仅在块上标注）。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11, 12]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: ["偿付能力充足率"]
+    header_terms: ["项目", "期末数", "期初数", "下季度预测数"]
+    signature_terms: ["认可资产", "综合偿付能力充足率"]
+    required_items:
+      - 认可资产
+      - 认可负债
+      - 实际资本
+      - 最低资本
+      - 核心偿付能力充足率
+      - 综合偿付能力充足率
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [13, 14, 15]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: ["主要经营指标"]
+    header_terms: ["指标名称", "本季度（末）数", "本年度累计数"]
+    signature_terms: ["保险业务收入", "净利润"]
+    required_items:
+      - 保险业务收入
+      - 净利润
+      - 总资产
+      - 净资产
+      - 综合成本率
+
+  ACTUAL_CAPITAL:
+    expected_pages: [26, 27, 29]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: ["实际资本指标"]
+    header_terms: ["指标名称", "本季度末数", "上季度末数"]
+    signature_terms: ["实际资本", "核心一级资本"]
+    required_items:
+      - 实际资本
+      - 核心一级资本
+      - 净资产
+      - 对净资产的调整额
+
+  MINIMUM_CAPITAL:
+    expected_pages: [28, 29, 31]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: ["最低资本指标"]
+    header_terms: ["指标名称", "本季度末数", "上季度末数"]
+    signature_terms: ["量化风险最低资本", "最低资本合计"]
+    required_items:
+      - 量化风险最低资本
+      - 保险风险最低资本合计
+      - 市场风险最低资本合计
+      - 信用风险最低资本合计
+      - 最低资本合计
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14, 16]
+    tolerance: 0
+    page_match: strict
+    anchor_terms: ["近三年（综合）投资收益率", "近三年(综合)投资收益率"]
+    header_terms: ["指标名称", "本季度"]
+    signature_terms: ["近三年平均投资收益率", "近三年平均综合投资收益率"]
+    required_items:
+      - 近三年平均投资收益率
+      - 近三年平均综合投资收益率
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13, 14]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: ["流动性风险监测指标"]
+    header_terms: ["指标名称", "本季度", "上季度"]
+    signature_terms: ["经营活动净现金流", "规模保费同比增速"]
+    required_items:
+      - 经营活动净现金流
+      - 规模保费同比增速
+      - 现金及流动性管理工具占比

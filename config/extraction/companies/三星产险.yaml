@@ -1,0 +1,71 @@
+# 三星产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 实测定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022/2024/2025=15，2023=17
+#   NON_LIFE_OPERATING_METRICS    2022=18，2023=22，2024/2025=20
+#   ACTUAL_CAPITAL                2022/2023=42-43，2024=41-42，2025=37-38
+#   MINIMUM_CAPITAL               2022/2023=49，2024=48，2025=39
+#   THREE_YEAR_INVESTMENT_RETURN  2023=21，2024/2025=19（2022 年报无该表）
+#   LIQUIDITY_MONITORING          2022=17（仅 2.2 回溯表），
+#                                 2023=19-20，2024/2025=18
+#
+# 封面公司名为“三星财产保险（中国）有限公司”，通用封面前缀正则要求
+# “保险股份有限公司/保险有限公司”，因此 metadata.公司 为空；由
+# batch_processor 以调用方公司名（三星产险）兜底路由，别名同时登记全称。
+#
+# 通用规则对三星报告的已知缺口由 company.extractor=sanxing 修复（竖排
+# 单元格导致主表整行数值挤进一格、经营表只识别 12 行、资本表跨页错列、
+# 近三年与流动性表漏提），见 services/company_extractors/sanxing.py。
+
+company:
+  canonical: 三星产险
+  aliases: [三星财产保险（中国）有限公司, 三星财产保险, 三星财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: sanxing
+  notes: >-
+    报告文本层每个单元格独立成行，通用表格网格只切出表头与零散列；
+    由专属提取器按页重建 6 张表（主表、经营表、实际资本、最低资本、
+    近三年收益率、流动性监测）。2022 年无 2.4 流动性监测指标表，
+    流动性表以 2.2 回溯表的 1./2.1 行（回溯率、经营活动净现金流）重建，
+    2.2/2.3 流入流出为勾稽明细不作为净现金流来源；2023 起合并回溯
+    表与监测表，监测表“一、经营活动净现金流”为全年累计口径，与回溯
+    表 2.1 本季度口径冲突，统一保留 2.1，避免同指标同期间双值。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [15, 17]
+    tolerance: 2
+    page_match: prefer
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [18, 20, 22]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [37, 38, 41, 42, 43]
+    tolerance: 2
+    page_match: prefer
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [39, 48, 49]
+    tolerance: 2
+    page_match: prefer
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [19, 21]
+    tolerance: 2
+    page_match: prefer
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17, 18, 19, 20]
+    tolerance: 2
+    page_match: prefer
+    required_items: [经营活动净现金流]

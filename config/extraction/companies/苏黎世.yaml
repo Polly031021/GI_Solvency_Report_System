@@ -1,0 +1,92 @@
+# 苏黎世：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测起始页（物理页）
+#   SOLVENCY_MAIN                 2022=11，2023-2025=12
+#   NON_LIFE_OPERATING_METRICS    2022=13，2023-2025=14
+#   ACTUAL_CAPITAL                2022=25，2023-2025=27
+#   MINIMUM_CAPITAL               2022=28，2023-2025=30
+#   THREE_YEAR_INVESTMENT_RETURN  2023-2025=14（2022 年无此表）
+#   LIQUIDITY_MONITORING          2022=12，2023-2025=13
+#
+# 2022-2025 版式稳定，仅 2022 年实际资本/最低资本页码比后三年早 2 页，
+# 因此 ACTUAL_CAPITAL/MINIMUM_CAPITAL 用跨年精确窗口覆盖两种页码。
+# 实际资本页标题是“九、实际资本”，表内无“实际资本合计”行，通用
+# signature 要求“实际资本合计”会漏检；公司级 signature 改为
+# [实际资本, 核心一级资本]，并用 start/end 限定在“（一）实际资本各项指标”
+# 表内，避免把同页“（二）核心一级资本调整表”并入。
+# 最低资本页存在“管理层分析”表（5 列、金额取整）与 S05 主表并存的问题，
+# 用 expected_pages + 精确窗口只取 S05 主表页，关闭续页扫描避免后续
+# 可资本化汇总块（2022=p31，2023-2025=p33）重复计入。
+# 经营表首行是“主要经营指标 (万元) | -- | --”分组行，不是表头；通用
+# 标准化器会把它误判为表头并把期间读成“--”，导致保险业务收入/净利润/
+# 综合成本率全部缺失。由 company.extractor=sulishi 统一修正表头；
+# 经营表 end_item 扩到“其他渠道签单保费”，一并保留费用率/赔付率/签单保费。
+
+company:
+  canonical: 苏黎世
+  aliases:
+    - 苏黎世财产保险（中国）有限公司
+    - 苏黎世财产保险(中国)有限公司
+    - 苏黎世财产保险（中国）
+    - 苏黎世保险
+    - 苏黎世财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: sulishi
+  notes: >-
+    2022-2025 版式基本稳定；实际资本页无“合计”行、最低资本页与
+    管理层分析同页，已用公司级 signature/页码窗口排除；经营表分组行
+    占用表头位，由 extractor 重写表头并恢复 2022-2025 指标。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11, 12]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [13, 14]
+    tolerance: 0
+    page_match: prefer
+    # 通用 end_item 首个命中“综合成本率”就截断，会漏掉同页的费用率、
+    # 赔付率、签单保费与分渠道明细；改用该页最后一行“其他渠道签单保费”。
+    end_item: [其他渠道签单保费]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [25, 27]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本]
+    header_terms: [指标名称, 本季度数, 上季度可比数]
+    content_terms: [实际资本, 核心一级资本, 核心二级资本, 附属一级资本, 附属二级资本]
+    signature_terms: [实际资本, 核心一级资本]
+    start_item: [实际资本]
+    end_item: [附属二级资本]
+    include_continuation: false
+    required_items: [实际资本, 核心一级资本, 附属一级资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [28, 30]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [最低资本]
+    header_terms: [指标名称, 本季度数, 上季度可比数]
+    content_terms: [最低资本, 保险风险, 市场风险, 信用风险, 量化风险]
+    signature_terms: [最低资本, 保险风险, 信用风险]
+    include_continuation: false
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13]
+    tolerance: 0
+    page_match: prefer
+    required_items: [经营活动净现金流, 规模保费同比增速, 综合退保率]

@@ -1,0 +1,100 @@
+# 京东安联：公司级提取规则（跨年度复用，不按年维护）
+#
+# 版式要点（2022-2025 实测，物理页）：
+#   封面全称“京东安联财产保险有限公司”，报告期 2022Q4-2025Q4。
+#   正文表格全部由 Word 导出，文本层把“指标名”和“金额/百分比”拆成相邻多行
+#   （例如“认可资产\n 7,300,605,960.29\n 7,576,258,653.73”），
+#   pdfplumber 的整页线框会把金额按字符间距再切成两列（“1,230, | 305,825.97”），
+#   因此 6 张表都由公司 extractor（jingdong）按 PDF 文本行重建；
+#   这里的页码窗口只负责“表是否存在 + 表体所在页”。
+#
+# 页码窗口（起始页）：
+#   SOLVENCY_MAIN                 2022/2023/2024=13，2025=14
+#   NON_LIFE_OPERATING_METRICS    2022/2023=14，2024/2025=15
+#   ACTUAL_CAPITAL                2022=23，2023-2025=25
+#   MINIMUM_CAPITAL               2022=26，2023-2025=28
+#   THREE_YEAR_INVESTMENT_RETURN  2023/2024=15，2025=16（2022 年报无此表）
+#   LIQUIDITY_MONITORING          2022/2023/2024=14，2025=15
+#
+# 实际资本/最低资本两章的起始页 2022 比 2023 起早 2 页（2022 年报没有
+# “近三年投资收益率”独立小节，且总页数 28 对 30），版式本身一致、只是整体位移，
+# 故用 structure_versions 按 2023 分档钉死窗口，避免中间页（认可资产明细、
+# 最低资本明细续页）抢锚点。
+
+company:
+  canonical: 京东安联
+  aliases: [京东安联财产保险有限公司, 京东安联财险, 京东安联保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: jingdong
+  notes: >-
+    文本层“指标名/金额”分行，6 表均由 extractor 按 PDF 文本重建；
+    同一页常叠两张表（流动性监管指标+监测指标+经营指标），
+    故监测表与经营表清空 start_item/end_item，走整页帧。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13, 14]
+    tolerance: 0
+    page_match: prefer
+    # 2024/2025 主表跨页（p13→p14、p14→p15），最多两页即可闭合。
+    max_pages: 2
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14, 15]
+    tolerance: 0
+    page_match: prefer
+    max_pages: 2
+    start_item: []
+    end_item: []
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [23]
+    tolerance: 0
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [实际资本明细]
+    start_item: []
+    end_item: []
+    required_items: [财务报表资产总额, 认可资产总额, 核心一级资本, 实际资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [26]
+    tolerance: 0
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [十一、最低资本]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15, 16]
+    tolerance: 0
+    page_match: prefer
+    max_pages: 1
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14, 15]
+    tolerance: 0
+    page_match: prefer
+    max_pages: 1
+    start_item: []
+    end_item: []
+    required_items: [经营活动净现金流, 规模保费同比增速, 季均融资杠杆比例]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 起实际资本/最低资本整章后移 2 页（2022 年报无“近三年投资收益率”小节）
+    tables:
+      ACTUAL_CAPITAL:
+        expected_pages: [25]
+        tolerance: 0
+        anchor_terms: [实际资本明细]
+      MINIMUM_CAPITAL:
+        expected_pages: [28]
+        tolerance: 0
+        anchor_terms: [十一、最低资本]

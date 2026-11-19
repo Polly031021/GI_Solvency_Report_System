@@ -1,0 +1,83 @@
+# 中国渔业互助：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2023–2025 三份可解析年报的实测起始页（物理页；2022 年无数据）
+#   SOLVENCY_MAIN                 2023=11，2024/2025=10
+#   NON_LIFE_OPERATING_METRICS    2023=12–13，2024/2025=11–12
+#   ACTUAL_CAPITAL                2023/2024=24–25，2025=23–24
+#   MINIMUM_CAPITAL               2023/2024=31，2025=30
+#   THREE_YEAR_INVESTMENT_RETURN  2023=13，2024/2025=12
+#   LIQUIDITY_MONITORING          2023=12，2024/2025=11
+#
+# 版式缺口（三份年报同构）：
+#   1. 偿付能力主表表头被 pdfplumber 拆成两个残片（“下季”+“度预测数”），
+#      期间口径全部落成“本季度末数”，上季度/下季度预测两列丢失；
+#   2. 经营指标跨页且起始行被区域裁剪吞掉，综合成本率等被拆成两列；
+#   3. 最低资本表被页内区域裁剪截成 4 行；
+#   4. 流动性监测表的全局签名含“综合退保率”，本报告无此指标，定位跑偏。
+# 以上均由 company.extractor=yuye 按文本行/整页帧修复，见 plans/company-中国渔业互助-extraction.md。
+
+company:
+  canonical: 中国渔业互助
+  aliases: [中国渔业互助保险社]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: yuye
+  notes: >-
+    2023 年 2 月开业的新主体，三年报告版式一致，页码仅小幅漂移；
+    封面公司名为“中国渔业互助保险社”，报告通用元数据正则不识别“保险社”，
+    因此 aliases 必须包含该全称（运行时 metadata 公司为空会回退批次公司名）。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # p11/12 与流动性监测、近三年收益同页，清空区域裁剪保留整页帧；
+    # 由 yuye 按“（三）经营指标”到“（四）近三年投资收益率”重建整表。
+    start_item: []
+    end_item: []
+    max_pages: 2
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [23, 24, 25]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [30, 31]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # 通用区域法把 p31 整表截成 4 行，清空区域裁剪后取整页帧。
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [11, 12]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    # 本报告没有“综合退保率”，全局签名失效；用监测指标表尾两行作签名。
+    signature_terms: [季均融资杠杆比例, 现金及流动性管理工具占比]
+    start_item: []
+    end_item: []
+    required_items: [经营活动净现金流, 现金及流动性管理工具占比, 持有关联方资产占比]

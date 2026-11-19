@@ -1,0 +1,70 @@
+# 北部湾财产：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测起始页（物理页）
+#   SOLVENCY_MAIN                 2022=12，2023=11，2024=13，2025=12
+#   NON_LIFE_OPERATING_METRICS    2022=14，2023=13(续14)，2024=15，2025=13
+#   ACTUAL_CAPITAL                2022=25(续26)，2023=24(续25)，2024=25(续26)，2025=20(续21)
+#   MINIMUM_CAPITAL               2022=31(续32)，2023=30(续31)，2024=31(续32)，2025=26(续27)
+#   THREE_YEAR_INVESTMENT_RETURN  2023/2025=13，2024=14-15（2022 年报告未披露该表）
+#   LIQUIDITY_MONITORING          2022=13，2023=12，2024=14，2025=12(续13)
+#
+# 版式要点（通用规则缺口见 plans/company-北部湾财产-extraction.md）：
+#   - 2022 年经营表只有前半段有线框，效益/规模类指标需按 PDF 文本重建；
+#   - 流动性监管/监测两张表同页相邻，且监测表数值被 pdfplumber 拆成两列；
+#   - 认可资产/负债表、最低资本表跨页，S05 次页还紧邻“保险风险各子类”小表。
+
+company:
+  canonical: 北部湾财产
+  aliases: [北部湾财产保险股份有限公司, 北部湾财险, 北部湾保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: beibuwan
+  notes: 2022-2025 版式基本稳定，页码整体前移；经营表与流动性表由专属提取器补齐
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11, 12, 13]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [13, 14, 15]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [20, 21, 24, 25, 26]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [26, 27, 30, 31, 32]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # S05 合计行写作“4 最低资本”，Profile 的通用尾项（最低资本合计/分散效应）
+    # 在本报告不出现，首尾项都配时边界闭不上，只留续页。这里只给首项、清空
+    # 尾项，让定位器走“首项 + 版式变体”闭合（尾项页码由正式章节标题择定），
+    # 页内切片也不会被“最低资本合计”提前截断。
+    start_item: [量化风险最低资本]
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [13, 14, 15]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13, 14]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]

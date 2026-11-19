@@ -1,0 +1,82 @@
+# 珠峰财险（封面全称：珠峰财产保险股份有限公司）公司级提取规则
+# 四年 PDF 物理页码实测（fitz 扫描 + tmp/tools/dump_tables.py）：
+#   SOLVENCY_MAIN                 2022=16，2023=17，2024=17，2025=16
+#   NON_LIFE_OPERATING_METRICS    2022=20，2023=23，2024=20，2025=19
+#   THREE_YEAR_INVESTMENT_RETURN  2023=22，2024=19，2025=18；2022 年报告未披露该表
+#   ACTUAL_CAPITAL                2022=29-30，2023=30-31，2024=26，2025=25
+#   MINIMUM_CAPITAL               2022=37-38，2023=38-39，2024=30，2025=29
+#   LIQUIDITY_MONITORING          2022=18-19，2023=20-22，2024=19，2025=18
+# 页码跨年漂移较大且 2024/2025 较紧凑，这里用「四年页号并集 + tolerance 0」
+# 精确定位；续页由 max_pages 硬限制，避免 2024/2025 续入认可资产/保费风险子表。
+company:
+  canonical: 珠峰财险
+  aliases: [珠峰财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: zhufeng
+  notes: 各年正文页数 42/43/32/31；2024/2025 实际资本、最低资本均压缩到单页
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16, 17]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [19, 20, 23]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [25, 26, 29, 30]
+    tolerance: 0
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [29, 30, 37, 38]
+    tolerance: 0
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [18, 19, 22]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年平均（综合）投资收益率, 近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [18, 19, 20]
+    tolerance: 0
+    page_match: prefer
+    include_continuation: true
+    max_pages: 3
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 融资杠杆比例]
+
+# 2024 年起实际资本、最低资本、流动性监测指标均压缩在单页，禁止续页，
+# 否则会续入下一页的认可资产明细/保费及准备金风险/主要经营指标。
+structure_versions:
+  - since: 2024
+    notes: 2024/2025 年正文压缩，三张表均单页
+    tables:
+      ACTUAL_CAPITAL:
+        max_pages: 1
+        tolerance: 0
+        page_match: prefer
+      MINIMUM_CAPITAL:
+        max_pages: 1
+        tolerance: 0
+        page_match: prefer
+      LIQUIDITY_MONITORING:
+        max_pages: 1
+        tolerance: 0
+        page_match: prefer

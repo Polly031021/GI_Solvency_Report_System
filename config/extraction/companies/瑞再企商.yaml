@@ -1,0 +1,69 @@
+# 瑞再企商：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测起始页（物理页）
+#   SOLVENCY_MAIN                 2022/2023=13，2024/2025=12
+#   NON_LIFE_OPERATING_METRICS    2022/2023/2025=15，2024=14
+#   ACTUAL_CAPITAL                2022/2024/2025=29，2023=32
+#   MINIMUM_CAPITAL               2022/2024/2025=35，2023=38
+#   THREE_YEAR_INVESTMENT_RETURN  2023=14，2024=13，2025=14（2022 年无此表）
+#   LIQUIDITY_MONITORING          2022/2023=13，2024/2025=12（续页各 +1）
+#
+# 使用 tolerance: 0 的精确窗口：四年实测页全部列入 expected_pages，
+# 窗口即这些页本身；page_match: prefer 保留“窗口未命中时回退全文锚点”
+# 的兜底能力，因此不会因未来页码小幅漂移而漏检。
+#
+# 结构性缺陷（经营表只识别前 13 行、S02/S05 续页多出行次列、LCR 行首列
+# 为空、主表末行简写）由公司 extractor（ruizai）修复；四年版式同构，
+# 不按年维护 structure_versions。
+
+company:
+  canonical: 瑞再企商
+  aliases: [瑞再企商保险有限公司, 瑞再企商财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: ruizai
+  notes: 2022-2025 版式稳定；2022 年无近三年投资收益表，其余五表齐全
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [12, 13]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14, 15]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29, 30, 32, 33]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [35, 36, 38, 39]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [13, 14]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  # 流动性表不写 anchor_terms：profile 的 title_terms 同时含“流动性风险监管指标/
+  # 流动性风险监测指标”，覆盖成单个词会削弱续页识别（2025 实测只锚到监管页 [12]），
+  # 保留 profile 三项标题词后四年都稳定取到“监管页 + 监测页”。
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13, 14]
+    tolerance: 0
+    page_match: prefer
+    required_items: [LCR1, LCR2, 净现金流]

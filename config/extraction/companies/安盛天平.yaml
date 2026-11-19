@@ -1,0 +1,68 @@
+# 安盛天平：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份报告实测起始页（物理页，从 1 开始）
+#   SOLVENCY_MAIN                 2022=9，2023/2025=11，2024=10（续页 10/11）
+#   NON_LIFE_OPERATING_METRICS    2022=14，2023/2024=16，2025=16（续 17）
+#   ACTUAL_CAPITAL                2022=20，2023=23，2024=23，2025=25
+#   MINIMUM_CAPITAL               2022=25，2023=29，2024=28，2025=29
+#   THREE_YEAR_INVESTMENT_RETURN  2022/2023 未披露，2024/2025=17
+#   LIQUIDITY_MONITORING          2022=13，2023-2025=14
+#
+# 用 tolerance: 0 的精确窗口：四年实测页全部列入 expected_pages，窗口即
+# 这些页本身；page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底，
+# 未来页码小幅漂移也不至于漏检。
+#
+# 版式缺口（行内空占位列、跨页合计行丢失、经营表后半页无框线、流动性
+# 监测指标多行同标签）由公司 extractor（ansheng）修复，不在
+# structure_versions 里按年维护：四年版式同源，只是通用规则未覆盖。
+
+company:
+  canonical: 安盛天平
+  aliases: [安盛天平财产保险有限公司, 安盛天平财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: ansheng
+  notes: 2022-2025 版式同源；主表空占位列/经营表分段/最低资本合计行由 extractor 修补
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9, 10, 11]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [偿付能力充足率]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14, 15, 16, 17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [20, 21, 23, 24, 25, 26]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [25, 26, 28, 29, 30]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14, 15]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流回溯不利偏差率]

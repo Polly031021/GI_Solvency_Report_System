@@ -1,0 +1,108 @@
+# 渤海财险（渤海财产保险股份有限公司）：公司级提取规则
+# 封面公司全称四年固定为“渤海财产保险股份有限公司”，第四季度摘要。
+# 页码依据 2022-2025 实测（物理页，容差 ±2）：
+#   SOLVENCY_MAIN                 2022-2025=11-12（主表跨页，p11 起 p12 止）
+#   NON_LIFE_OPERATING_METRICS    2022-2025=11
+#   ACTUAL_CAPITAL                2022=24-25  2023=25-26  2024=26-27  2025=28-29
+#   MINIMUM_CAPITAL               2022=30-31  2023=31-32  2024=32-33  2025=34-35
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该节  2023-2025=13
+#   LIQUIDITY_MONITORING          2022-2025=12-13
+#
+# 四年版式稳定（同一套披露模板），不按年维护 structure_versions。
+#
+# 通用网格在渤海报告上有四处系统性缺口，由 extractor=bohai 修复：
+#   1. 主表“（二）主要偿付能力指标”的标签列在 2023-2025 没有被线框识别，
+#      p11/p12 只产出纯数值帧，组装后主表没有行标签；2022 则把
+#      “特定类保险合同损/失吸收效应”拆成两行且无表头。按正文行重建为
+#      项目/本季度末数/上季度末数/下季度预测数 四列（p11 起认可资产，
+#      到 p12“（三）流动性风险指标”止）。
+#   2. 实际资本表(S02)/最低资本表(S05)第二页是无表头续页，通用网格把续页
+#      行排成“行次+标签+2 值”的四列、首页排成三列，还混入
+#      “【第N页表格分块】”占位行；S05 还会被 Profile 终止词
+#      “最低资本合计/最低资本”在第 3 行处截断（2023 只剩 10 行）。按
+#      “行次/项目/期末数/期初数”正文行重建整表（元）。
+#   3. 近三年（综合）投资收益率不是网格表，只是 p13 一句话；通用流程
+#      定位到 p13 后取到的是流动性监测表续页。按正文正则合成两行指标。
+#   4. 流动性监测表 2022/2023 的 LCR 行被列线切出第 5 个空列，本季度值
+#      落在第 4 列；2024/2025 正常。这里把每行归一为
+#      指标名称/本季度/上季度 三列并去掉“【第N页表格分块】”占位行。
+# 经营指标表（p11 上半页）通用提取四年均正确，extractor 不动它。
+
+company:
+  canonical: 渤海财险
+  aliases: [渤海财产保险股份有限公司, 渤海财产保险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 四年模板一致：主表从 p11 跨到 p12；S02 实际资本表、S05 最低资本表
+    各跨两页；近三年投资收益率在 2023-2025 只是 p13 的一句话（2022 年无此节）。
+    主表、两张资本表、近三年收益率与流动性监测表由 extractor 按 PDF 正文重建/归一，
+    经营指标表沿用通用提取。
+  extractor: bohai
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11, 12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要偿付能力指标, 偿付能力充足率指标]
+    content_terms: [认可资产, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+    required_items: [认可资产, 实际资本, 最低资本]
+    # 关掉 Profile 的页内区域裁剪：2023-2025 的线框帧里没有标签列，
+    # 区域裁剪只会留下纯数值帧，整页交给 extractor 按正文重建。
+    start_item: []
+    end_item: []
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    content_terms: [保险业务收入, 净利润, 综合成本率]
+    required_items: [保险业务收入, 净利润]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24, 29]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    anchor_terms: [实际资本表, S02-实际资本明细表, 实际资本各项指标对比表]
+    content_terms: [核心一级资本, 实际资本合计, 认可资产]
+    required_items: [核心一级资本]
+    # 续页无表头，区域裁剪会丢行；整页交给 extractor 按“行次”重建。
+    start_item: []
+    end_item: []
+
+  MINIMUM_CAPITAL:
+    expected_pages: [30, 35]
+    tolerance: 2
+    page_match: prefer
+    include_continuation: true
+    max_pages: 2
+    anchor_terms: [最低资本表, S05-最低资本表]
+    content_terms: [量化风险最低资本, 控制风险最低资本, 附加资本, 最低资本]
+    required_items: [量化风险最低资本]
+    # Profile 终止词“最低资本合计/最低资本”会命中最前几行，2023 只剩 10 行。
+    start_item: []
+    end_item: []
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [13, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率, 近三年（综合）投资收益率]
+    content_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率]
+    # 本表与流动性监测表续页同页且不是网格；整页交给 extractor 按正文合成。
+    start_item: []
+    end_item: []
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标, 监管指标]
+    header_terms: [本季度, 上季度]
+    content_terms: [LCR1, 经营活动净现金流, 现金及流动性管理工具占比, 季均融资杠杆比例]
+    required_items: [现金及流动性管理工具占比]

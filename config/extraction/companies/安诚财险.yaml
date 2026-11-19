@@ -1,0 +1,140 @@
+# 安诚财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 公司特点：中小财险。偿付能力报告的章节顺序与监管模板一致，
+# 但正文表格由 Word 导出，文本层把一行指标压成“项目 期末值 期初值”，
+# 长项目名会被拆成“项目头 / 数值 / 项目尾”三行（如
+# “非寿险业务保险风险-保费及准备金风险最低 / 546,588,938.46 549,296,590.53 / 资本”）。
+# 通用线框规则在两个位置串票：
+#   1) 十、实际资本：一页挤三张表（（一）实际资本 /（二）认可资产 /（三）认可负债），
+#      6 列表的列线被套到 3 列的实际资本表上，金额被拆成两半；
+#   2) 四、主要指标第 2 页：流动性风险监测指标 + 主要经营指标 + 效益类指标同页，
+#      整页帧把监测表 10 行拼到经营表表头之前，并夹进“指标名称/本季度数/… ”伪行。
+# 因此本文件把六张表钉到实测物理页，并交给 ancheng 提取器按文本层重建 rows。
+#
+# 实测物理页（页码从 1 开始，容差 2）：
+#   表                                2022  2023  2024  2025
+#   SOLVENCY_MAIN                      14    13    12    11   （四、主要指标（一）主要偿付能力指标）
+#   NON_LIFE_OPERATING_METRICS         15    14    13    12   （（四）主要经营指标，跨页到下一页（六）规模类）
+#   LIQUIDITY_MONITORING               15    14    13    12   （（三）流动性风险监测指标，与经营表同页）
+#   THREE_YEAR_INVESTMENT_RETURN      —      15    14    13   （仅正文句，2022 年报没有该表）
+#   ACTUAL_CAPITAL                     23    23    22    21   （十、实际资本（一）实际资本）
+#   MINIMUM_CAPITAL                    24    25    23    22   （十一、最低资本）
+#
+# 2022 年报共 24 页，2023/2025 年报各多一张“（七）近三年（综合）投资收益率”正文段，
+# 2023 起四、主要指标整体前移 1 页、2024 起再前移 1 页、2025 起再前移 1 页，
+# 见 structure_versions。
+#
+# 提取路径：页内区域裁切对安诚更差（最低资本从“最低资本”起止裁到只剩 3-4 行；
+# 实际资本的区域起点“认可资产”落在“各项非认可资产的账面价值”里，起止倒挂），
+# 所以 SOLVENCY_MAIN 以外的五张表统一 start_item: [] + end_item: [] 关掉区域裁切，
+# 改走“整页 frames + _select_target_frames()”，再由 ancheng 提取器按 pdfplumber
+# 文本重建（金额/期间列按词坐标归列，三行式换行标签按上下距离归行）。
+
+company:
+  canonical: 安诚财险
+  aliases: [安诚财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: ancheng
+  notes: 安诚文本层“项目/期末值/期初值”单行或三行式换行，通用线框在两处串票；页码按实测钉死，禁用页内区域裁切，改由 ancheng 按文本层重建五张表（主表保留通用结果）
+
+tables:
+  # ---------------- 2022 版式（基准） ----------------
+  SOLVENCY_MAIN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    # 本表一页只有（一）主要偿付能力指标 15 行，通用线框本来就干净；
+    # 但页末紧跟（二）流动性风险监管指标，必须保留起止裁切，否则整页 29 行都会进来。
+    start_item: [指标名称, 认可资产]
+    end_item: [监管指标名称, 流动性覆盖率, LCR1]
+
+  NON_LIFE_OPERATING_METRICS:
+    # （四）主要经营指标 +（五）效益类在 15 页，（六）规模类跨到 16 页。
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+    # 只取页锚点本身：规模类指标那一页由提取器自己按章节标题续读，
+    # 否则定位器会把它当成续页再建一张同名表（标准化时重复计数）。
+    max_pages: 1
+
+  LIQUIDITY_MONITORING:
+    # 与主要经营指标同页，靠锚点词（规模保费同比增速等）与 ancheng 的章节切片区分；
+    # 监测表只有一页，禁止续页（否则第 16 页规模类表会被再建一张同名表）。
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+    max_pages: 1
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    # 2022 年报没有该表，也不设窗口：全文锚点未命中时自然为空。
+    start_item: []
+    end_item: []
+
+  ACTUAL_CAPITAL:
+    # 一页三张表（实际资本 / 认可资产 / 认可负债），通用线框必串，由 ancheng 重建。
+    expected_pages: [23]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+  MINIMUM_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    start_item: []
+    end_item: []
+
+structure_versions:
+  - since: 2023
+    notes: 2023 起四、主要指标整体前移 1 页（24 页→25 页）；新增（七）近三年（综合）投资收益率正文句
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [14]
+      LIQUIDITY_MONITORING:
+        expected_pages: [14]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [15]
+      ACTUAL_CAPITAL:
+        expected_pages: [23]
+      MINIMUM_CAPITAL:
+        expected_pages: [25]
+
+  - since: 2024
+    notes: 2024 年报 23 页，主要指标再前移 1 页；实际资本/最低资本各前移 1 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [12]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [13]
+      LIQUIDITY_MONITORING:
+        expected_pages: [13]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [14]
+      ACTUAL_CAPITAL:
+        expected_pages: [22]
+      MINIMUM_CAPITAL:
+        expected_pages: [23]
+
+  - since: 2025
+    notes: 2025 年报 22 页，主要指标再前移 1 页；实际资本/最低资本各前移 1 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [11]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [12]
+      LIQUIDITY_MONITORING:
+        expected_pages: [12]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [13]
+      ACTUAL_CAPITAL:
+        expected_pages: [21]
+      MINIMUM_CAPITAL:
+        expected_pages: [22]

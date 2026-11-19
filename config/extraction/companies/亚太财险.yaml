@@ -1,0 +1,74 @@
+# 亚太财险：公司级提取规则（2022-2025 跨年度复用，不按年维护）
+#
+# 页码依据（物理页，四年实测；tolerance: 0 即精确窗口）：
+#   SOLVENCY_MAIN                 14 / 14 / 15 / 14
+#   NON_LIFE_OPERATING_METRICS    15-16 / 15-16 / 16-17 / 15-16（跨页）
+#   ACTUAL_CAPITAL                24 / 24 / 24 / 23
+#   MINIMUM_CAPITAL               27 / 27 / 27 / 26
+#   THREE_YEAR_INVESTMENT_RETURN  — / 15 / 17 / 16（2022 年报无该表）
+#   LIQUIDITY_MONITORING          14-15 / 14-15 / 15-16 / 14-15
+#
+# 封面页只印“2022年第4季度偿付能力报告摘要”，不含公司名（四年一致），
+# 因此路由依赖命令行/批量传入的 canonical；aliases 登记法定全称，供
+# 正文出现公司全称的版本兜底。
+#
+# 通用规则的四类缺口由 company.extractor=yatai 修复（见
+# services/company_extractors/yatai.py 与 plans/company-亚太财险-extraction.md）：
+#   1) 经营表与“主要流动性指标/前五大/各渠道”同页且跨页，整页提取金额列被
+#      列边界切成两段（1,182,885,884. / 46）；
+#   2) 最低资本 S05 有 30 余行，通用流程只保留 3-4 行；
+#   3) 流动性监测表起始页与偿付能力主表同页，通用定位常抓错表；
+#   4) 2025 实际资本/最低资本改为“行次+项目”四列版式。
+
+company:
+  canonical: 亚太财险
+  aliases: [亚太财产保险有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: yatai
+  notes: >-
+    经营表续行出现在“（四）近三年”“（五）非车险前五大”“（六）各渠道”之后，
+    不能按章节标题截断，由提取器按“标签以（元）/（%）结尾 + 两个数值”逐行
+    收集并跨页重建；实际资本/最低资本按“行次+项目+期末数+期初数”重建。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14, 15]
+    tolerance: 0
+    page_match: prefer
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 16, 17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [23, 24]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [实际资本]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [26, 27]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [最低资本]
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15, 16, 17]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [投资收益率, 综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14, 15, 16]
+    tolerance: 0
+    page_match: prefer
+    anchor_terms: [主要流动性指标]
+    required_items: [规模保费同比增速, 经营活动净现金流]

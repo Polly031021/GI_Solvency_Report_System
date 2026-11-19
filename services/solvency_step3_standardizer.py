@@ -1611,12 +1611,10 @@ def standardize_to_target(
             if code and unit:
                 standard_unit_map[code] = unit
 
-        # ★ 豁免名单：这些指标原始单位是"元"（或"元/股"、"元/车"），
-        #   不是整表的"万元"，不做换算
-        _UNIT_CONVERT_EXEMPT_CODES = {
-            "EPS",                # 基本每股收益（元/股）
-            "MOTOR_AVG_PREMIUM",  # 车险车均保费（元/车）
-        }
+        # ★ 豁免名单：原 EPS / MOTOR_AVG_PREMIUM 硬豁免已取消。
+        #   这类指标常随整表以"万元"列示，硬豁免会把 0.12 万元的车均保费
+        #   直接标成 0.12 元；改用正常换算，无法解析的单位本就不会被换算。
+        _UNIT_CONVERT_EXEMPT_CODES = frozenset()
 
         for idx, row in data.iterrows():
             code = str(row["指标编码"]).strip()
