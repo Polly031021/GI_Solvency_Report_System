@@ -113,7 +113,7 @@ Data/、gi_solvency_cache/、venv/、*.xlsx  全部在 .gitignore 中
 | PDF 定位 | `solvency_pdf_locator.py`、`semantic_period_fallback.py` | 文字版/扫描版判断、目标页物理页码定位 |
 | 混合流水线 | `solvency_hybrid_pipeline/`（`locator_rule`、`locator_vision`、`page_extract`、`extract`） | 规则法优先，失败转大模型 |
 | 表格提取 | `solvency_rule_table_extractor.py`、`solvency_table_extractor.py`、`solvency_table_region.py`、`solvency_table_boundaries.py`、`table_number_repair.py`、`table_strategy_*.py` | 规则法表格识别、边界、数字修复、策略注册 |
-| 提取配置/规则 | `extraction_config.py`、`extraction_rules.py`、`company_extractors/` | 表级 YAML、公司级页码窗口与别名、公司专属后处理（平安试点） |
+| 提取配置/规则 | `extraction_config.py`、`extraction_rules.py`、`company_extractors/` | 表级 YAML、公司级页码窗口与别名、公司专属后处理（89 家：54 实修 + 35 占位） |
 | AI 提取 | `solvency_ai_table_extractor/`（`grid`、`llm`、`units`、`source_profile`） | 图片表格识别、单位换算 |
 | 标准化 | `solvency_step3_standardizer.py`、`solvency_normalizer.py`、`solvency_disclosure_normalizer.py`、`step3_metric_gap.py`、`solvency_metric_registry.py` | 生成标准窄表、派生指标、缺口检查 |
 | 校验 | `solvency_validator.py` | 勾稽规则（公式/跨表/完整性） |
@@ -184,8 +184,9 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
 
 ```
 config/extraction/tables.yaml              表级定义（所有公司共用，代码内置默认兜底）
-config/extraction/companies/<公司>.yaml    公司级规则（页码窗口、锚点、extractor）
-services/company_extractors/<name>.py      版式特例后处理（可选，当前仅 pingan）
+config/extraction/companies/<公司>.yaml    公司级规则（页码窗口、锚点、extractor），当前 89 家
+services/company_extractors/<name>.py      公司级后处理：54 家实修 + 35 家占位（pass-through）
+services/company_extractors/_main_table.py 主表重建 helper（金额跨行/行次竖排/表头缺列）
 ```
 
 - 路由键：封面 `公司`（别名归一）+ `报告年度`（仅用于选 `structure_versions`）。
@@ -197,8 +198,20 @@ services/company_extractors/<name>.py      版式特例后处理（可选，当�
   - 单文件：`ui/step2_extraction.build_tables_from_page_results`（含单表重提取）
 - **必须同步 `table.rows` 与 `table.table_blocks`**：STEP3 `_expand_table_blocks`
   优先读 blocks，只改 rows 不生效。
-- 调试：`tests/test_three_companies_extraction.py`（三家×多年体检，写 Excel 到 tmp/），
+- 调试：`tests/test_three_companies_extraction.py`（`--company` 指定多家、`--years` 多年，写 Excel 到 tmp/），
   `tests/test_company_extractor_integration.py`（extractor 入口/幂等/blocks 同步）。
+- **规则加载容错**：`load_company_rules(strict=False)` 跳过坏 YAML/重复 canonical/冲突别名，
+  并记入 `get_load_warnings()`；`resolve_rule` 遇到配置错误会自动以 tolerant 方式重载，
+  单份 YAML 写错不会再让全目录降级成“0 表”。
+- **主表被拆碎时用重建 helper**：`_main_table.rebuild_main_rows(doc, pages)` 按词坐标重建五列主表；
+  参考 `changjiang` / `rongtong` / `dongwu` / `zhongmei` / `byd` 五个 extractor。
+  新增公司时先跑通用规则，只有关键指标对不上再写 extractor。
+- **扫描件**：整本判为 SCANNED 时 `batch_processor._auto_vision_for_scanned` 自动改走 hybrid 视觉，
+  需要会话里配置 `llm_api_key/base_url/model`；未配置时在说明里提示，不再静默 0 表。
+- **新增一家公司的步骤**：写 YAML → 跑 `tests/test_three_companies_extraction --company ...` →
+  必要时写 extractor（`@register` + 同步 rows/table_blocks）→ 在
+  `tests/test_three_companies_extraction.COMPANY_FILES` 注册 → 写 `plans/company-<公司>-extraction.md`。
+- 全量覆盖记录与遗留清单见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
 - 详细方法论与踩坑记录见 `plans/company-extraction-playbook.md`。
 
 ---
@@ -355,12 +368,18 @@ python tools/fast_layout.py            # 之后：只重"测量+排版+渲染"�
 # 语法
 ./venv/Scripts/python.exe -m py_compile services/report_pdf/*.py step7_solvency/*.py
 
-# 提取配置与公司规则
+# 提取配置与公司规则（89 家）
 ./venv/Scripts/python.exe -m tests.test_extraction_config
 ./venv/Scripts/python.exe -m tests.test_company_rule_catalog
 ./venv/Scripts/python.exe -m tests.test_company_extractor_integration
 
-# 三家×多年体检（写 Excel 到 tmp/three_companies_extraction/，约 8-10 分钟）
+# 扫描件自动转视觉（未配模型接口时应给出提示而不是 0 表）
+./venv/Scripts/python.exe -m tests.test_scanned_auto_vision
+
+# 新年度页码体检（拿到 2026 等新 PDF 先跑，按“建议 expected_pages”回填 YAML）
+./venv/Scripts/python.exe tools/new_year_check.py --pdf-dir "Data/pdfs(2026)" --year 2026
+
+# 逐年体检（--company 可指定多家；不带默认三家；写 Excel 到 tmp/three_companies_extraction/）
 ./venv/Scripts/python.exe -m tests.test_three_companies_extraction --years 2025
 
 # STEP7 交互与雷达
@@ -397,9 +416,15 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 - 同比口径统一为"部分年度不参与增速"。
 - 提取表定义外置到 `config/extraction/tables.yaml`，内置常量保留兜底；Profile 的
   `NON_LIFE_OPERATING_METRICS` 与内置 `OPERATING_METRICS` 通过 aliases 共用定义。
-- 三家公司（人保/平安/太保）各一份跨年度 YAML，覆盖 6 张目标表，页码容差 ±2。
-- 平安专属 extractor：修复表头/行标签/金额粘连、补全经营表、LCR 标签归一；
-  2024/2025 均 6 表 / 187 条 / 84 编码，两年完全一致。
+- **89 家公司各一份跨年度 YAML**，覆盖 6 张目标表（页码窗口 ±2、锚点、按年 structure_versions）；
+  `company_extractors/` 54 家实修 + 35 家占位，2024 全量 84 家有报告：
+  82 成功，2 例纯扫描件（中煤 2024、恒邦 2024）按“不可提取”登记。
+- 主表重建 helper：`_main_table.rebuild_main_rows` + 长江/融通/东吴/中煤 2022/比亚迪 extractor，
+  修复金额跨行、行次竖排、表头缺列导致的关键值错列。
+- 扫描件整本自动转视觉（`_auto_vision_for_scanned`），未配置模型时给出明确提示。
+- 缺失指标双通道：批量 Excel 增加 `缺失指标清单`/`公司覆盖汇总`，STEP3 下载区显示缺口摘要。
+- `tools/new_year_check.py`：新年度页码体检，输出“建议 expected_pages”，异常退出码 2。
+- `plans/data-coverage-audit.md`：列表 89 家 vs Data 文件逐年盘点、9 家年份不全、33 组名称差异。
 - 期间口径统一：本季度数/上季度数 → 本季度末数/上季度末数。
 - STEP2 单文件与批量提取共用同一套 extractor 入口，日志显示“公司专属规则”。
 - `keep_unmapped`（默认关闭）：体检脚本可保留未匹配标准指标的原始行（`RAW_*`）。
@@ -420,7 +445,8 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 | 金标准对比 | `gold_standard/manifest.json` 不在仓库内，该功能默认跳过（本地可自建） |
 | 自动化测试 | 仍是脚本式，未接入 pytest/CI |
 | R4 缺失原因透出 | `RULE_NOT_FOUND` / `PAGE_OUT_OF_TOLERANCE` / `ANCHOR_NOT_FOUND` 等尚未写入 STEP2 日志、STEP3 诊断备注、STEP7 缺口清单 |
-| 其余公司配置 | 仅人保/平安/太保三份 YAML；其余 86 家仍走通用规则 |
+| 少数公司版式遗留 | 劳合社无资本绝对值、利宝大额折行、法巴天星 S02 表头错位、黄河经营表标签裂；见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md` §6 |
+| 扫描件联调 | 中煤 2024/2025、恒邦 2024、太平科技 2025 需配置模型接口后实测视觉链路 |
 | 勾稽告警配置 | `SCHEMA_ALLOWED_PERIOD`（预测/累计期间不在字典允许范围）、比率勾稽容差 0.0001 过严（舍入差 0.01-0.05 百分点），属既有配置问题，待业务确认 |
 
 ### 近期主要变更（供追溯）
@@ -444,6 +470,12 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 - **提取规则体系（2026-11）**：新增 `services/extraction_config.py`、`extraction_rules.py`、
   `company_extractors/pingan.py`；`locate_tables`
   支持 `expected_pages/tolerance/page_match`，`PageMatch` 增加 `rule_note`。
+- **提取覆盖扩到 89 家（2026-11）**：新增 86 份 YAML（3 份原有）、40+ extractor、86 份 `plans/company-*.md`；
+  共享层修复：整页多表帧隔离、区域失败回退整页、百分比误删、表头空格丢列、
+  “百元保费”挂靠闸门、`(单位:万元)` 注解、续页白名单、公司签名覆盖、边界重扫、
+  MOTOR/EPS 换算豁免、坏 YAML 容错、主表重建、PyMuPDF 2.x 崩溃规避。
+  提交：`b15cacd`、`98f9501`、`027361c`、`d49490b`、`33d0468`、`b32fd66`。
+  全量记录见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
 - **期间口径**：`solvency_normalizer` 统一本季度末/上季度末；
   `test_new_workflow_behavior` 的期间断言同步更新。
 - **STEP7**：`report.py` Track 候选改为类型池并置顶；`rendering.py` 统一排序；
