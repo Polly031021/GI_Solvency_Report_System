@@ -21,6 +21,7 @@
 
 company:
   canonical: 日本财产
+  extractor: riben
   aliases: [日本财产保险（中国）有限公司, 日本财产保险, 日本财险, SOMPO]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

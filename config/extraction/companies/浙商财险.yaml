@@ -15,6 +15,7 @@
 
 company:
   canonical: 浙商财险
+  extractor: zheshang
   aliases: [浙商财产保险股份有限公司, 浙商财产]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

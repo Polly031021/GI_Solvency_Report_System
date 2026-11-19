@@ -18,6 +18,7 @@
 # 页码容差 2、page_match: prefer：窗口内按锚点匹配，未命中时回退全文锚点。
 company:
   canonical: 安信农业
+  extractor: anxinnongye
   aliases: [太平洋安信农业保险股份有限公司, 安信农业保险股份有限公司, 安信农险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

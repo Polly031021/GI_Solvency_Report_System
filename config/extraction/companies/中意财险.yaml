@@ -27,6 +27,7 @@
 
 company:
   canonical: 中意财险
+  extractor: zhongyi
   aliases:
     - 中意财产
     - 中意财产保险有限公司

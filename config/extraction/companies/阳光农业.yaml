@@ -32,6 +32,7 @@
 
 company:
   canonical: 阳光农业
+  extractor: yangguangnongye
   aliases:
     - 阳光农业相互保险公司
   profile_id: NON_LIFE_SOLVENCY

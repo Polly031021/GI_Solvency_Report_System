@@ -17,6 +17,7 @@
 
 company:
   canonical: 华农保险
+  extractor: huanong
   aliases: [华农财产保险股份有限公司, 华农财产, 华农财险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

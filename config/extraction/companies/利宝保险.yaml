@@ -35,6 +35,7 @@
 
 company:
   canonical: 利宝保险
+  extractor: libao
   aliases:
     - 利宝保险有限公司
     - 利宝互助

@@ -19,6 +19,7 @@
 
 company:
   canonical: 汇友相互
+  extractor: huiyou
   aliases:
     - 汇友财产相互保险社
     - 汇友互助

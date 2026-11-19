@@ -26,6 +26,7 @@
 
 company:
   canonical: 广东能源自保
+  extractor: guangdong
   aliases: [广东能源财产保险自保有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

@@ -21,6 +21,7 @@
 
 company:
   canonical: 安华农业
+  extractor: anhua
   aliases:
     - 安华农业保险股份有限公司
     - 安华农业保险

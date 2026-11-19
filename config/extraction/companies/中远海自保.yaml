@@ -24,6 +24,7 @@
 
 company:
   canonical: 中远海自保
+  extractor: zhongyuanhai
   aliases: [中远海运财产保险自保有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

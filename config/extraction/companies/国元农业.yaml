@@ -20,6 +20,7 @@
 
 company:
   canonical: 国元农业
+  extractor: guoyuan
   aliases: [国元农业保险股份有限公司, 国元农业保险, 国元农险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

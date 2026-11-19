@@ -22,6 +22,7 @@
 #   5) 单位全程为“元”，百分比列为 “423.47” 文本；"-" 表示不适用（无二级资本等）。
 company:
   canonical: 中原农业
+  extractor: zhongyuan
   aliases: [中原农业保险股份有限公司, 中原农险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

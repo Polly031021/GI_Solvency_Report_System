@@ -20,6 +20,7 @@
 
 company:
   canonical: 凯本财险
+  extractor: kaiben
   aliases:
     - 凯本财产保险（中国）有限公司
     - 凯本财产保险

@@ -22,6 +22,7 @@
 
 company:
   canonical: 史带财险
+  extractor: shidai
   aliases: [史带财产保险股份有限公司, 史带财产保险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

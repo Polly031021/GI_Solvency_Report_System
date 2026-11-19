@@ -21,6 +21,7 @@
 #   5) 单位全程为“元”；“-”表示不适用（无核心二级/附属二级资本、无农险/信用保证险等）。
 company:
   canonical: 鑫安汽车
+  extractor: xinan
   aliases: [鑫安汽车保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

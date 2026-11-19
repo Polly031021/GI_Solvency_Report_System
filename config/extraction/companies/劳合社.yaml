@@ -23,6 +23,7 @@
 
 company:
   canonical: 劳合社
+  extractor: laoheshe
   aliases: [劳合社保险（中国）有限公司, 劳合社保险（中国）, 劳合社中国, "Lloyd's Insurance Company (China) Limited"]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

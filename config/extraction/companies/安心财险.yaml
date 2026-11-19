@@ -23,6 +23,7 @@
 
 company:
   canonical: 安心财险
+  extractor: anxincaixian
   aliases: [安心财产, 安心财产保险有限责任公司, 安心财产保险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

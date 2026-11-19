@@ -24,6 +24,7 @@
 
 company:
   canonical: 前海财险
+  extractor: qianhai
   aliases: [前海联合, 前海联合财险, 新疆前海联合财产保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

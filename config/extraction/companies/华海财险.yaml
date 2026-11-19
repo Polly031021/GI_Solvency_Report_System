@@ -19,6 +19,7 @@
 #   4) 单位全程为“元”；“-”表示不适用（无核心二级/附属二级资本）。
 company:
   canonical: 华海财险
+  extractor: huahai
   aliases: [华海财产, 华海财产保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

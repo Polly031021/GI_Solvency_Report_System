@@ -23,6 +23,7 @@
 
 company:
   canonical: 黄河财险
+  extractor: huanghe
   aliases: [黄河财产保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1

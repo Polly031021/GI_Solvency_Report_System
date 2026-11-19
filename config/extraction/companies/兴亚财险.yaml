@@ -22,6 +22,7 @@
 
 company:
   canonical: 兴亚财险
+  extractor: xingya
   aliases:
     - 日本兴亚
     - 日本兴亚财产保险（中国）有限责任公司

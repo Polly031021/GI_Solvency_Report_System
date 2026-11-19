@@ -27,6 +27,7 @@
 
 company:
   canonical: 都邦保险
+  extractor: dubang
   aliases: [都邦财产保险股份有限公司, 都邦财产, 都邦财险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
