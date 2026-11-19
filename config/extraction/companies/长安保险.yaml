@@ -1,0 +1,97 @@
+# 长安保险（长安责任保险股份有限公司）：公司级提取规则
+#
+# 数据实况：Data/pdfs(2022..2025)/ 中只有 `pdfs(2022)/长安保险.pdf`（2022Q4，
+# 32 页）。2023–2025 三年无报告文件（brief_rest.md §7 已注明“长安保险 仅 2022，
+# 公司已退出”），故 structure_versions 只登记 2022；后三年按“原文缺失”交付，
+# 不造数、不配置无效年份窗口。
+#
+# 页码依据：2022 实测物理页（容差 ±2）
+#   SOLVENCY_MAIN                13  （S01 偿付能力充足率指标，8 行 1 block）
+#   NON_LIFE_OPERATING_METRICS   12  （四、主要经营指标（财险），13 行）
+#   ACTUAL_CAPITAL               24  （S02-实际资本明细表，22 行）
+#   MINIMUM_CAPITAL              31-32（S05-最低资本表，32 行 4 blocks，跨页）
+#   LIQUIDITY_MONITORING         10  （流动性风险监测指标，22 行 2 blocks）
+#   THREE_YEAR_INVESTMENT_RETURN 2022 年报无该小节（定位为空）
+#
+# canonical 取 PDF 文件主干名“长安保险”（brief §6 硬约束）；封面公司名为
+# “长安责任保险股份有限公司”，列表/口语名“长安责任”一并登记在 aliases。
+#
+# 单位：S01/S02 为万元，S05 为元（工商银行模板式的两套单位并存），
+# 归一化按 unit 字段换算，勿手工改数。
+#
+# 已处理版式（前两条由 services/company_extractors/changan.py 处理）：
+#   0) S01/S02 页面无「单位：万元」行，通用嗅探得「未识别」→ STEP3 按默认「元」再除
+#      10000（认可资产会变成 71.07 万元）。extractor 按量级补单位：S01/S02=万元；
+#      经营表同页同时出现「单位：元」和「单位：万元」，嗅探取到后者，按量级纠正为元。
+#      经营表区域又从「四、主要经营指标」起裁、丢失表头，两列金额同标「本季度末数」
+#      互斥后整条丢弃，extractor 同步 rows 与 table_blocks 补回三列表头。
+#   1) S05 跨 31-32 两页，第 32 页被切成 4 个 table_block（含“类型/保费风险最低资本”
+#      等险种明细子表），通用分块已用【第32页表格分块】标记保留，最低资本合计在第一块；
+#   2) 流动性表同样 2 blocks（LCR 表 + 监测指标表），同页不同线框；
+#   3) 原表数值粘连（如“130,548,41 7”“10,469,763.”）属 PDF 文本层空格切分，
+#      列数=数据列数已校验，不做修数。
+
+company:
+  canonical: 长安保险
+  aliases: [长安责任保险股份有限公司, 长安责任]
+  profile_id: NON_LIFE_SOLVENCY
+  extractor: changan
+  rule_version: 1
+  notes: >-
+    仅 2022 年一份报告（2022Q4，32 页），2023 年起公司不再单独披露偿付能力报告。
+    2022 年实际资本为负（-5,050.37 万元），核心/综合偿付能力充足率同为 -9.18%，
+    属监管接管前的原文化数值，不做修正。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    # 第 24 页 S02 也含“认可资产/实际资本”，用章节标题钉住第 13 页。
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 万元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    unit: 万元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表, 实际资本表]
+    required_items: [核心一级资本, 实际资本, 量化风险最低资本]
+    unit: 万元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [31, 32]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 最低资本]
+    unit: 元
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 流动性覆盖率]
+    unit: 元
+
+structure_versions:
+  - since: 2022
+    notes: >-
+      32 页；S01 第 13 页、经营表第 12 页（早于 S01，为“四、主要经营指标”章节）、
+      S02 第 24 页、S05 第 31-32 页跨页、流动性第 10 页。无近三年投资收益率小节。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [12], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [24], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [31, 32], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [10], tolerance: 2, page_match: prefer}

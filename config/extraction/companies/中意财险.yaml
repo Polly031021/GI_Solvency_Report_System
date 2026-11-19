@@ -1,0 +1,180 @@
+# 中意财险：公司级提取规则（2022-2025，外资系）
+#
+# 数据源：Data/pdfs(2022..2025)/中意财险.pdf（封面全称“中意财产保险有限公司”）
+#
+# 版式要点（2022-2025 实测，物理页，页数 32/33/32/34）：
+#   1. 全部 6 张目标表均为 Word 导出的规则线框表，pdfplumber 直接可取；
+#      表头为“指标名称 | 本季度数 | 上季度数 | 下季度预测数”等 4 列，
+#      数据列数与表头一致，无需公司 extractor。
+#   2. 报告书整体页码逐年漂移 1-2 页（2023 最晚、2025 最早），
+#      2022 年报没有“近三年（综合）投资收益率”小节（目录章号也少一节），
+#      故按年写 structure_versions 钉死各表起始页，tolerance 2 兜住
+#      同一年内表格跨页/续页。
+#   3. 长指标名在文本层被折行（如“其中：量化风险最低资 本”“非寿险业务保险风险 最低资本”），
+#      标准化层按去空白后包含匹配即可命中，不影响 click 行映射。
+#   4. 单位均为元，百分比列为 “161.34%” 文本；“-” 表示该项不适用（无二级资本等）。
+#
+# 页码窗口（起始页；2022 / 2023 / 2024 / 2025）：
+#   SOLVENCY_MAIN                 11 / 13 / 12 / 11
+#   NON_LIFE_OPERATING_METRICS    13 / 15 / 14 / 13（表体跨到下一页）
+#   ACTUAL_CAPITAL                27 / 28 / 27 / 28
+#   MINIMUM_CAPITAL               31 / 32 / 31 / 33
+#   THREE_YEAR_INVESTMENT_RETURN  —  / 16 / 15 / 14（2022 年报无此表）
+#   LIQUIDITY_MONITORING          11 / 13 / 12 / 11（表体跨到下一页）
+#
+# 2024 关键值核对：认可资产 4,128,618,407.42；认可负债 3,210,132,702.43；
+#   实际资本 918,485,704.99；最低资本 569,291,265.07；综合偿付能力充足率 161.34%。
+
+company:
+  canonical: 中意财险
+  aliases:
+    - 中意财产
+    - 中意财产保险有限公司
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    外资系标准模板，6 表线框规整；按年钉起始页，tolerance 2 吸收跨页；
+    2022 年报缺“近三年投资收益率”小节，按原文缺失验收。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    start_item: []
+    end_item: []
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [27]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [实际资本]
+    start_item: []
+    end_item: []
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [31]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [最低资本]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 1
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    start_item: []
+    end_item: []
+    required_items: [经营活动净现金流, 规模保费同比增速, 季均融资杠杆比例]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年报正文最早（32 页），无“近三年投资收益率”小节；其余章节整体前移
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [11]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [13]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [27]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [31]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        # 2022 年报原文缺失，放宽窗口后靠 required_items 兜底，未命中即跳过
+        expected_pages: [16]
+        tolerance: 3
+      LIQUIDITY_MONITORING:
+        expected_pages: [11]
+        tolerance: 2
+
+  - since: 2023
+    notes: 2023 年报整章后移约 2 页（新增近三年投资收益率小节）
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [15]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [28]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [32]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [16]
+        tolerance: 2
+      LIQUIDITY_MONITORING:
+        expected_pages: [13]
+        tolerance: 2
+
+  - since: 2024
+    notes: 2024 年报回到 32 页，起点比 2023 早 1 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [12]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [14]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [27]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [31]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [15]
+        tolerance: 2
+      LIQUIDITY_MONITORING:
+        expected_pages: [12]
+        tolerance: 2
+
+  - since: 2025
+    notes: 2025 年报 34 页但正文起点最早；最低资本章后移 2 页（33）
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [11]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [13]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [28]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [33]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [14]
+        tolerance: 2
+      LIQUIDITY_MONITORING:
+        expected_pages: [11]
+        tolerance: 2

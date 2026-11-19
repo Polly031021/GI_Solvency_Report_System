@@ -1,0 +1,111 @@
+# 燕赵财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   TABLE                         2022  2023  2024  2025
+#   SOLVENCY_MAIN                 13    13    14    13
+#   NON_LIFE_OPERATING_METRICS    15    15    16    15
+#   ACTUAL_CAPITAL                24    25    25    25
+#   MINIMUM_CAPITAL               29    30    30    30
+#   THREE_YEAR_INVESTMENT_RETURN  无    15    16    15
+#   LIQUIDITY_MONITORING          14    14    15    14
+#
+# 封面公司名四年一致：“燕赵财产保险股份有限公司”；均为四季度报告。
+# 全文 31-32 页，2024 版式整体后移 1 页（多一页 S01/S02 过渡页），2025 又回到 2023 版式。
+#
+# 已知版式差异：
+#   1) 2022 年全册无“近三年”字样，近三年投资收益率表原文缺失（不是提取遗漏）；
+#      该表 expected_pages 仅作占位，靠 required_items 兜底。
+#   2) 偿付能力指标表标题为“偿付能力充足率指标”，用该章节标题钉页，
+#      避免 2025 年第 13 页与 S01 表混排时被别的含“充足率”的块抢走。
+#   3) 实际资本表标题为“S02-实际资本明细表”，最低资本表为“S05-最低资本表”；
+#      anchor 用含“明细”的全称，防止与偿付能力指标表里的“实际资本”行混淆。
+#   4) 最低资本表 2024 只取到 4 行（量化风险最低资本/未考虑特征系数前/寿险业务），
+#      属原文分页截断，续页无表头，收表时按原文缺失处理，不造数。
+#
+# 金额单位：偿付能力指标表、实际资本表、最低资本表表内标注“单位：元”；
+# 经营指标表表内标注“单位：万元”，两套单位不可混用。
+
+company:
+  canonical: 燕赵财险
+  aliases: [燕赵财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 四年版式稳定，2024 年各表整体后移一页；2022 年缺近三年投资收益率表，
+    属原文披露缺失。偿付能力指标表用章节标题“偿付能力充足率指标”定位。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入]
+    end_item: [综合成本率]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [29]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    # 2022 年原文无此表；页码为 2022 经营页占位，定位失败属预期。
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年与 2025 年版式一致；近三年收益率表首次出现
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [15], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 2}
+
+  - since: 2024
+    notes: 2024 年多一页过渡页，各表整体后移一页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [16], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [15], tolerance: 2}
+
+  - since: 2025
+    notes: 2025 年回到 2023 版式
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [15], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 2}

@@ -1,0 +1,101 @@
+# 法巴天星：公司级提取规则（仅 2025 年报告）
+#
+# 页码依据：2025Q4 报告（法巴天星.pdf，共 24 页）实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2025=9
+#   NON_LIFE_OPERATING_METRICS    2025=10
+#   ACTUAL_CAPITAL                2025=18
+#   MINIMUM_CAPITAL               2025=23
+#   THREE_YEAR_INVESTMENT_RETURN  2025=10
+#   LIQUIDITY_MONITORING          2025=10（与经营表、近三年表同页）
+#
+# 封面公司名为“北京法巴天星财产保险股份有限公司”，文件名主干“法巴天星”
+# 与 canonical 一致；通用封面前缀正则未命中，由调用方公司名兜底路由，
+# 全称与简称登记在 aliases（不要重复登记 canonical 本身）。
+#
+# 版式说明（2025 唯一一期）：
+#   1) 6 张目标表均定位成功，主表 16 行、经营表 28 行、实际资本 31 行、
+#      流动性 11 行，表头列数与数据列数一致（3 列）；
+#   2) 实际资本明细表带“行次”列（1/1.1/1.2.1...），且期初数列未在
+#      网格中切出，标准化口径见 plans/company-法巴天星-extraction.md；
+#   3) 最低资本表只切出 4 行（量化风险最低资本、未考虑特征系数前、
+#      寿险业务保险风险合计），其余子项未进入 rows，属通用网格缺口；
+#   4) 经营表保险业务收入、签单保费均为“-”，综合成本率“--/不适用”，
+#      系公司 2025 年新设、尚未开展业务，按原文缺失处理，不补 0；
+#   5) 报告单位均为人民币元，不写死 unit，交由 STEP3 统一换算万元。
+#
+# 本次只落 YAML，不写专属 extractor（任务约束）；上述 2)/3) 缺口列入遗留。
+
+company:
+  canonical: 法巴天星
+  aliases:
+    - 北京法巴天星财产保险股份有限公司
+    - 法巴天星财产保险股份有限公司
+    - 法巴天星财产保险有限公司
+    - 法巴天星财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2025 年新设外资财险，报告仅一期（2025Q4）。模板接近平安/太保，
+    章节名为“偿付能力充足率指标/主要经营指标（财险）/S02-实际资本明细表/
+    S05-最低资本表/流动性风险监测指标”。主表与经营表单位元、表头规范；
+    经营表多项业务指标为“-”，属未开展业务而非提取失败。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 认可资产]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    unit: 元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表, 实际资本合计]
+    required_items: [核心一级资本, 实际资本合计]
+    unit: 元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [23]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表, 量化风险最低资本]
+    required_items: [量化风险最低资本, 最低资本]
+    unit: 元
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]
+
+# 仅 2025 一期；按用户约定把当年页码窗口、容差、匹配偏好固化在
+# structure_versions 的 2025 版本里，后续若接入新年度，新增 since 段即可。
+structure_versions:
+  - since: 2025
+    notes: 2025Q4 唯一一期，6 表全部命中；经营表/近三年/流动性同处第 10 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [18], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [23], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [10], tolerance: 2, page_match: prefer}

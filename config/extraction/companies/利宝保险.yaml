@@ -1,0 +1,164 @@
+# 利宝保险：公司级提取规则（2022-2025，外资系）
+#
+# 数据源：Data/pdfs(2022..2025)/利宝保险.pdf
+#   封面全称“利宝保险有限公司”，监管披露列表名“利宝互助”
+#   页数 33 / 34 / 33 / 33（2022 / 2023 / 2024 / 2025）
+#
+# 版式要点（四年实测，物理页）：
+#   1. 外资系标准模板，6 张目标表均为 Word 导出的线框表，pdfplumber
+#      直接可取；表头列数与数据列数一致，无需公司专属 extractor。
+#   2. 2022/2024/2025 三年页码完全一致；2023 年报表整体后移 1 页
+#      （实际资本 30、最低资本 33），用 structure_versions 钉死，
+#      tolerance 2 兜住表体跨页/续页。
+#   3. 2022 年报未见“近三年（综合）投资收益率”小节（通用规则定位为空），
+#      按原文缺失验收，不造数；该年表数因此为 5。
+#   4. 长指标名在文本层被折行（如“其中：量化风险最低资 本”），标准化层
+#      按去空白包含匹配即可命中；ACTUAL_CAPITAL 左侧列名有横向裁切
+#      （“产总额”“心一级资本”），不影响右侧数值列与合计行命中。
+#   5. 金额单位：主表/资本表为元，经营表“本年度累计数”为万元；
+#      “-”表示该项不适用（无二级资本、无寿险业务等）。
+#   6. 已知遗留：NON_LIFE_OPERATING_METRICS 第 15 页“本季度数”列在
+#      PDF 文本层被截断（如保险业务收入本季度仅余“71”），累计列完整；
+#      属原文文本层缺陷，YAML 层无法修复，报告以累计列/主表为准。
+#
+# 页码窗口（起始页；2022 / 2023 / 2024 / 2025）：
+#   SOLVENCY_MAIN                 13 / 13 / 13 / 13
+#   NON_LIFE_OPERATING_METRICS    15 / 15 / 15 / 15（表体跨到 16 页）
+#   ACTUAL_CAPITAL                29 / 30 / 29 / 29
+#   MINIMUM_CAPITAL               32 / 33 / 32 / 32
+#   THREE_YEAR_INVESTMENT_RETURN  —  / 16 / 16 / 16（2022 年报无此表）
+#   LIQUIDITY_MONITORING          15 / 15 / 15 / 15（2022 表体跨到 16 页）
+#
+# 2024 关键值核对：认可资产 3,460,948,492.93；认可负债 2,744,242,309.84；
+#   实际资本 716,706,183.09；最低资本 291,169,340.33；
+#   综合偿付能力充足率 246.15%（与 PDF 第 13 页逐项一致）。
+
+company:
+  canonical: 利宝保险
+  aliases:
+    - 利宝保险有限公司
+    - 利宝互助
+    - 利宝互助保险
+    - 利宝互助保险有限公司
+    - Liberty
+    - Liberty Mutual
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    外资系标准模板，6 表线框规整；2022/2024/2025 页码一致，仅 2023 整体
+    后移 1 页，用 structure_versions 按年钉起始页；2022 年报缺“近三年投资
+    收益率”小节，按原文缺失验收；经营表本季度列受 PDF 文本层截断影响。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [实际资本]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [32]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [最低资本]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [16]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 1
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [流动性风险监测指标]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年报 33 页，与 2024/2025 页码一致；无近三年（综合）投资收益率小节
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [15]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [32]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        # 2022 年报原文缺失，放宽窗口后仍未命中即跳过（不造数）
+        expected_pages: [16]
+        tolerance: 3
+      LIQUIDITY_MONITORING:
+        expected_pages: [15]
+        tolerance: 2
+
+  - since: 2023
+    notes: 2023 年报 34 页，实际资本/最低资本两表整体后移 1 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [15]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [30]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [33]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [16]
+        tolerance: 2
+      LIQUIDITY_MONITORING:
+        expected_pages: [15]
+        tolerance: 2
+
+  - since: 2024
+    notes: 2024 年报回到 33 页，页码与 2022/2025 一致
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [13]
+        tolerance: 2
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [15]
+        tolerance: 2
+      ACTUAL_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+      MINIMUM_CAPITAL:
+        expected_pages: [32]
+        tolerance: 2
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [16]
+        tolerance: 2
+      LIQUIDITY_MONITORING:
+        expected_pages: [15]
+        tolerance: 2

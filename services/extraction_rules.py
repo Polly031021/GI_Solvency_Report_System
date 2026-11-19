@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -297,12 +298,26 @@ def _rules_signature(directory: Path | None = None) -> tuple | None:
     return tuple(entries)
 
 
+_LOAD_WARNINGS: list[str] = []
+
+
+def get_load_warnings() -> list[str]:
+    """最近一次非严格加载中被跳过的规则文件/条目说明。"""
+    return list(_LOAD_WARNINGS)
+
+
 def load_company_rules(
     directory: str | Path | None = None,
     *,
     force: bool = False,
+    strict: bool = True,
 ) -> dict[str, CompanyRule]:
-    """加载 ``config/extraction/companies/*.yaml``，按公司名建索引。"""
+    """加载 ``config/extraction/companies/*.yaml``，按公司名建索引。
+
+    ``strict=True``（默认）遇到坏文件直接抛 ``ExtractionConfigError``，
+    供测试与显式校验使用；``strict=False`` 跳过坏文件/冲突别名并记入
+    ``get_load_warnings()``，避免单个 YAML 错误拖垮批量提取。
+    """
     target = Path(directory) if directory is not None else RULES_DIR
     signature = _rules_signature(target)
     cache_key = str(target.resolve())
@@ -317,23 +332,45 @@ def load_company_rules(
     known_tables = set(maps["names"]) | set(maps["aliases"])
     rules: dict[str, CompanyRule] = {}
     seen_names: dict[str, str] = {}
+    _LOAD_WARNINGS.clear()
     if target.is_dir():
         for path in sorted(target.glob("*.yaml")):
-            rule = _parse_rule(path, known_tables)
+            try:
+                rule = _parse_rule(path, known_tables)
+            except ExtractionConfigError as exc:
+                if strict:
+                    raise
+                _LOAD_WARNINGS.append(f"{path.name}: {exc}")
+                continue
             if rule.canonical in rules:
-                raise ExtractionConfigError(
-                    f"公司规则重复：{rule.canonical}"
-                )
+                message = f"公司规则重复：{rule.canonical}（{path.name}）"
+                if strict:
+                    raise ExtractionConfigError(message)
+                _LOAD_WARNINGS.append(message)
+                continue
             names = [rule.canonical, *rule.aliases]
+            conflicts = [
+                name
+                for name in names
+                if (normalized := _normalize_company(name))
+                and normalized in seen_names
+                and seen_names[normalized] != rule.canonical
+            ]
+            if conflicts and strict:
+                raise ExtractionConfigError(
+                    f"公司别名冲突：{conflicts[0]} 同时属于 "
+                    f"{seen_names[_normalize_company(conflicts[0])]} 和 {rule.canonical}"
+                )
             for name in names:
                 normalized = _normalize_company(name)
                 if not normalized:
                     continue
                 if normalized in seen_names and seen_names[normalized] != rule.canonical:
-                    raise ExtractionConfigError(
-                        f"公司别名冲突：{name} 同时属于 "
-                        f"{seen_names[normalized]} 和 {rule.canonical}"
+                    _LOAD_WARNINGS.append(
+                        f"别名冲突跳过：{name} 属于 {seen_names[normalized]}，"
+                        f"忽略 {rule.canonical} 的该别名"
                     )
+                    continue
                 seen_names[normalized] = rule.canonical
             rules[rule.canonical] = rule
     _CACHE["signature"] = (cache_key, signature)
@@ -357,7 +394,11 @@ def resolve_rule(
     normalized = _normalize_company(company)
     if not normalized:
         return None
-    catalog = load_company_rules(directory)
+    try:
+        catalog = load_company_rules(directory)
+    except ExtractionConfigError as exc:  # 单个坏规则不应拖垮整批
+        warnings.warn(f"公司规则加载失败，已降级跳过坏文件：{exc}", RuntimeWarning)
+        catalog = load_company_rules(directory, strict=False, force=True)
     matched: CompanyRule | None = None
     for rule in catalog.values():
         if profile_id and rule.profile_id and rule.profile_id != profile_id:

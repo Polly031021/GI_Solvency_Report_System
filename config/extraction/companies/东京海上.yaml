@@ -1,0 +1,108 @@
+# 东京海上：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四期报告实测定位（物理页，容差 2）
+#   SOLVENCY_MAIN                 2022=9-10，2023=9，2024=9-10，2025=9
+#   NON_LIFE_OPERATING_METRICS    2022=11-12，2023=11，2024=12，2025=10-11
+#   ACTUAL_CAPITAL                2022=20，2023=19，2024=21，2025=21
+#   MINIMUM_CAPITAL               2022=24，2023=23，2024=25，2025=25
+#   THREE_YEAR_INVESTMENT_RETURN  2022 年报无该表；2023=12，2024=13，2025=11
+#   LIQUIDITY_MONITORING          2022=10，2023=10，2024=11，2025=10
+#
+# 封面公司名为“东京海上日动火灾保险（中国）有限公司”，文件名主干“东京海上”
+# 与 canonical 一致；通用封面前缀正则未识别，metadata.公司 为空，由调用方
+# 公司名兜底路由，全称登记在 aliases。
+#
+# 通用规则缺口由 company.extractor=dongjing 修复，见
+# services/company_extractors/dongjing.py 与 plans/company-东京海上-extraction.md：
+#   1) 主表跨页（2022 第 9/10 页、2024 第 9/10 页）续页无表头；
+#   2) 经营表 2023/2024 只识别前 13 行，效益类/规模类指标丢失；
+#   3) 最低资本表只切出 3-4 行，最低资本合计缺失；
+#   4) 2022 流动性表与 LCR 表同页混排。
+# 实际资本明细表四期均为 31 行单页完整，近三年收益率表两行完整，保留通用结果。
+
+company:
+  canonical: 东京海上
+  aliases: [东京海上日动火灾保险（中国）有限公司, 东京海上日动火灾保险, 东京海上日动]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: dongjing
+  notes: >-
+    文本层为“每单元格一行”的竖排结构；主表、经营表、最低资本表、流动性表
+    由专属提取器按页重建，实际资本表与近三年收益率表沿用通用提取。
+    四期主表单位均为人民币元；2025 经营表分列第 10/11 页且续页重复表头。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 认可资产]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    unit: 元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [20]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+    unit: 元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    unit: 元
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [监测指标]
+    required_items: [经营活动净现金流]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年报表整体前移，最低资本表在第 23 页，近三年收益率首次出现于第 12 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [11]}
+      ACTUAL_CAPITAL: {expected_pages: [19]}
+      MINIMUM_CAPITAL: {expected_pages: [23]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12]}
+      LIQUIDITY_MONITORING: {expected_pages: [10]}
+  - since: 2024
+    notes: 主表回到第 9/10 页，经营表第 12 页，实际资本/最低资本后移一页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9, 10]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [12]}
+      ACTUAL_CAPITAL: {expected_pages: [21]}
+      MINIMUM_CAPITAL: {expected_pages: [25]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13]}
+      LIQUIDITY_MONITORING: {expected_pages: [11]}
+  - since: 2025
+    notes: 经营表分列第 10/11 页且续页重复表头，近三年收益率在第 11 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10, 11]}
+      ACTUAL_CAPITAL: {expected_pages: [21]}
+      MINIMUM_CAPITAL: {expected_pages: [25]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11]}
+      LIQUIDITY_MONITORING: {expected_pages: [10]}

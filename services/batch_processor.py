@@ -21,7 +21,7 @@ from .extraction_rules import apply_rule_to_tables, resolve_rule
 from .solvency_hybrid_pipeline import locate_tables_hybrid
 from .solvency_metric_registry import extend_taxonomy
 from .solvency_normalizer import load_taxonomy
-from .solvency_pdf_locator import PageMatch, extract_report_metadata
+from .solvency_pdf_locator import PageMatch, analyze_document_type, extract_report_metadata
 from .solvency_rule_table_extractor import MODE_RULE, extract_page_with_method
 from .solvency_step3_standardizer import (
     result_workbook_bytes,
@@ -311,6 +311,16 @@ def locate_one_pdf_bytes(
             mode=mode,
             llm_verify=llm_verify,
         )
+        # 扫描版 PDF：规则法没有文字层信号，自动改走大模型识别。
+        if mode == "rule":
+            auto_matches, auto_note = _auto_vision_for_scanned(
+                pdf_bytes, feature_config, ctx, llm_verify=llm_verify
+            )
+            if auto_note:
+                locator_message = f"{locator_message}；{auto_note}" if locator_message else auto_note
+                result["扫描件自动识别"] = bool(auto_matches)
+                if auto_matches:
+                    matches = auto_matches
         result["matches"] = list(matches)
         result["状态"] = "成功"
         result["说明"] = locator_message
@@ -320,6 +330,47 @@ def locate_one_pdf_bytes(
         result["traceback"] = traceback.format_exc()
     return result
 
+
+
+def _auto_vision_for_scanned(
+    pdf_bytes: bytes,
+    feature_config: dict,
+    ctx: "BatchContext",
+    *,
+    llm_verify: bool,
+) -> tuple[list[PageMatch], str]:
+    """扫描版 PDF 自动改走视觉大模型定位。
+
+    规则定位依赖文字层；整本扫描件（无文字层）只能靠视觉模型。
+    未配置模型接口时返回空结果和一条明确提示，不改动调用方结果。
+    """
+    try:
+        profile = analyze_document_type(pdf_bytes)
+    except Exception:
+        return [], ""
+    if getattr(profile, "doc_type", "") != "SCANNED":
+        return [], ""
+    configured = all(
+        str(value or "").strip() for value in (ctx.api_key, ctx.base_url, ctx.model)
+    )
+    if not configured:
+        return [], "该 PDF 为扫描版，需在大模型设置中配置接口后自动走视觉识别"
+    try:
+        matches, message = locate_tables_hybrid(
+            pdf_bytes,
+            feature_config,
+            api_key=ctx.api_key,
+            base_url=ctx.base_url,
+            model=ctx.model,
+            profile_context=ctx.profile.locator_context(),
+            mode="hybrid",
+            llm_verify=llm_verify,
+        )
+    except Exception as exc:
+        return [], f"扫描版自动视觉定位失败：{str(exc)[:120]}"
+    if not matches:
+        return [], f"扫描版视觉定位未得到结果：{message or '无候选'}"
+    return list(matches), f"扫描版自动转视觉大模型识别（{len(matches)} 张表）"
 
 def process_one_pdf_bytes(
     company_name: str,
@@ -359,12 +410,21 @@ def process_one_pdf_bytes(
                 ),
             }
             result["规则"] = resolved_rule.label
-        matches, _ = locate_tables_hybrid(
+        matches, _locate_message = locate_tables_hybrid(
             pdf_bytes,
             feature_config,
             api_key=ctx.api_key, base_url=ctx.base_url, model=ctx.model,
             profile_context=ctx.profile.locator_context(),
         )
+        if not [m for m in matches if m.pages]:
+            _vision_matches, _vision_note = _auto_vision_for_scanned(
+                pdf_bytes, feature_config, ctx, llm_verify=False
+            )
+            if _vision_matches:
+                matches = _vision_matches
+                result["说明"] = _vision_note
+            elif _vision_note:
+                result["说明"] = _vision_note
         # ★ 新增：用外部传入的页码覆盖自动定位结果（批量两阶段流程）
         if page_overrides:
             _new_matches = []

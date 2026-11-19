@@ -1,0 +1,122 @@
+# 广东能源自保：公司级提取规则（自保公司，2022-2025 跨年度复用）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=14-15  2023=14  2024=14  2025=13-14
+#   NON_LIFE_OPERATING_METRICS    2022=16-17  2023=16-17  2024=16-17  2025=15-16
+#   ACTUAL_CAPITAL                2022=23-26  2023=23-26  2024=23-26  2025=22-25
+#   THREE_YEAR_INVESTMENT_RETURN  2022 原文缺失  2023=17  2024=17  2025=17
+#   MINIMUM_CAPITAL               2022=37-38  2023=37-38  2024=37-38  2025=36-37
+#   LIQUIDITY_MONITORING          2022=15  2023=15  2024=15  2025=14-15
+#
+# 公司性质：广东能源财产保险自保有限公司（广东能源集团自保），无分支机构、无车险/农险，
+#   经营表无“车均保费”实际值（有行但填“-”），成本率三行齐全。
+#
+# 版式要点：
+#   1) S01「偿付能力充足率指标」把认可资产/认可负债/实际资本/最低资本与核心、综合
+#      充足率放同一张表，单位标注为“元”（往年为万元口径的公司不同，本司报表明示“元”），
+#      故 SOLVENCY_MAIN 提取值直接是元；S02/S05 附件明细表同为元，无需换算。
+#   2) 2022/2025 的 S01 跨两页（blocks=2，第二块只剩溢额/充足率几行），给两页窗口。
+#   3) S02 实际资本明细表 4 页（报表资产/非认可/认可三列 + 分页重复表头），
+#      每页一个 block，blocks=5（含块分隔行）。
+#   4) S05 最低资本表跨两页；第二页行首带“1.2.2/1.3”等编码列，行内多一列编码，
+#      归一化后需容忍首列编码（未映射行按编码列说明）。
+#   5) 2022 年全册无“近三年平均投资收益率”表（2023 起才有），属披露缺失，不造数。
+#   6) 流动性风险监测指标 2025 出现第三块（rows=47），含“本年度累计净现金流”续页，
+#      不设 required_items。
+
+company:
+  canonical: 广东能源自保
+  aliases: [广东能源财产保险自保有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    自保公司，承保广东能源集团内业务；经营表无车险/农险专项数据（相关行填“-”），
+    以各渠道签单保费收尾。2022 年无近三年投资收益率表（原文缺失）。
+    S01 与附件明细表单位均为元。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [16, 17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入, 保险服务收入]
+    # 自保经营表到“其他渠道签单保费”结束，其后为流动性段落；
+    # 不能截到“综合成本率”，否则会丢掉签单保费/渠道明细（第 17 页续块）。
+    end_item: [其他渠道签单保费]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [23, 24, 25, 26]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表]
+    required_items: [实际资本, 认可资产总额]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [37, 38]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 版式；无近三年投资收益率表（披露缺失），S01 跨 14-15 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16, 17], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [23, 24, 25, 26], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [37, 38], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [15], tolerance: 2, page_match: prefer}
+
+  - since: 2023
+    notes: 2023 页码与 2024 相同，新增近三年投资收益率表（第 17 页，与经营表续块同页）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16, 17], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [23, 24, 25, 26], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [37, 38], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [15], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: 2024 报告 43 页，六表齐全，页码同 2023；S01 单页（blocks=1）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16, 17], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [23, 24, 25, 26], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [37, 38], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [15], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 2025 报告 42 页，正文整体前移 1 页；S01 跨 13-14 页，S05 回到 36-37 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15, 16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [22, 23, 24, 25], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [36, 37], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}

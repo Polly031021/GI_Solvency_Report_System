@@ -1,0 +1,91 @@
+# 国泰产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022/2023/2024/2025 = 9
+#   NON_LIFE_OPERATING_METRICS    2022/2023/2024/2025 = 11
+#   ACTUAL_CAPITAL                2022=24，2023=23-24，2024=24-25，2025=23-24
+#   MINIMUM_CAPITAL               2022=29-30，2023=29-30，2024=30-31，2025=29-30
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表（全册无“近三年”字样），
+#                                 2023/2024/2025 = 10
+#   LIQUIDITY_MONITORING          2022/2023/2024/2025 = 10
+#
+# 封面第 1 页只有“YYYY 年第4季度偿付能力报告摘要”和日期，没有公司名，
+# metadata.公司 为空；batch_processor 以调用方公司名（即文件主干名
+# “国泰产险”）兜底路由，因此 canonical 必须写“国泰产险”。第 2 页
+# 公司简介里的全称“国泰财产保险有限责任公司”和列表名“国泰财产”写入 aliases。
+#
+# 通用规则与本公司版式不符、由公司 YAML 修正的两处：
+#   1) 经营表：profile 以“综合成本率/综合赔付率/费用率”为终止项，会把
+#      第 11 行之后的效益类、规模类与分渠道明细整段裁掉；四年表格实际都
+#      结束于“其他渠道签单保费”，显式改终止项保留全表。
+#   2) 最低资本表：profile 终止项含短词“最低资本”，会命中第 3 行
+#      “寿险业务保险风险最低资本合计”，2025 年因此只提到 3 行；清空
+#      start_item/end_item 关闭区域优先，改走整页线框识别，可完整取到
+#      1 至 4 最低资本（2022 年 34 行，2023-2025 年 35 行）。
+#
+# 其余版式差异（资本表续页四列、分块占位行、2023 经营表无单位行、
+# 近三年表无表头）由 company.extractor=guotai 处理，见
+# services/company_extractors/guotai.py。
+#
+# 2022 年报告没有“近三年（综合）投资收益率”小节，THREE_YEAR 显式缺失，
+# 属披露缺失而非提取遗漏。四年报告均为四季度报告；主表 S01 以万元列示，
+# 实际资本/最低资本等明细表以元列示（2022-2024 年元保留两位小数，2025 年
+# 部分元值四舍五入到整数）。
+
+company:
+  canonical: 国泰产险
+  aliases: [国泰财产, 国泰财产保险有限责任公司, 国泰财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: guotai
+  notes: >-
+    2022 年无近三年投资收益率表；2025 年金额按元四舍五入到整数披露，
+    单位仍为元。实际资本/最低资本续页 PDF 为四列（行次/项目/期末/期初），
+    由 extractor 压成三列并同步 table_blocks。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 主要偿付能力指标]
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: []
+    end_item: [其他渠道签单保费, 其他渠道]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [23, 24, 25]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表, 实际资本明细表]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [29, 30, 31]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]

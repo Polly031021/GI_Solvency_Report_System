@@ -1,0 +1,133 @@
+# 凯本财险：公司级提取规则（2022-2025，外资系）
+#
+# 数据源：Data/pdfs(2022..2025)/凯本财险.pdf，封面全称“凯本财产保险（中国）有限公司”。
+# 版式与中意财险/三星产险同属外资标准模板：正文页脚页码比物理页小 1（2024 起），
+# 目标表均为 Word 线框表，pdfplumber 直接可取；单位全部为“元”。
+#
+# 页码窗口（物理页，2022 / 2023 / 2024 / 2025，容差 ±2）：
+#   SOLVENCY_MAIN                 9 / 8 / 7 / 7
+#   NON_LIFE_OPERATING_METRICS   11 / 10 / 9 / 9（表体 2024 起跨到下一页）
+#   ACTUAL_CAPITAL               31 / 26 / 22 / 24（S02，2 页）
+#   MINIMUM_CAPITAL              38 / 33 / 29 / 31（S05，2 页）
+#   THREE_YEAR_INVESTMENT_RETURN 10 / 9 / 8 / 8（2022 年报也有该小节）
+#   LIQUIDITY_MONITORING         10 / 8 / 7 / 7（2022 为旧版流动性表，与监管指标同页）
+#
+# 2024 关键值核对（元）：认可资产 795,854,409.93；认可负债 485,015,747.86；
+#   实际资本 310,838,662.07；最低资本 106,878,376.11；综合偿付能力充足率 290.83%。
+# 说明：各年章节起始页整体漂移 1-2 页，故用 structure_versions 按年钉死；
+#   2022 年报原文无“近三年（综合）投资收益率”小节（其余五表齐全），
+#   2023-2025 六表齐全，无需公司专属 extractor。
+
+company:
+  canonical: 凯本财险
+  aliases:
+    - 凯本财产保险（中国）有限公司
+    - 凯本财产保险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    外资系标准模板，六张目标表齐全、线框规整，单位均为元；按年钉起始页，
+    tolerance 2 吸收跨页与同年度内 1 页漂移，未使用公司专属 extractor。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    anchor_terms: [主要经营指标]
+    start_item: []
+    end_item: []
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [31]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [实际资本]
+    start_item: []
+    end_item: []
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [38]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 3
+    anchor_terms: [最低资本]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 1
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    max_pages: 2
+    start_item: []
+    end_item: []
+    required_items: [经营活动净现金流, 规模保费同比增速, 季均融资杠杆比例]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年章节整体前移 1 页，实际资本/最低资本分别前移到 26/33 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [8]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [10]
+      ACTUAL_CAPITAL:
+        expected_pages: [26]
+      MINIMUM_CAPITAL:
+        expected_pages: [33]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [9]
+      LIQUIDITY_MONITORING:
+        expected_pages: [8]
+
+  - since: 2024
+    notes: 2024 年版式回到 7 页主表，实际资本/最低资本在 22/29 页；经营表跨 9-10 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [7]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [9]
+      ACTUAL_CAPITAL:
+        expected_pages: [22]
+      MINIMUM_CAPITAL:
+        expected_pages: [29]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [8]
+      LIQUIDITY_MONITORING:
+        expected_pages: [7]
+
+  - since: 2025
+    notes: 2025 年章节整体后移 2 页（实际资本 24、最低资本 31），主表仍在 7 页
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [7]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [9]
+      ACTUAL_CAPITAL:
+        expected_pages: [24]
+      MINIMUM_CAPITAL:
+        expected_pages: [31]
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [8]
+      LIQUIDITY_MONITORING:
+        expected_pages: [7]

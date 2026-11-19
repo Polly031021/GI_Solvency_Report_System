@@ -1,0 +1,110 @@
+# 中石油专属：公司级提取规则（自保公司，跨年度复用）
+#
+# 数据文件主干为「中石油专属」，canonical 必须等于主干名
+# （services/extraction_rules.py 校验 canonical == path.stem），
+# 「中石油自保」仅作为 alias 登记，供中文列表/下游名称路由。
+#
+# 页码依据：2022-2025 四期报告实测定位（物理页，容差 2）
+#   SOLVENCY_MAIN                 2022=8；2023/2024/2025=9
+#   NON_LIFE_OPERATING_METRICS    2022=9-10；2023/2024/2025=10-11
+#   ACTUAL_CAPITAL                2022=12；2023/2024/2025=13
+#   MINIMUM_CAPITAL               2022=16；2023/2024/2025=17
+#   THREE_YEAR_INVESTMENT_RETURN  2022 年报无该表；2023/2024/2025=11
+#   LIQUIDITY_MONITORING          2022=9-10；2023/2024/2025=10
+#
+# 自保公司无分支机构/车险，经营表行少；主表单位万元、15 行。
+# 2023 年起模板较 2022 整体后移 1 页，故按年登记 structure_versions。
+# 已知版式问题：2022 起流动性监测表与经营表同居 2.3/2.4 节页，
+# 通用表格网格会把「监测指标」与「经营指标」拼进同一块，
+# 金额列被拆成多格（如“5 | ,00 | 1.07 | 152,627. | 11”），
+# 本次仅登记页码窗口，不做专属 extractor，属遗留项。
+
+company:
+  canonical: 中石油专属
+  aliases: [中石油专属财产保险股份有限公司, 中石油自保]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    自保公司报告 18 页（2022 为 17 页），主表与最低资本表稳定单页；
+    经营表与流动性监测表在 2.3/2.4 节连续排布，定位窗口重叠。
+    四期主表单位均为人民币万元；2022 年无「近三年（综合）投资收益率」表，
+    按原文缺失验收，不造数。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [8]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 认可资产]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 万元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+    unit: 万元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 实际资本合计]
+    unit: 万元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    unit: 万元
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [监测指标]
+    required_items: [经营活动净现金流]
+    unit: 万元
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年报表整体后移 1 页；近三年收益率表首次出现于第 11 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10, 11]}
+      ACTUAL_CAPITAL: {expected_pages: [13]}
+      MINIMUM_CAPITAL: {expected_pages: [17]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11]}
+      LIQUIDITY_MONITORING: {expected_pages: [10]}
+
+  - since: 2024
+    notes: 与 2023 版式一致，页码不变
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10, 11]}
+      ACTUAL_CAPITAL: {expected_pages: [13]}
+      MINIMUM_CAPITAL: {expected_pages: [17]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11]}
+      LIQUIDITY_MONITORING: {expected_pages: [10]}
+
+  - since: 2025
+    notes: 与 2023/2024 版式一致，页码不变
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9]}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10, 11]}
+      ACTUAL_CAPITAL: {expected_pages: [13]}
+      MINIMUM_CAPITAL: {expected_pages: [17]}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11]}
+      LIQUIDITY_MONITORING: {expected_pages: [10]}

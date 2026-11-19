@@ -1,0 +1,74 @@
+# 东吴财险：公司级提取规则（仅 2025 年一份报告，2025Q4，30 页，单位万元）
+#
+# 页码依据：2025 实测物理页（容差 ±2）
+#   SOLVENCY_MAIN                12  （S01 偿付能力充足率指标）
+#   NON_LIFE_OPERATING_METRICS   15  （主要经营指标（财险））
+#   THREE_YEAR_INVESTMENT_RETURN 14
+#   LIQUIDITY_MONITORING         14
+#   ACTUAL_CAPITAL               24  （S02 实际资本明细表，31 行含“实际资本合计”）
+#   MINIMUM_CAPITAL              28  （S05 最低资本表）
+#
+# 封面公司名：“苏州东吴财产保险股份有限公司”；30 页的小册子，表名/章节编号与紫金、
+# 三星同一套监管模板，无需公司 extractor。经营表 33 行，含“1、主要经营指标 / 2、效益类
+# 指标 / 3、规模类指标”分组标题行，终止于“其他业务渠道签单保费”。
+# 已知版式问题：S05 最低资本表只取到 4 行（到“寿险业务保险风险最低资本合计”），
+# 疑似跨页截断，见 plans/company-东吴财险-extraction.md 的遗留说明。
+
+company:
+  canonical: 东吴财险
+  extractor: dongwu
+  aliases: [苏州东吴财产保险股份有限公司, 东吴财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    仅 2025 年报告（2025Q4），无往年版式可比。认可负债/最低资本环比跳变（1,687.18→
+    30,110.56；1,605.22→16,853.45）系上季度为开业初期口径，属原文数值，不做修正。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    # 第 24 页 S02、第 28 页 S05 也含“充足率/最低资本”短词，用章节标题钉住第 12 页。
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 表中有“综合成本率”（r13）但后面还有规模类指标，显式终止项防止被截断。
+    start_item: [保险业务收入]
+    end_item: [其他业务渠道签单保费]
+    required_items: [保险业务收入, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [28]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # 关闭区域优先，改走整页线框识别，避免“寿险业务保险风险最低资本合计”之后被裁掉。
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]

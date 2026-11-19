@@ -1,0 +1,99 @@
+# 恒邦财险：公司级提取规则（跨年度复用，页码差异走 structure_versions）
+#
+# 页码依据：2022 为文字版，实测定位结果（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 13
+#   NON_LIFE_OPERATING_METRICS    15-16
+#   ACTUAL_CAPITAL                29
+#   MINIMUM_CAPITAL               33
+#   THREE_YEAR_INVESTMENT_RETURN  原文缺（33 页全册未检出“近三年平均投资收益率”）
+#   LIQUIDITY_MONITORING          13-14
+#
+# 版式特征与已知限制：
+#   1. 2023/2024/2025 三份 PDF 均为纯扫描件：33/37/30 页文字层字符数为 0，
+#      每页仅一张整页图片（无 OCR 文本）。规则法定位与表格提取对扫描件无效，
+#      批量流程需切视觉大模型（playbook 第 247-248 条）；本规则中 2023-2025 的
+#      页码窗口无法实测，先沿用 2022 窗口占位，待文字层/OCR 补齐后按年修正。
+#   2. 2022 年主表（偿付能力指标）在 p13，同页下部为流动性风险监管指标，
+#      故 LIQUIDITY_MONITORING 窗口 [13, 14]；实际资本表在 p29，最低资本在 p33。
+#   3. 2022 年经营指标表跨 15-16 两页（续页无表头），窗口给 [15, 16]。
+#   4. 金额单位：偿付能力指标表为万元（表头标注“单位：万元”），经营指标表为万元；
+#      实际资本/最低资本表内标注“单位：万元”。核对时勿按元换算。
+#   5. 无专属 extractor，走通用表格网格；扫描年份不造数，验收按“原文不可机读”处理。
+
+company:
+  canonical: 恒邦财险
+  aliases: [恒邦财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    小型财险公司，2022 为文字版（33 页），通用规则已可定位 5 张表，仅缺
+    近三年投资收益率表（原文未披露）；2023-2025 为纯扫描件（文字层 0 字符、
+    每页整页图片），规则法无法定位/提取，需视觉大模型或 OCR 后再验收。
+    structure_versions 中 2023 起的页码为占位沿用，非实测。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15, 16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入]
+    end_item: [综合成本率]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29]
+    tolerance: 2
+    page_match: prefer
+    required_items: [核心一级资本, 实际资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [33]
+    tolerance: 2
+    page_match: prefer
+    required_items: [量化风险最低资本, 最低资本]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监管指标]
+    required_items: [经营活动净现金流]
+
+structure_versions:
+  - since: 2023
+    notes: 2023-2025 为纯扫描件（0 字符文字层），页码未实测，沿用 2022 窗口占位
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15, 16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [33], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: >-
+      2024 扫描件 37 页；视觉核对确认“三、主要指标”主表与流动性监管指标
+      同在物理 p16（页脚 13），故主表/流动性窗口改 16；经营/资本/最低资本
+      三张表页码仍为占位，未实测
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [16], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15, 16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [33], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [16], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 2025 扫描件 30 页；页码未实测，占位沿用
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15, 16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [33], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}

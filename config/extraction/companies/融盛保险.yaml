@@ -1,0 +1,109 @@
+# 融盛保险：公司级提取规则（2022-2025，按年份维护页码窗口）
+#
+# 页码依据：四份季报（均为 Q4 报告）实测物理页
+#   SOLVENCY_MAIN                 2022=9  2023=10 2024=10 2025=10
+#   NON_LIFE_OPERATING_METRICS    2022=12 2023=13 2024=13 2025=13
+#   ACTUAL_CAPITAL                2022=26 2023=25 2024=24 2025=23（均跨两页，续页无表头）
+#   MINIMUM_CAPITAL               2022=32 2023=31 2024=30 2025=29（均跨两页）
+#   THREE_YEAR_INVESTMENT_RETURN  2022 全册无此表（披露缺失）；2023/2024/2025=14
+#   LIQUIDITY_MONITORING          2022=10 2023=11 2024=11 2025=11
+#
+# 版式特征（四年一致）：
+#   1) 2022/2023/2024 第 9/10 页把“（一）偿付能力充足率指标”与“（二）流动性
+#      风险监管指标”排在同一页，整页线框识别只认出后面的 LCR 表（8 行），
+#      主表丢失。改为取“（六）偿付能力状况表 S01”（2022=14，2023-2025=15），
+#      该表单页单表、含认可资产/负债、实际资本、最低资本、核心/综合充足率。
+#   2) 实际资本表、最低资本表第二页只有 3.x/4/5 行且无表头，通用提取产生
+#      “【第N页表格分块】”标记行与多一列行次，属已知续页拼接缺陷，值本身正确。
+#   3) 经营表以“六、主要经营指标”起始，含（十一）效益类/（十二）规模类分组，
+#      终止项取“其他渠道签单保费”，四年一致。
+#   4) 2022 年报告无“近三年平均投资收益率”表，按原文缺失验收，不造数。
+
+company:
+  canonical: 融盛保险
+  aliases: [融盛财产, 融盛财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 四期版式稳定，仅页码逐年小幅漂移；封面公司名为“融盛财产保险股份
+    有限公司”，列表名“融盛保险”。单位为元（报告首页标注人民币元），无需换算。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力状况表, S01]
+    start_item: []
+    end_item: []
+    # 兜底：万一窗口回退到第 10 页的双表版式，排除 LCR 表。
+    exclude_terms: [流动性覆盖率, LCR1, LCR2, LCR3]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    unit: 元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [主要经营指标, 保险业务收入]
+    end_item: [其他渠道签单保费, 流动性风险监测指标]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费, 车险车均保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [26, 27]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [32, 33]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标, 附表3-1]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 年起整体后移一页；新增近三年投资收益率表（第 14 页）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25, 26], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [31, 32], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [11], tolerance: 2}
+
+  - since: 2024
+    notes: 2024 年报表较 2023 前移一页（实际资本/最低资本各前移一页）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [24, 25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30, 31], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [11], tolerance: 2}
+
+  - since: 2025
+    notes: 2025 年版式与 2024 相同，表格再次前移一页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [23, 24], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [29, 30], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [11], tolerance: 2}

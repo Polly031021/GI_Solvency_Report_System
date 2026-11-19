@@ -1,0 +1,335 @@
+# 都邦保险：公司级提取规则（2022-2025 四期年报，单位万元）
+#
+# 页码依据：四份 PDF 逐页实测（物理页，从 1 开始；2024 版共 37 页）
+#   SOLVENCY_MAIN                 2022=15  2023=17  2024=16  2025=17
+#   NON_LIFE_OPERATING_METRICS    2022=17  2023=19  2024=18  2025=19
+#   ACTUAL_CAPITAL                2022=26  2023=30  2024=29  2025=29
+#   MINIMUM_CAPITAL               2022=34  2023=38  2024=36  2025=36
+#   THREE_YEAR_INVESTMENT_RETURN  2022 未披露  2023=18  2024=17  2025=18
+#   LIQUIDITY_MONITORING          2022=16  2023=18  2024=17  2025=18
+#
+# 2024 实测定位坑（默认规则全中）：
+#   1) 默认锚点“偿付能力充足率指标”只命中“七、管理层分析与讨论”正文
+#      （2022 第 24 页、2023 第 27 页、2024 第 26 页、2025 第 27 页），
+#      定位到的是“对下季度偿付能力充足率的预测”表（全部为“下季度预测值”行），
+#      真正的 S01 表在“三、主要指标（一）偿付能力指标”，2024 为第 16 页，
+#      表头为 项目/期末数/期初数/下季度预测（四列，主表与预测列同表）。
+#      改用锚点“偿付能力指标”钉住主表页（“偿付能力充足率指标”不包含该串）。
+#   2) 近三年投资收益率为纯文字披露：“（四）近三年平均投资收益率 公司近三年
+#      平均投资收益率为 1.84%”“（五）近三年平均综合投资收益率 1.60%”（2024
+#      第 17-18 页），PDF 中无可提取的数值表格；默认规则只抓到两行章节标题。
+#   3) 经营指标（2024 第 18 页）由“1. 经营指标 / 2. 效益类指标 / 3. 规模类指标”
+#      三张同页独立子表组成，单表管线只取第一张（11 行），综合成本率/签单保费
+#      在第二、三张子表，需公司 extractor 才能补齐（本批按要求只写 YAML）。
+#   4) 最低资本表 2024 第 36 页一页内即含“最低资本 56,130/62,160”合计行，
+#      但默认区域逻辑只取到 4 行（停在“寿险业务保险风险最低资本合计”），
+#      故清空 start_item/end_item 走整页线框识别。
+
+company:
+  canonical: 都邦保险
+  aliases: [都邦财产保险股份有限公司, 都邦财产, 都邦财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 均为四季度报告，单位万元。2022 年未披露近三年投资收益率；
+    2023 起该指标以文字段落披露（非表格）。经营指标三张同页子表只取第一张，
+    效益类/规模类指标需后续公司 extractor 合并。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+    start_item: []
+    end_item: []
+    include_continuation: false
+    max_pages: 1
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 投资收益率]
+    start_item: []
+    end_item: []
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表, 核心一级资本]
+    required_items: [核心一级资本, 实际资本合计]
+    start_item: []
+    end_item: []
+
+  MINIMUM_CAPITAL:
+    expected_pages: [36]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表, 量化风险最低资本]
+    required_items: [量化风险最低资本, 最低资本, 控制风险最低资本]
+    start_item: []
+    end_item: []
+    include_continuation: false
+    max_pages: 1
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    start_item: []
+    end_item: []
+    max_pages: 1
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    header_terms: [指标值]
+    required_items: [经营活动净现金流, 季均融资杠杆比例]
+    start_item: []
+    end_item: []
+    max_pages: 1
+
+structure_versions:
+  - since: 2022
+    notes: 2022 共 34 页；主表 15、经营 17、实际资本 26、最低资本 34、监测 16；未披露近三年表
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [15]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力指标]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [17]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        required_items: [保险业务收入, 净利润, 投资收益率]
+        start_item: []
+        end_item: []
+      ACTUAL_CAPITAL:
+        expected_pages: [26]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本表, 核心一级资本]
+        required_items: [核心一级资本, 实际资本合计]
+        start_item: []
+        end_item: []
+      MINIMUM_CAPITAL:
+        expected_pages: [34]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        required_items: [量化风险最低资本, 最低资本, 控制风险最低资本]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [16]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        start_item: []
+        end_item: []
+        max_pages: 1
+      LIQUIDITY_MONITORING:
+        expected_pages: [16]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        header_terms: [指标值]
+        required_items: [经营活动净现金流, 季均融资杠杆比例]
+        start_item: []
+        end_item: []
+        max_pages: 1
+
+  - since: 2023
+    notes: 2023 共 39 页；主表 17、经营 19、实际资本 30、最低资本 38、近三年 18、监测 18
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [17]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力指标]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [19]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        required_items: [保险业务收入, 净利润, 投资收益率]
+        start_item: []
+        end_item: []
+      ACTUAL_CAPITAL:
+        expected_pages: [30]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本表, 核心一级资本]
+        required_items: [核心一级资本, 实际资本合计]
+        start_item: []
+        end_item: []
+      MINIMUM_CAPITAL:
+        expected_pages: [38]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        required_items: [量化风险最低资本, 最低资本, 控制风险最低资本]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [18]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        start_item: []
+        end_item: []
+        max_pages: 1
+      LIQUIDITY_MONITORING:
+        expected_pages: [18]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        header_terms: [指标值]
+        required_items: [经营活动净现金流, 季均融资杠杆比例]
+        start_item: []
+        end_item: []
+        max_pages: 1
+
+  - since: 2024
+    notes: 2024 共 37 页；主表 16、经营 18、实际资本 29、最低资本 36、近三年 17、监测 17
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [16]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力指标]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [18]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        required_items: [保险业务收入, 净利润, 投资收益率]
+        start_item: []
+        end_item: []
+      ACTUAL_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本表, 核心一级资本]
+        required_items: [核心一级资本, 实际资本合计]
+        start_item: []
+        end_item: []
+      MINIMUM_CAPITAL:
+        expected_pages: [36]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        required_items: [量化风险最低资本, 最低资本, 控制风险最低资本]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [17]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        start_item: []
+        end_item: []
+        max_pages: 1
+      LIQUIDITY_MONITORING:
+        expected_pages: [17]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        header_terms: [指标值]
+        required_items: [经营活动净现金流, 季均融资杠杆比例]
+        start_item: []
+        end_item: []
+        max_pages: 1
+
+  - since: 2025
+    notes: 2025 共 37 页；主表 17、经营 19、实际资本 29、最低资本 36、近三年 18、监测 18
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [17]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力指标]
+        required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [19]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        required_items: [保险业务收入, 净利润, 投资收益率]
+        start_item: []
+        end_item: []
+      ACTUAL_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本表, 核心一级资本]
+        required_items: [核心一级资本, 实际资本合计]
+        start_item: []
+        end_item: []
+      MINIMUM_CAPITAL:
+        expected_pages: [36]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 量化风险最低资本]
+        required_items: [量化风险最低资本, 最低资本, 控制风险最低资本]
+        start_item: []
+        end_item: []
+        include_continuation: false
+        max_pages: 1
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [18]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+        start_item: []
+        end_item: []
+        max_pages: 1
+      LIQUIDITY_MONITORING:
+        expected_pages: [18]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标]
+        header_terms: [指标值]
+        required_items: [经营活动净现金流, 季均融资杠杆比例]
+        start_item: []
+        end_item: []
+        max_pages: 1

@@ -1,0 +1,229 @@
+# 前海财险：公司级提取规则（跨年度复用，按 structure_versions 分版式）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=10  2023=10  2024=11  2025=12
+#   NON_LIFE_OPERATING_METRICS    2022=11-12  2023=11-12  2024=12-13  2025=13-14
+#   ACTUAL_CAPITAL                2022=10  2023=10  2024=11  2025=12
+#   MINIMUM_CAPITAL               2022=28  2023=27-28  2024=29-30  2025=29
+#   LIQUIDITY_MONITORING          2022=10-11  2023=10-11  2024=11-12  2025=12-13
+#
+# 封面公司名四年一致：“新疆前海联合财产保险股份有限公司”；报告均为四季度报告，
+# 金额单位元。全册页数 29/28/30/30，属“小型公司”精简版式：
+#   1) 无“近三年平均投资收益率”表（THREE_YEAR_INVESTMENT_RETURN 四年均缺失，
+#      属原文披露缺失，不是提取遗漏）。
+#   2) S01/S02 合并在一页：第 10-12 页同一张表既含“认可资产/认可负债/实际资本/
+#      最低资本”也含“核心/综合偿付能力充足率”，故 SOLVENCY_MAIN 与 ACTUAL_CAPITAL
+#      指向同一页，两者按不同 required_items 校验。该表行名为“3 实际资本”“4 最低资本”，
+#      没有“实际资本合计/最低资本合计”字样。
+#   3) 经营表跨两页（第 12/13 页等），第二块为“2 车险签单保费 … 5 各渠道签单保费”
+#      的分块续页，首列带回“行次”，由框架合并为一个 table_blocks 链。
+#   4) 最低资本表为 3 个分块（量化风险、保费/准备金分险类、巨灾），unit 需显式指定元。
+#
+# 页码随年份整体平移（2022/2023 相同，2024 起 +1~+2，2025 再 +1），故用
+# structure_versions 按 2022 / 2023 / 2025 覆盖 expected_pages，2024 为基线。
+
+company:
+  canonical: 前海财险
+  aliases: [前海联合, 前海联合财险, 新疆前海联合财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    小型财险精简版式：偿付能力充足率指标与实际资本明细同表同页；无近三年投资收益率表；
+    经营表跨两页且第二块带“行次”列。四年页码随页数（29/28/30/30）小幅平移，
+    用 structure_versions 分 2022/2023/2025 三档，2024 走基线。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 偿付能力充足率]
+    unit: 元
+    # 第 11 页的表即 S02 实际资本明细表，行名逐字为“实际资本/最低资本/综合偿付能力充足率”。
+    required_items: [实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    unit: 元
+    # 第 12 页为“保险业务收入…综合投资收益率”，第 13 页续“车险签单保费…各渠道签单保费”。
+    required_items: [保险业务收入, 净利润, 综合投资收益率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表, 实际资本]
+    unit: 元
+    required_items: [认可资产, 认可负债, 实际资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [29, 30]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表, 最低资本]
+    unit: 元
+    # 该表 3 个分块：量化风险/控制风险/附加资本、分险类保费与准备金、巨灾。
+    required_items: [量化风险最低资本, 控制风险最低资本]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [11, 12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标, 流动性风险监测]
+    required_items: [流动性覆盖率LCR1, 百元保费经营活动净现金流]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年报告 29 页，各表整体比 2024 早 1-2 页；经营表 11-12、最低资本 28。
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [10]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率指标, 偿付能力充足率]
+        unit: 元
+        required_items: [实际资本, 最低资本, 综合偿付能力充足率]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [11, 12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        unit: 元
+        required_items: [保险业务收入, 净利润, 综合投资收益率]
+      ACTUAL_CAPITAL:
+        expected_pages: [10]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本明细表, 实际资本]
+        unit: 元
+        required_items: [认可资产, 认可负债, 实际资本]
+      MINIMUM_CAPITAL:
+        expected_pages: [28]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 最低资本]
+        unit: 元
+        required_items: [量化风险最低资本, 控制风险最低资本]
+      LIQUIDITY_MONITORING:
+        expected_pages: [10, 11]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标, 流动性风险监测]
+        required_items: [流动性覆盖率LCR1, 百元保费经营活动净现金流]
+
+  - since: 2023
+    notes: 2023 年报告 28 页，页码与 2022 相同，仅最低资本表跨 27-28 两页。
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [10]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率指标, 偿付能力充足率]
+        unit: 元
+        required_items: [实际资本, 最低资本, 综合偿付能力充足率]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [11, 12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        unit: 元
+        required_items: [保险业务收入, 净利润, 综合投资收益率]
+      ACTUAL_CAPITAL:
+        expected_pages: [10]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本明细表, 实际资本]
+        unit: 元
+        required_items: [认可资产, 认可负债, 实际资本]
+      MINIMUM_CAPITAL:
+        expected_pages: [27, 28]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 最低资本]
+        unit: 元
+        required_items: [量化风险最低资本, 控制风险最低资本]
+      LIQUIDITY_MONITORING:
+        expected_pages: [10, 11]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标, 流动性风险监测]
+        required_items: [流动性覆盖率LCR1, 百元保费经营活动净现金流]
+
+  - since: 2024
+    notes: 2024 年报告 30 页，各表比 2023 后移 1-2 页；最低资本表跨 29-30 两页。
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [11]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率指标, 偿付能力充足率]
+        unit: 元
+        required_items: [实际资本, 最低资本, 综合偿付能力充足率]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [12, 13]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        unit: 元
+        required_items: [保险业务收入, 净利润, 综合投资收益率]
+      ACTUAL_CAPITAL:
+        expected_pages: [11]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本明细表, 实际资本]
+        unit: 元
+        required_items: [认可资产, 认可负债, 实际资本]
+      MINIMUM_CAPITAL:
+        expected_pages: [29, 30]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 最低资本]
+        unit: 元
+        required_items: [量化风险最低资本, 控制风险最低资本]
+      LIQUIDITY_MONITORING:
+        expected_pages: [11, 12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标, 流动性风险监测]
+        required_items: [流动性覆盖率LCR1, 百元保费经营活动净现金流]
+
+  - since: 2025
+    notes: 2025 年报告 30 页，各表比 2024 再后移 1 页（最低资本表回到单页 29）。
+    tables:
+      SOLVENCY_MAIN:
+        expected_pages: [12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [偿付能力充足率指标, 偿付能力充足率]
+        unit: 元
+        required_items: [实际资本, 最低资本, 综合偿付能力充足率]
+      NON_LIFE_OPERATING_METRICS:
+        expected_pages: [13, 14]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [主要经营指标]
+        unit: 元
+        required_items: [保险业务收入, 净利润, 综合投资收益率]
+      ACTUAL_CAPITAL:
+        expected_pages: [12]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [实际资本明细表, 实际资本]
+        unit: 元
+        required_items: [认可资产, 认可负债, 实际资本]
+      MINIMUM_CAPITAL:
+        expected_pages: [29]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [最低资本表, 最低资本]
+        unit: 元
+        required_items: [量化风险最低资本, 控制风险最低资本]
+      LIQUIDITY_MONITORING:
+        expected_pages: [12, 13]
+        tolerance: 2
+        page_match: prefer
+        anchor_terms: [流动性风险监测指标, 流动性风险监测]
+        required_items: [流动性覆盖率LCR1, 百元保费经营活动净现金流]

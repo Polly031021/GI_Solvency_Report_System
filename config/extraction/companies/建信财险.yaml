@@ -1,0 +1,80 @@
+# 建信财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=9   2023=9   2024=9   2025=8
+#   NON_LIFE_OPERATING_METRICS    2022=10  2023=10  2024=10  2025=9
+#   ACTUAL_CAPITAL                2022=18  2023=18  2024=18  2025=18
+#   MINIMUM_CAPITAL               2022=23  2023=23  2024=23  2025=23
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表（全册无“近三年”字样） 2023=10 2024=10 2025=9
+#   LIQUIDITY_MONITORING          2022=9-10 2023=9-10 2024=9-10 2025=8-9
+#
+# 封面公司名四年一致：“建信财产保险有限公司”；列表名为“建信财产”，一并写入 aliases。
+# 报告均为四季度报告；2022-2024 单位为元（两位小数），2025 为元（四舍五入整数）。
+#
+# 三处 profile 通用规则与本公司版式不匹配，用 YAML 修正：
+#   1) 经营表：profile 以“综合成本率/综合赔付率/费用率”为终止项，会把第 11 行之后的
+#      效益类/规模类明细（签单保费、车均保费、分渠道）整段裁掉；四年表格实际都结束于
+#      “其他渠道签单保费”，显式改终止项保留全表。
+#   2) 最低资本表：profile 终止项“最低资本合计”会误命中第 3 行的“寿险业务保险风险
+#      最低资本合计”，导致只提取 2-3 行；清空 start_item/end_item 关闭区域优先，改走
+#      整页线框识别，可完整取到 1 至 4 最低资本共 35 行。
+#   3) 近三年与流动性：2023-2025 的近三年表是横向两列（指标名称/近三年平均投资收益率/
+#      近三年平均综合投资收益率），流动性监测跨页且同页混有监管指标表与经营表，通用
+#      网格无法定位，由 jianxin extractor 按页重建。
+
+company:
+  canonical: 建信财险
+  aliases: [建信财产, 建信财产保险有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: jianxin
+  notes: >-
+    2022 年报告没有“近三年（综合）投资收益率”小节，THREE_YEAR 显式缺失，属披露缺失
+    而非提取遗漏。2025 年起金额按元四舍五入到整数披露，单位仍为元。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [8, 9]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入, 保险服务收入]
+    end_item: [其他渠道签单保费, 其他渠道]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [实际资本, 核心一级资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [23]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [8, 9, 10]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [LCR1, 经营活动净现金流]

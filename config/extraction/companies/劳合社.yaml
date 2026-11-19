@@ -1,0 +1,93 @@
+# 劳合社（Lloyd's Insurance Company (China) Limited）：公司级提取规则（外资/特殊主体）
+#
+# 页码依据：2022-2025 实测定位结果（物理页，容差 ±2，page_match=prefer）
+#   SOLVENCY_MAIN                 2022=7，2023/2024/2025=8
+#   NON_LIFE_OPERATING_METRICS    2022=8，2023=9，2024=9，2025=9
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表，2023=10，2024=10，2025=10
+#   LIQUIDITY_MONITORING          2022=7-8，2023=9，2024=8，2025=9
+#
+# 特殊主体说明（2022-2025 四期一致）：
+#   1) 按《保险公司偿付能力监管规则第20号：劳合社保险（中国）有限公司》
+#      以“整体层面”报送，报告仅 15-18 页，“偿付能力状况表 - 整体层面”
+#      只有核心/综合偿付能力充足率三列（期末数/期初数/下季度预测数），
+#      不披露认可资产、认可负债、实际资本、最低资本金额；正文中的
+#      “实际资本/最低资本”仅为管理层分析文字，无表格网格，通用提取器
+#      也无法成表（2024 实测 ACTUAL_CAPITAL 定位为空、MINIMUM_CAPITAL
+#      命中第 15 页正文但表数 0）。故本规则不配置这两张表，按“原文缺失”
+#      验收，禁止用充足率反推资本金额。
+#   2) 2022 年报无“近三年平均（综合）投资收益率”章节，该年缺表属正常。
+#   3) 经营表“基本每股收益”为“不适用”，“综合成本率”为“——/不适用”，
+#      按原文保留，不做 0 值替换。
+#   4) 封面无“保险股份有限公司/保险有限公司”字样，metadata.公司 为空，
+#      由调用方公司名兜底路由；全称与英文名登记为别名。
+
+company:
+  canonical: 劳合社
+  aliases: [劳合社保险（中国）有限公司, 劳合社保险（中国）, 劳合社中国, "Lloyd's Insurance Company (China) Limited"]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    劳合社为 Lloyd's 在华全资子公司，季度报告只披露整体层面充足率与流动性
+    指标，不含认可资产/认可负债/实际资本/最低资本表；仅维护实际存在的
+    4 张表（2022 年 3 张，缺近三年收益率表）。流动性监管指标与流动性
+    监测指标同页，回溯不利偏差率与净现金流在监管指标块内。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [7, 8]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标, 偿付能力状况表]
+    required_items: [核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [8, 9]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [10, 11]
+    tolerance: 2
+    page_match: prefer
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [7, 8, 9]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监管指标, 流动性风险监测指标]
+    required_items: [经营活动净现金流]
+
+structure_versions:
+  - since: 2022
+    notes: 15 页；无近三年收益率表；流动性监管（LCR/回溯）与监测指标同在第 7-8 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [7], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [8], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [7, 8], tolerance: 2, page_match: prefer}
+
+  - since: 2023
+    notes: 18 页；三张指标表整体后移一页；近三年收益率首次出现（第 10 页，文字段落式）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [8], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [9], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [9], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: 16 页；流动性监测回到第 8 页（与主表同页），其余同 2023
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [8], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [9], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [8], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 17 页；主表/经营表/近三年/流动性分别为 8/9/10/9 页，版式同 2023
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [8], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [9], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [9], tolerance: 2, page_match: prefer}

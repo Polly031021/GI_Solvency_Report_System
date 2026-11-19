@@ -1,0 +1,119 @@
+# 安盟财险：公司级提取规则（跨年度复用；2022-2025 四份季报实测）
+#
+# 页码依据（物理页，容差 ±2）：
+#   SOLVENCY_MAIN                 2022=13 2023=13 2024=13 2025=13
+#   NON_LIFE_OPERATING_METRICS    2022=14 2023=15 2024=14 2025=14
+#   ACTUAL_CAPITAL                2022=24 2023=24 2024=23 2025=23
+#   MINIMUM_CAPITAL               2022=26 2023=26 2024=25 2025=25
+#   THREE_YEAR_INVESTMENT_RETURN  2022=无 2023=15 2024=14 2025=14（2024/2025 只有叙述句）
+#   LIQUIDITY_MONITORING          2022=13-14 2023=14 2024=13-14 2025=13-14
+#
+# 版式要点：
+#   1) 公司 2022-2023 封面名为“中航安盟财产保险有限公司”，2024 起改名“安盟财产保险有限公司”，
+#      两个全称都进 aliases；canonical 仍取 PDF 主干名“安盟财险”。
+#   2) 季报为 25-26 页摘要版，目标表全部集中在第 13-14 页；S02 实际资本在“十、实际资本”页，
+#      S05 最低资本在“十一、最低资本”页，均为整页监管报表（单位：元），与摘要页（万元）单位不同。
+#   3) S05 表 50 余行，默认区域以“最低资本”为终止项时会提前命中“1.1 寿险业务保险风险最低资本
+#      合计”而只取到 3 行；故清空 start_item/end_item，改走整页线框识别，取到“4 最低资本”全表。
+#   4) 近三年投资收益率为叙述句（“近三年平均投资收益率为 2.60%；近三年平均综合投资收益率为
+#      2.54%”），无表格数据区；2022 年整册无“近三年”字样，属披露缺失。YAML 保留窗口与锚点，
+#      提取结果为空/仅标题行属正常，数值见 plans 文档正文摘录。
+
+company:
+  canonical: 安盟财险
+  aliases: [安盟财产保险有限公司, 中航安盟财产保险有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    外资农险公司（法国安盟集团与中航工业合资，2024 年中方退出后更名），经营表含农险相关
+    签单口径，单位为万元；S02/S05 监管报表单位为元。2022 年无近三年投资收益率披露。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 全表从“保险业务收入”到“其他渠道”，含车险/非车险前五大/分渠道明细；勿用“综合成本率”收尾。
+    start_item: [保险业务收入, 保险服务收入]
+    end_item: [其他渠道]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表, 实际资本]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [26]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表, 最低资本]
+    # 关闭区域优先，避免“1.1 寿险业务…最低资本合计”被当作终止项截断。
+    start_item: []
+    end_item: []
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均（综合）投资收益率]
+    required_items: [近三年平均投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [流动性覆盖率]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年报（26 页，封面“中航安盟财产保险有限公司”）；S02 在第 24 页，S05 在第 26 页；无近三年投资收益率披露。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [24], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [26], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+
+  - since: 2023
+    notes: 2023 年报（26 页）；经营表后移一页至第 15 页，流动性表在第 14 页；S02/S05 仍为 24/26 页。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [24], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [26], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [15], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: 2024 年报（25 页，更名“安盟财产保险有限公司”）；S02 第 23 页、S05 第 25 页（末页）。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [23], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [25], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 2025 年报（25 页）；与 2024 版式一致，S02 第 23 页、S05 第 25 页。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [23], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [25], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}

@@ -1,0 +1,81 @@
+# 铁路自保：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=12  2023=11-12  2024=11  2025=10-11
+#   NON_LIFE_OPERATING_METRICS    2022=13-14  2023=13-14  2024=13  2025=12-13
+#   ACTUAL_CAPITAL                2022=12  2023=22-25（S02 明细跨 4 页）  2024=11  2025=10
+#   MINIMUM_CAPITAL               2022=23-24  2023=23-24  2024=22-23  2025=22-23
+#   THREE_YEAR_INVESTMENT_RETURN  2022 原文缺失  2023=13  2024=12  2025=12
+#   LIQUIDITY_MONITORING          2022=13  2023=13  2024=12  2025=12
+#
+# 公司性质：自保公司（中国铁路财产保险自保有限公司），无分支机构、无车险，
+# 经营表只到“综合成本率”即结束，没有签单保费/车均保费/分渠道明细。
+# 单位四年一致为元（dump 出的 unit=元，数值带千分位小数两位）。
+#
+# 版式要点：
+#   1) 第 10-12 页的 S01/S02 是同一张“偿付能力充足率指标”合并表，
+#      认可资产/认可负债/实际资本/最低资本/核心与综合充足率都在这一张表里；
+#      2022/2024/2025 的 ACTUAL_CAPITAL 因此与 SOLVENCY_MAIN 同页，取到的是合并表，
+#      2023 的 S02 实际资本明细表在附件 22-25 页（跨 4 页、含“认可资产合计/认可负债合计”）。
+#   2) 2023 年 S02 表在第 22 页无表头续页开始，故清空 start_item/end_item 关闭区域优先，
+#      走整页线框识别整表连接，避免续页 0 候选（同紫金 2022 的踩坑）。
+#   3) 2022 年全册无“近三年平均投资收益率”表，属披露缺失，不是提取遗漏。
+#   4) “流动性风险监测指标”在 2022/2023 是叙述性段落（LCR1/LCR2/LCR3 写在正文里），
+#      2024/2025 才有表格化的近三年投资收益率，故该表结构不稳定，不设 required_items。
+
+company:
+  canonical: 铁路自保
+  aliases: [中国铁路财产保险自保有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    自保公司，业务集中在铁路系统内，经营表无车险/农险专项行。
+    2022 年无近三年投资收益率表；流动性风险监测指标在 2022/2023 为叙述性段落而非表格。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10, 11, 12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12, 13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入, 保险服务收入]
+    # 自保公司经营表以“综合成本率”收尾，之后是流动性段落，故在此终止。
+    end_item: [综合成本率]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [10, 11, 12, 22, 23, 24, 25]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表]
+    # 关闭区域优先：2023 明细表从第 22 页无表头续页开始，区域/候选路径 0 候选。
+    start_item: []
+    end_item: []
+    required_items: [实际资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [22, 23, 24]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]

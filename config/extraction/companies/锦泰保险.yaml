@@ -1,0 +1,85 @@
+# 锦泰保险：公司级提取规则（2022-2025 跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 实测定位结果（物理页，容差 ±1）
+#   SOLVENCY_MAIN                 2022/2023=18，2024=20，2025=17
+#   NON_LIFE_OPERATING_METRICS    2022/2023=20，2024=22，2025=19
+#   ACTUAL_CAPITAL                2022=21，2023=31，2024=33，2025=28
+#   MINIMUM_CAPITAL               2022=22，2023=32，2024=34，2025=30
+#   THREE_YEAR_INVESTMENT_RETURN  2023=21，2024=22，2025=20（2022 年报无该表）
+#   LIQUIDITY_MONITORING          2022/2023=19，2024=21，2025=18
+#
+# 封面公司名为“锦泰财产保险股份有限公司”，通用封面前缀正则要求
+# “保险股份有限公司/保险有限公司”，因此 metadata.公司 为空；由调用方
+# 公司名（锦泰保险）兜底路由，别名同时登记简称“锦泰财产”与全称。
+#
+# 通用规则对锦泰报告的已知缺口由 company.extractor=jintai 修复：
+# 2022 年文字流先输出整列数值再输出标签（“先数值后标签”）；
+# 2023 年主表被并成 2 列、实际资本表被列线切成 12 列碎片；
+# 2025 年实际资本表标签居中、数值右对齐且跨列线；
+# 流动性监测表 2022 年与 2.2 回溯表同页且表头相同。
+# 专属提取器按页内文字坐标（y 聚类成行、x 聚类成格）重建 6 张表，
+# 见 services/company_extractors/jintai.py。
+
+company:
+  canonical: 锦泰保险
+  aliases: [锦泰财产, 锦泰财产保险股份有限公司, 锦泰财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: jintai
+  notes: >-
+    报告文字层按单元格独立定位，表格线框对合并单元格不友好，通用网格
+    在 2022/2023/2025 年把标签列与数值列串位。专属提取器按坐标重建：
+    主表（2022 年只有期末数/期初数 3 列）、经营指标（33 行，止于
+    5.4 其他渠道签单保费）、实际资本（12 行）、最低资本（2022 年 9 行、
+    2023 起 29 行）、近三年平均投资收益率（2022 年无此表）、流动性
+    监测指标（10 行，2022 年与 2.2 回溯表同页需按表头区分）。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [17, 18, 20]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    signature_terms: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [19, 20, 22]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入]
+    end_item: [其他渠道签单保费, 其他渠道]
+    required_items: [保险业务收入, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [21, 28, 31, 33]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [实际资本指标]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [22, 30, 32, 34]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [最低资本]
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [20, 21, 22]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    notes: 2022 年偿付能力报告无该表；2023 起表头为“指标名称|数值”。
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [18, 19, 21]
+    tolerance: 1
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 百元保费经营活动净现金流]
+    notes: >-
+      2022 年 p19 同时有“2．其他流动性风险监管指标”（项目|本季度数|上季度数）
+      与“3．流动性风险监测指标”，两张表表头相同，需按“百元保费”锚点取后者。

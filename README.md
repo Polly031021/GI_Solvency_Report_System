@@ -32,7 +32,7 @@ streamlit run app.py
 | 步骤 | 功能 | 关键实现 |
 | --- | --- | --- |
 | STEP0 报告监控 | 读取本地财险公司清单，单家或并发检查披露页面是否已更新目标报告期 | `ui/step0_monitor.py`、`services/solvency_pdf_locator.py` |
-| STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览 | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
+| STEP1 页码定位 | 上传 PDF → 识别文字版/扫描版 → 规则法（离线）或大模型法定位目标表物理页码 → 给出置信度、人工核对与页面预览；整本扫描件在规则法模式下自动改走大模型定位（未配置模型接口时给出明确提示） | `ui/step1_locator.py`、`services/solvency_hybrid_pipeline.py`、`services/solvency_pdf_locator.py` |
 | STEP2 表格提取 | 按确认页码逐页并发提取，默认“智能模式”：文字版页面优先规则法（离线零 token），规则未通过或扫描版页面自动转大模型；默认开启“整页全表提取”，一页多表时合并为同一张中间表展示（内部保留独立表块），不做目标表首尾边界裁切，避免指标被截断；提取结果可就地编辑、单表重跑，跨页按行拼接、表头归一、单位换算为万元 | `ui/step2_extraction.py`、`services/solvency_rule_table_extractor.py`、`services/solvency_table_region.py`、`services/solvency_ai_table_extractor.py`、`services/batch_extraction.py` |
 | STEP3 标准化 | 单份：按目标指标清单生成标准窄表（自动补注册资本、派生指标）；标准化后按 STEP7 指标需求清单检查缺口，可导出缺失指标补录表并回填合并；批量：定位→核对页码→提取三阶段处理多家公司，同样执行 STEP7 缺口检查，页面提示缺口、导出工作簿附「缺失指标清单」「公司覆盖汇总」两页 | `ui/step3_standardization.py`、`ui/step7_metric_check.py`、`services/solvency_step3_standardizer.py`、`services/step3_metric_gap.py`、`services/batch_processor.py` |
 | STEP4 勾稽检查 | 只读检查：数据规范、关键指标完整性、公式勾稽、跨表一致性；失败项显示原因、公式代入值与缺失/异常指标，并可下钻到 STEP3 对应记录；输出待处理事项与依据工作簿 | `ui/step4_validation.py`、`services/solvency_validator.py` |

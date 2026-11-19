@@ -1,0 +1,111 @@
+# 富德产险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022–2025 四份四季度报告实测定位（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=9   2023=11  2024=11  2025=10
+#   NON_LIFE_OPERATING_METRICS    2022=11  2023=13  2024=12  2025=11-12（跨页）
+#   ACTUAL_CAPITAL                2022=16  2023=19  2024=18  2025=17-18（跨页）
+#   MINIMUM_CAPITAL               2022=20  2023=25  2024=23  2025=21
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无该表（摘要式报告未披露） 2023=13 2024=12 2025=11
+#   LIQUIDITY_MONITORING          2022=9-10 2023=11-12 2024=11-12 2025=10-11
+#
+# 封面公司名四年一致：“富德财产保险股份有限公司”；文件名主干为“富德产险”。
+#
+# 分工：本 YAML 负责“定位”（页码窗口 + 章节锚点 + 续页页数），行级重建交给
+# 公司 extractor（services/company_extractors/fude.py，company.extractor: fude）。
+# 原因是 NON_LIFE profile 给下列表都内置了 boundary_variants，定位器与区域裁剪
+# 优先用 profile 的首尾项目，YAML 的 start_item/end_item 实际不生效（同华安财险
+# 的既有结论）。YAML 里保留 start_item/end_item 只作无 profile 版式时的兜底说明。
+#
+# 需要 extractor 的四处“网格结构坏了”：
+#   1) 经营指标：Profile 终止项为“其他渠道签单保费”，整表止于半途（车险签单、
+#      前五大险种、车均保费全丢），且 2022 第 12 页是风险管理正文被误判成续表。
+#   2) 最低资本：Profile 区域“最低资本→最低资本”把 34 行裁成 2 行。
+#   3) 实际资本：2025 跨页时串入下一页认可资产明细且丢掉“实际资本合计”。
+#   4) 流动性指标：2024/2025 为“类别（竖排合并）/序号/项目/本季度数/上季度数”
+#      五列，类别与序号并入项目列；2022/2023 是基本情景 + 监测指标两张异构表。
+#
+# 另有两处只靠 extractor 修的行级瑕疵：2024 主表“控制风险最低资本附加资本”
+# 两行被并成一行（附加资本补“-”）；实际资本表里两行同名“递延所得税资产…”，
+# 第二行按表格结构补“附属一级资本-”前缀以各自唯一命中指标库编码。
+
+company:
+  canonical: 富德产险
+  aliases:
+    - 富德财产
+    - 富德财产保险股份有限公司
+    - 富德财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  extractor: fude
+  notes: >-
+    2022 年为摘要式偿付能力报告（22 页），未披露“近三年（综合）投资收益率”，
+    属披露缺失而非提取遗漏；2023 年起为 27/25/23 页的完整格式。四年主表均为
+    四季度“本季度末数/上季度末数/下季度末预测数”三列，单位为元。
+
+structure_versions:
+  - since: 2022
+    notes: >-
+      2022–2024 年经营指标整表落在同一页（2022 第 11 页 / 2023 第 13 页 /
+      2024 第 12 页）。2022 年第 12 页是“风险管理能力”正文，仅因含“保险业务收入”
+      字样被定位器当成续表，限制为单页可避免产生一次失败页记录。
+    tables:
+      NON_LIFE_OPERATING_METRICS:
+        max_pages: 1
+  - since: 2025
+    notes: 2025 年起经营指标表跨第 11–12 页（车险签单、前五大险种、车均保费在第 12 页），恢复两页续页。
+    tables:
+      NON_LIFE_OPERATING_METRICS:
+        max_pages: 2
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [9, 11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要偿付能力指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [11, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 2022 年行名带“（元）”后缀，2023 起为“保险服务收入/保险业务收入”混写，
+    # 起项两个都列；终止项取四年共同的最后一行“车险车均保费（元）”。
+    start_item: [保险业务收入, 保险服务收入]
+    end_item: [车险车均保费, 车均保费]
+    required_items: [保险业务收入, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [16, 19]
+    tolerance: 2
+    page_match: prefer
+    # 原文标题为“九、实际资本（一）实际资本指标”；不能只用“实际资本”，
+    # 否则会被同册的偿付能力主表抢走。
+    anchor_terms: [实际资本指标]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [20, 25]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # Profile 默认区域从“最低资本”到“最低资本”，只能取到 3-4 行；
+    # 本表 34 行从“量化风险最低资本”到末行“最低资本”。
+    start_item: [量化风险最低资本]
+    end_item: [最低资本]
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12, 13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [9, 12]
+    tolerance: 2
+    page_match: prefer
+    # 2022/2023 写作“流动性风险监管指标/监测指标”，2024/2025 合并为“流动性风险指标”。
+    anchor_terms: [流动性风险监管指标, 流动性风险监测指标, 流动性风险指标]

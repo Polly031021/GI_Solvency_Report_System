@@ -1,0 +1,99 @@
+# 安信农业：公司级提取规则（2022-2025，农业保险）
+#
+# 页码依据：四份四季度报告实测定位（物理页）
+#   SOLVENCY_MAIN                 2022-2024=11   2025=10
+#   NON_LIFE_OPERATING_METRICS    2022=15  2023/2024=14  2025=13
+#   ACTUAL_CAPITAL                2022=25  2023=26  2024/2025=25
+#   MINIMUM_CAPITAL               2022=30-31  2023=31-32  2024=30-31  2025=30
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表   2023/2024=15  2025=14
+#   LIQUIDITY_MONITORING          2022=13-14  2023/2024=13  2025=12
+#
+# 版式差异：
+#   1) 2025 年报表整体前移一页，且金额单位由元改为万元；通用单位识别可处理。
+#   2) 2022 年全册无“近三年（综合）投资收益率”表，属披露缺失，不造数。
+#   3) 2025 年流动性监测表为汇总版（10 项指标、11 行），2022-2024 为
+#      “监测指标/项目/本季度/上季度”明细版（34 行），均为原文完整表。
+#   4) 最低资本表 2022-2024 跨页、续页无表头；2025 单页完整。
+#
+# 页码容差 2、page_match: prefer：窗口内按锚点匹配，未命中时回退全文锚点。
+company:
+  canonical: 安信农业
+  aliases: [太平洋安信农业保险股份有限公司, 安信农业保险股份有限公司, 安信农险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022-2025 版式稳定，仅 2025 年整体前移一页并改用万元；2022 年缺近三年
+    投资收益率表。农险特色行为“对农业保险提取的大灾风险准备金”在实际资本表内。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [25]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本表]
+    required_items: [核心一级资本, 附属一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [30, 31]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [15]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+
+structure_versions:
+  - since: 2023
+    notes: 经营表前移一页；实际资本表后移一页；最低资本表 31-32 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [11], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [26], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [31, 32], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [15], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [13], tolerance: 2}
+
+  - since: 2024
+    notes: 回到 2023 年的相对位置；实际资本表回到 25 页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [11], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30, 31], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [15], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [13], tolerance: 2}
+
+  - since: 2025
+    notes: 整体前移一页；单位改万元；流动性表改为 10 项汇总版
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [10], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [25], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [30], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [12], tolerance: 2}

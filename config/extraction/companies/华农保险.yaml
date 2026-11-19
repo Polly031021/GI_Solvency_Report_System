@@ -1,0 +1,114 @@
+# 华农保险：公司级提取规则（2022-2025，四期年报）
+#
+# 页码依据：dump_tables.py 四份报告实测（物理页，容差 ±2）
+#   SOLVENCY_MAIN                 2022=12  2023=13  2024=13  2025=13
+#   NON_LIFE_OPERATING_METRICS    2022=13  2023=14  2024=14  2025=14
+#   ACTUAL_CAPITAL                2022=29  2023=29  2024=29-30  2025=31-32
+#   MINIMUM_CAPITAL               2022=38-39  2023=37-38  2024=40-41  2025=42-43
+#   THREE_YEAR_INVESTMENT_RETURN  2022 无此表；2023/2024=14；2025=14-15（跨页）
+#   LIQUIDITY_MONITORING          2022=12-13  2023/2024=13-14  2025=13-14
+#
+# 封面公司名：“华农财产保险股份有限公司”；报告期均为四季度，单位万元（S02/S05 为元）。
+# 版式特点：
+#   1) 主要经营指标表与“近三年（综合）投资收益率”同在第 14 页，
+#      通用规则会把整页经营表当成近三年表（2023/2024 出现 36 行、2025 跨 14/15 页）。
+#   2) 2022/2023 最低资本表跨页且续页无表头，通用规则只取到首页 3-4 行。
+#   两处都需要后续 extractor 兜底（本批只落 YAML，见 plans/company-华农保险-extraction.md）。
+
+company:
+  canonical: 华农保险
+  aliases: [华农财产保险股份有限公司, 华农财产, 华农财险]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    2022 年执行旧会计准则，经营指标行名带“（%）”“（万元）”后缀，且全册没有
+    “近三年（综合）投资收益率”表，属披露缺失；2023 年起改用新准则并新增该表。
+    2022/2023 最低资本表跨页（第 38/39、37/38 页），续页无表头。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [13]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # profile 默认以“综合成本率”等为终止项，会把效益类/规模类与签单保费裁掉；
+    # 四年表格实际都结束于“5.4 其他渠道签单保费（万元）”。
+    start_item: [保险业务收入]
+    end_item: [其他渠道签单保费, 其他渠道]
+    required_items: [保险业务收入, 综合成本率, 签单保费]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [29, 30]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本明细表, 实际资本表]
+    required_items: [实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [40, 41]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本表]
+    # 2022/2023 的续页无表头，必须把续页显式放进窗口（见 structure_versions）。
+    required_items: [最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [14, 15]
+    tolerance: 2
+    page_match: prefer
+    # 原文标题为“近三年（综合）投资收益率”，行名“近三年投资收益率/近三年综合投资收益率”。
+    anchor_terms: [近三年投资收益率, 近三年综合投资收益率]
+    required_items: [近三年投资收益率, 近三年综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [13, 14]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+
+structure_versions:
+  - since: 2022
+    notes: 旧准则；无近三年投资收益率表；最低资本表 38/39 跨页，续页无表头
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [12], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [38, 39], tolerance: 0, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [12, 13], tolerance: 2, page_match: prefer}
+
+  - since: 2023
+    notes: 新准则首年；近三年收益率表与经营表同页；最低资本表 37/38 跨页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29, 30], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [37, 38], tolerance: 0, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: 版式与 2023 一致，实际资本 29/30、最低资本 40/41 跨页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [29, 30], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [40, 41], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 报表后移 2 页；近三年收益率表跨 14/15 页，两行分置两页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [31, 32], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [42, 43], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13, 14], tolerance: 2, page_match: prefer}

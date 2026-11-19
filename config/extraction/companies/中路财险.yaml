@@ -1,0 +1,105 @@
+# 中路财险：公司级提取规则（跨年度复用，页码差异走 structure_versions）
+#
+# 页码依据：2022-2025 四年实测定位结果（物理页，容差 ±2）
+#   TABLE                         2022    2023    2024    2025
+#   SOLVENCY_MAIN                 17      15      14      14
+#   NON_LIFE_OPERATING_METRICS    19      17      16      16
+#   ACTUAL_CAPITAL                17      15      14-15   14-15
+#   MINIMUM_CAPITAL               38-39   35-36   34-35   32-33
+#   THREE_YEAR_INVESTMENT_RETURN  原文缺   18      17      17
+#   LIQUIDITY_MONITORING          17-18   15-16   14-15   14-15
+#
+# 版式特征：
+#   1. 实际资本表（S02）2024/2025 跨页：第 14 页为偿付能力指标主表（同一张表被
+#      通用规则同时命中 SOLVENCY_MAIN 与 ACTUAL_CAPITAL），第 15 页续页为流动性
+#      监测指标，故窗口给 [14, 15]，主表数值取首页。
+#   2. 最低资本表（S04）为两页且续页无表头，窗口给 [n, n+1]。
+#   3. 2022 年报全册无“近三年平均投资收益率”表（定位结果为空），属原文披露缺失，
+#      该年不写 THREE_YEAR_INVESTMENT_RETURN 页码，验收按“原文缺失”处理。
+#   4. 金额单位：偿付能力指标表、经营指标表为元；实际资本/最低资本表内标注“单位：元”。
+#      经营表中总资产/净资产/保险合同负债仅期初列有值（期末列为空），属原文排版。
+
+company:
+  canonical: 中路财险
+  aliases: [中路财产保险股份有限公司]
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    小型财险公司，2022-2025 版式同源，仅页码逐年小幅漂移（2022 最晚、
+    2023 起整体前移 2 页、2024/2025 稳定）。用 structure_versions 按年钉死各表
+    起始页，tolerance 2 兜住同年跨页续页；三年均无专属 extractor，走通用网格。
+    2022 年缺近三年投资收益率表，属原文缺失，不造数。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [偿付能力指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [19]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    start_item: [保险业务收入]
+    end_item: [综合成本率]
+    required_items: [保险业务收入, 净利润, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    required_items: [核心一级资本, 实际资本]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [38, 39]
+    tolerance: 2
+    page_match: prefer
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17, 18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]
+
+structure_versions:
+  - since: 2023
+    notes: 2023 起各表整体前移 2 页；2022 缺近三年投资收益率表，该年首次出现
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [15], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [35, 36], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [15, 16], tolerance: 2, page_match: prefer}
+
+  - since: 2024
+    notes: 2024/2025 版式一致，实际资本表跨 14-15 页（续页为流动性监测）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [34, 35], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}
+
+  - since: 2025
+    notes: 2025 仅最低资本前移 2 页，其余与 2024 相同
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [14], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [32, 33], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [14, 15], tolerance: 2, page_match: prefer}

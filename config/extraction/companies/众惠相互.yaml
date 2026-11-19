@@ -1,0 +1,117 @@
+# 众惠相互：公司级提取规则（跨年度复用；页码差异走 structure_versions）
+#
+# 主体：众惠财产相互保险社（相互制财险），PDF 文件名“众惠相互.pdf”与 canonical 一致。
+# 通用封面识别对四份报告均返回空串（见计划文档“共享层问题”），批量入口按文件名主干
+# 回退，故 aliases 必须覆盖封面全称“众惠财产相互保险社”。
+#
+# 页码依据：2022-2025 四份四季度报告实测（物理页，容差 ±2，page_match=prefer）
+#   SOLVENCY_MAIN                 2022=16  2023=16  2024=15  2025=18
+#   NON_LIFE_OPERATING_METRICS    2022=18  2023=18  2024=17  2025=20
+#   ACTUAL_CAPITAL                2022=32-33  2023=31-32  2024=29-30  2025=33-34（次页为无表头续页）
+#   MINIMUM_CAPITAL               2022=39  2023=38  2024=35  2025=39
+#   THREE_YEAR_INVESTMENT_RETURN  2022 原文无该表；2023=17  2024=16  2025=19
+#   LIQUIDITY_MONITORING          2022=17  2023=17  2024=16  2025=19
+#
+# 版式：章节号各年不同（2022/2023 为“六/七/八”，2024 起为“七/八/九”），但表结构一致：
+# 主表 15-16 行、经营指标 30 行（含车险/渠道专项行）、实际资本表跨两页、最低资本表单页。
+# 单位均为元；2022 经营表与主表存在“控制风险最低资本附加资本”被并成一格的行内粘连。
+#
+# 2022 年经营指标表与 2022-2025 实际资本表在通用 dump 中出现首列标签丢失
+# （行值只剩数字），需在验收时按 PDF 原文逐行核对；见计划文档“遗留”。
+
+company:
+  canonical: 众惠相互
+  aliases:
+    - 众惠财产相互保险社
+    - 众惠财险
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    相互制小型财险公司，2022-2025 四期版式稳定，仅整体页码前后漂移。
+    2022 年原文无“近三年（综合）投资收益率”表，属披露缺失，不是提取遗漏。
+    主表单位元、精确到分；2024 起经营表表头写“本季度/上年度累计”两列。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [16]
+    tolerance: 2
+    page_match: prefer
+    # 第 16 页同时有流动性监测表；用章节标题钉住主表，避免“核心偿付能力充足率”短词误配。
+    anchor_terms: [偿付能力充足率指标]
+    required_items: [认可资产, 认可负债, 实际资本, 最低资本, 核心偿付能力充足率, 综合偿付能力充足率]
+    unit: 元
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [18]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    # 四年全表均结束于“其中：其他渠道”，显式保留签单保费/车均保费/分渠道各段。
+    start_item: [保险业务收入, 保险服务收入]
+    end_item: [其他渠道]
+    required_items: [保险业务收入, 净利润, 综合成本率, 签单保费, 车险签单保费]
+    unit: 元
+
+  ACTUAL_CAPITAL:
+    expected_pages: [32, 33]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本, 核心一级资本]
+    required_items: [核心一级资本, 核心二级资本, 附属一级资本, 实际资本合计]
+    unit: 元
+
+  MINIMUM_CAPITAL:
+    expected_pages: [39]
+    tolerance: 2
+    page_match: prefer
+    # 第 39 页为“八、最低资本（一）最低资本”主表；后续 41-45 页是分险种明细表，勿取。
+    anchor_terms: [量化风险最低资本, 控制风险最低资本]
+    required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    unit: 元
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    unit: "%"
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [17]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流, 规模保费同比增速]
+    unit: 元
+
+structure_versions:
+  - since: 2023
+    notes: 2023 版式与 2022 完全同页码（主表 16、经营 18、实际资本 31-32、最低资本 38、流动性 17），仅新增近三年收益率（第 17 页）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [16], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [18], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [31, 32], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [38], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [17], tolerance: 2}
+
+  - since: 2024
+    notes: 2024 年正文前置一页（主表 15、经营 17、实际资本 29-30、最低资本 35、流动性/收益率 16）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [15], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [17], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [29, 30], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [35], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [16], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [16], tolerance: 2}
+
+  - since: 2025
+    notes: 2025 年封面/目录增页，整体后移 3 页（主表 18、经营 20、实际资本 33-34、最低资本 39、流动性/收益率 19）
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [18], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [20], tolerance: 2}
+      ACTUAL_CAPITAL: {expected_pages: [33, 34], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [39], tolerance: 2}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [19], tolerance: 2}
+      LIQUIDITY_MONITORING: {expected_pages: [19], tolerance: 2}

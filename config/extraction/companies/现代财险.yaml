@@ -1,0 +1,74 @@
+# 现代财险：公司级提取规则（跨年度复用，不按年维护）
+#
+# 页码依据：2022-2025 实测（物理页，容差 ±2，prefer）
+#   版式 2022-2024 完全一致（24 页）；2025 为 25 页，第四章起整体 +1 页。
+#   SOLVENCY_MAIN                 2022-2025=11
+#   NON_LIFE_OPERATING_METRICS    2022-2025=12
+#   ACTUAL_CAPITAL                2022-2024=19，2025=20
+#   MINIMUM_CAPITAL               2022-2024=22，2025=23
+#   THREE_YEAR_INVESTMENT_RETURN  2023-2025=12（2022 年报无该表）
+#   LIQUIDITY_MONITORING          2022-2025=11（流动性风险监测指标与主表同页，
+#                                 属“四、主要指标”小节，不单独成节）
+#
+# 2025 年的 +1 页漂移落在 ±2 窗口内，故不单列 structure_versions：
+# 仅当表结构真正大改（章节重排、列数变化）时才需要 since 版本。
+#
+# 封面公司名为“现代财产保险（中国）有限公司”，通用封面前缀正则不匹配，
+# metadata.公司 为空，由调用方公司名兜底路由；全称与“现代财险”一并登记别名。
+#
+# 金额单位：全报告为万元（认可资产表/最低资本表标题自带“单位：万元”）。
+
+company:
+  canonical: 现代财险
+  aliases:
+    - 现代财产保险（中国）有限公司
+    - 现代财产保险
+    - 现代财险（中国）有限公司
+  profile_id: NON_LIFE_SOLVENCY
+  rule_version: 1
+  notes: >-
+    外资模板，章节为“四、主要指标”下的主表与主要经营指标表，实际资本/最低
+    资本各占一节，附件等在正文之外；正文表格均单页成表，无跨页表格。
+
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要指标]
+    required_items: [认可资产, 实际资本, 最低资本, 综合偿付能力充足率]
+
+  NON_LIFE_OPERATING_METRICS:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [主要经营指标]
+    required_items: [保险业务收入, 综合成本率]
+
+  ACTUAL_CAPITAL:
+    expected_pages: [19, 20]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [实际资本]
+    required_items: [核心一级资本, 实际资本合计]
+
+  MINIMUM_CAPITAL:
+    expected_pages: [22, 23]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [最低资本]
+    required_items: [量化风险最低资本, 最低资本]
+
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: [12]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [近三年平均投资收益率]
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+
+  LIQUIDITY_MONITORING:
+    expected_pages: [11]
+    tolerance: 2
+    page_match: prefer
+    anchor_terms: [流动性风险监测指标]
+    required_items: [经营活动净现金流]
