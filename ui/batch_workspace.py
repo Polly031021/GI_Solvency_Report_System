@@ -115,7 +115,7 @@ def batch_status_frame(documents: dict[str, dict]) -> pd.DataFrame:
             {
                 "公司": company,
                 "PDF": document.get("pdf_name", ""),
-                "页数": document.get("metadata", {}).get("页数", ""),
+                "页数": str(document.get("metadata", {}).get("页数") or ""),
                 "定位": document.get("locate_status", "") or "未执行",
                 "定位逻辑": document.get("locate_method", "") or "—",
                 "目标表": f"{located}/{len(matches)}" if matches else "—",
