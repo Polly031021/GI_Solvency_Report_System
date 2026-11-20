@@ -114,6 +114,14 @@ def _is_number_line(line: str) -> bool:
     return bool(NUMBER_LINE_RE.match(_clean_cell(line)))
 
 
+_PLACEHOLDER_VALUES = {"--", "-", "—", "–", "－"}
+
+
+def _is_value_line(line: str) -> bool:
+    """数值行或占位符（“--” 表示本季度不适用，累计列仍有值）。"""
+    return _is_number_line(line) or _clean_cell(line) in _PLACEHOLDER_VALUES
+
+
 def _looks_like_label(value: Any) -> bool:
     """中文标签：非空、无数字、不是占位符。"""
     text = str(value or "").strip()
@@ -195,7 +203,7 @@ def _parse_operating_rows(text: str) -> list[list[str]]:
             continue
         values: list[str] = []
         cursor = index + 1
-        while cursor < len(lines) and _is_number_line(lines[cursor]) and len(values) < 2:
+        while cursor < len(lines) and _is_value_line(lines[cursor]) and len(values) < 2:
             values.append(_clean_cell(lines[cursor]))
             cursor += 1
         if values:
