@@ -1128,6 +1128,89 @@ def _target_summary(
     return _attach_diagnostic_status(summary, diagnostics)
 
 
+_INSURANCE_RISK_ZERO_CODE = "INSURANCE_RISK_CAPITAL"
+_MIN_CAPITAL_PEER_CODES = frozenset({
+    "QUANT_RISK_CAPITAL",
+    "NON_LIFE_INSURANCE_RISK_CAPITAL",
+    "MARKET_RISK_CAPITAL",
+    "CREDIT_RISK_CAPITAL",
+    "MINIMUM_CAPITAL",
+})
+
+
+def _fill_insurance_risk_zero_default(
+    data: pd.DataFrame,
+    target_catalog: pd.DataFrame,
+    *,
+    company_type: str,
+    report_profile_id: str,
+) -> pd.DataFrame:
+    """财险公司的“寿险业务保险风险最低资本合计”按 0 处理。
+
+    该指标对财险公司恒为 0，部分报告写 “-” 或整行不披露；在标准化末尾
+    补齐缺失期间，避免 STEP7 把它当成缺失指标。
+    """
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return data
+    is_non_life = (
+        report_profile_id == "NON_LIFE_SOLVENCY"
+        or "财险" in str(company_type or "")
+    )
+    if not is_non_life:
+        return data
+    catalog = target_catalog[
+        target_catalog["指标编码"].astype(str).str.strip().eq(_INSURANCE_RISK_ZERO_CODE)
+    ]
+    if catalog.empty:
+        return data
+    catalog_row = catalog.iloc[0]
+    existing = data[
+        data["指标编码"].astype(str).str.strip().eq(_INSURANCE_RISK_ZERO_CODE)
+    ]
+    peers = data[
+        data["指标编码"].astype(str).str.strip().isin(_MIN_CAPITAL_PEER_CODES)
+    ]
+    if peers.empty:
+        return data
+    existing_periods = set(existing["期间口径"].astype(str))
+    missing_periods = [
+        period
+        for period in dict.fromkeys(peers["期间口径"].astype(str))
+        if period and period not in existing_periods
+    ]
+    if not missing_periods:
+        return data
+    template = peers.iloc[0].to_dict()
+    rows = []
+    for period in missing_periods:
+        row = dict(template)
+        row.update(
+            {
+                "指标编码": _INSURANCE_RISK_ZERO_CODE,
+                "指标名称": str(
+                    catalog_row.get("指标名称")
+                    or "寿险业务保险风险最低资本合计"
+                ),
+                "一级模块": str(
+                    catalog_row.get("一级模块") or template.get("一级模块") or ""
+                ),
+                "二级模块": str(
+                    catalog_row.get("二级模块") or template.get("二级模块") or ""
+                ),
+                "期间口径": period,
+                "数值": 0.0,
+                "单位": str(
+                    catalog_row.get("标准单位") or template.get("单位") or "万元"
+                ),
+                "是否预测": "是" if "预测" in period else "否",
+                "备注": "财险公司寿险业务保险风险最低资本恒为0（报告未披露或为“-”）",
+                "来源类型": "规则法（默认0）",
+            }
+        )
+        rows.append(row)
+    return pd.concat([data, pd.DataFrame(rows)], ignore_index=True)
+
+
 def standardize_to_target(
     tables: list[ExtractedTable],
     taxonomy: pd.DataFrame,
@@ -1229,8 +1312,13 @@ def standardize_to_target(
                 kind="stable",
             ).drop(columns="_目标顺序")
     data = data.reindex(columns=STANDARD_COLUMNS).reset_index(drop=True)
+    data = _fill_insurance_risk_zero_default(
+        data,
+        target_catalog,
+        company_type=company_type,
+        report_profile_id=report_profile_id,
+    )
 
-    
     # ===== 补漏匹配：对未填报的关键指标，用"清洗后名称"做二次精确匹配 =====
     import re as _re_supp
     _NOISE_RE_SUPP = _re_supp.compile(r"[\d,，.。%％:：;；()（）\[\]【】\s\-—_*+=/\\|]+")

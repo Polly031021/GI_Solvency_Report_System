@@ -150,6 +150,9 @@ PDF → STEP0 监控更新 → STEP1 页码定位 → STEP2 表格提取
   `上季度数/上季度/上期` → `上季度末数`。不再区分存量/经营指标，
   见 `solvency_normalizer._normalize_period_alias()`。
   勾稽检查 `PERIOD_GROUP_ALIASES` 已将“本季度末数”归入 `当前期末` 组，校验逻辑无需改动。
+- **财险口径（2026-11-20）**：`INSURANCE_RISK_CAPITAL`（寿险业务保险风险最低资本合计）
+  对财险公司恒为 0；报告写“-”或整行不披露时，STEP3 补 0（备注“恒为0”），
+  见 `solvency_step3_standardizer._fill_insurance_risk_zero_default()`。
 - 期间口径：年度数据只认 `本年累计数/年度累计数/全年累计数`
   （见 `solvency_step7_charts/industry_premium.py:ANNUAL_SCOPE_ALIASES`）。
 - **同比口径（2026-11 已定稿）**：`Q4` 优先；**部分年度（如 2026Q3）与上一整年不可比，
