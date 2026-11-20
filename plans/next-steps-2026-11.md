@@ -28,6 +28,14 @@
 
 ## 1. P0：正确性收尾（优先做）
 
+### 1.0 STEP1 页码自动确认（✅ 已完成 2026-11-20）
+
+- 定位完成后 `compare_pages_with_rule()` 逐表对比 YAML `expected_pages±tolerance`
+- 全部“通过/偏移”且无定位冲突 → 自动 `pages_confirmed=True`，不再要求人工点确认
+- 未配置 / 未定位 / 超出窗口 → STEP1 显示对比表并提示人工确认
+- 批量定位逐份自动确认，批量状态表“页码确认”列直接反映结果
+- 测试：`tests/test_page_check_with_rule.py`
+
 ### 1.1 R4 缺失原因透出（✅ 已完成 2026-11-20）
 
 实现：

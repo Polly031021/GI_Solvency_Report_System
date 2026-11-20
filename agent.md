@@ -192,6 +192,10 @@ services/company_extractors/_main_table.py 主表重建 helper（金额跨行/�
 - 路由键：封面 `公司`（别名归一）+ `报告年度`（仅用于选 `structure_versions`）。
 - 页码：`expected_pages` + `tolerance`（默认 2）→ 窗口；窗口内按 `anchor_terms` 命中，
   窗口外回退全文；`prefer` / `strict` / `anchor_only` 三种模式。
+- **页码自动确认（2026-11-20）**：定位完成后 `compare_pages_with_rule()` 逐表对比
+  `expected_pages`；全部“通过/偏移”且无定位冲突时自动 `pages_confirmed=True`，
+  否则 STEP1 显示对比表并提示人工确认。批量定位同样逐份自动确认。
+  对比函数在 `services/extraction_rules.py`，测试 `tests/test_page_check_with_rule.py`。
 - extractor 名称经 `_extraction_rule.extractor` 传入；单文件与批量共用
   `apply_company_extractor_for_tables()`：
   - 批量：`batch_workflow.extract_document_tables`

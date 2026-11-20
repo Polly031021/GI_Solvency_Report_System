@@ -534,3 +534,127 @@ def resolve_rule_for_pdf(
         directory=directory,
     )
     return rule, metadata
+
+
+@dataclass(frozen=True)
+class PageCheck:
+    """STEP1 定位结果与公司 YAML 页码的比对结论。"""
+
+    table_id: str
+    table_name: str
+    actual_pages: tuple[int, ...]
+    expected_pages: tuple[int, ...]
+    window: tuple[int, int] | None
+    status: str
+    message: str
+
+    @property
+    def passed(self) -> bool:
+        return self.status in {"通过", "偏移"}
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "目标表": self.table_name or self.table_id,
+            "实际页码": "、".join(str(page) for page in self.actual_pages) or "—",
+            "预期页码": "、".join(str(page) for page in self.expected_pages) or "未配置",
+            "容差窗口": (
+                f"{self.window[0]}-{self.window[1]}"
+                if self.window is not None
+                else "—"
+            ),
+            "对比结果": self.status,
+            "说明": self.message,
+        }
+
+
+def _rule_config_for(table_id: str, resolved_rule: ResolvedRule | None) -> dict[str, Any]:
+    if resolved_rule is None:
+        return {}
+    tables = getattr(resolved_rule, "tables", {}) or {}
+    if table_id in tables:
+        return dict(tables[table_id])
+    aliases = load_table_maps()["aliases"]
+    primary = aliases.get(table_id, table_id)
+    if primary in tables:
+        return dict(tables[primary])
+    for key, config in tables.items():
+        if aliases.get(key, key) == primary:
+            return dict(config)
+    return {}
+
+
+def compare_pages_with_rule(
+    matches: Sequence[Any] | None,
+    resolved_rule: ResolvedRule | None,
+) -> list[PageCheck]:
+    """把定位页码与公司 YAML 的 expected_pages 逐表比对。
+
+    状态：通过 / 偏移（窗口内） / 超出窗口 / 未定位 / 未配置。
+    只有“通过/偏移”算 passed；未配置的表需要人工确认。
+    """
+    checks: list[PageCheck] = []
+    for match in matches or []:
+        table_id = str(getattr(match, "table_id", "") or "")
+        table_name = str(getattr(match, "table_name", "") or table_id)
+        actual = tuple(
+            int(page) for page in (getattr(match, "pages", []) or []) if int(page) > 0
+        )
+        config = _rule_config_for(table_id, resolved_rule)
+        expected = tuple(
+            int(page) for page in (config.get("expected_pages") or []) if int(page) > 0
+        )
+        try:
+            tolerance = max(0, int(config.get("tolerance", DEFAULT_TOLERANCE)))
+        except (TypeError, ValueError):
+            tolerance = DEFAULT_TOLERANCE
+
+        if not expected:
+            checks.append(
+                PageCheck(
+                    table_id,
+                    table_name,
+                    actual,
+                    (),
+                    None,
+                    "未配置",
+                    "公司 YAML 未配置 expected_pages，需人工确认",
+                )
+            )
+            continue
+
+        window = (max(1, min(expected) - tolerance), max(expected) + tolerance)
+        if not actual:
+            status = "未定位"
+            message = f"预期第 {'、'.join(map(str, expected))} 页，但未定位到目标表"
+        elif any(window[0] <= page <= window[1] for page in actual):
+            if set(actual) == set(expected):
+                status = "通过"
+                message = f"实际 {actual} 与预期 {expected} 完全一致"
+            else:
+                status = "偏移"
+                message = (
+                    f"实际 {actual} 在窗口 {window[0]}-{window[1]} 内"
+                    f"（预期 {expected}）"
+                )
+        else:
+            status = "超出窗口"
+            message = (
+                f"实际 {actual} 超出窗口 {window[0]}-{window[1]}"
+                f"（预期 {expected}）"
+            )
+        checks.append(
+            PageCheck(table_id, table_name, actual, expected, window, status, message)
+        )
+    return checks
+
+
+def page_check_passed(
+    checks: Sequence[PageCheck],
+    matches: Sequence[Any] | None = None,
+) -> bool:
+    """所有表都通过（允许窗口内偏移）且无定位冲突时才自动确认。"""
+    if not checks:
+        return False
+    if any(getattr(match, "review_required", False) for match in (matches or [])):
+        return False
+    return all(check.passed for check in checks)

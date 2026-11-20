@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import fitz
+import pandas as pd
 import streamlit as st
 from services.report_profiles import ReportProfile
 from services.workflow_settings import apply_pending_single_settings
-from services.extraction_rules import apply_rule_to_tables, resolve_rule
+from services.extraction_rules import (
+    apply_rule_to_tables,
+    compare_pages_with_rule,
+    page_check_passed,
+    resolve_rule,
+)
 from services.solvency_hybrid_pipeline import locate_tables_hybrid
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
 from services.solvency_pdf_locator import (
@@ -24,6 +30,7 @@ from .step2_extraction import clear_extraction_results
 def _mark_pages_dirty() -> None:
     """只有用户真正修改页码输入框时，才取消“已确认”状态。"""
     st.session_state.pages_confirmed = False
+    st.session_state.page_check_auto_confirmed = False
 
 
 def _render_locator_review_panel(total_pages: int, gold_case: dict | None) -> None:
@@ -297,6 +304,13 @@ def _render_locator_target_panel(
                 }
                 for item in matches:
                     st.session_state[f"page_edit_{item.table_id}"] = ", ".join(map(str, item.pages))
+                # 与公司 YAML 的 expected_pages 逐表对比；全部通过则自动确认页码。
+                checks = compare_pages_with_rule(matches, resolved_rule)
+                st.session_state.page_checks = [check.to_row() for check in checks]
+                auto_confirmed = page_check_passed(checks, matches)
+                st.session_state.page_check_auto_confirmed = auto_confirmed
+                if auto_confirmed:
+                    st.session_state.pages_confirmed = True
             located_count = sum(bool(item.pages) for item in matches)
             if resolved_rule is not None:
                 st.caption(
@@ -316,6 +330,32 @@ def _render_locator_target_panel(
                 st.warning(locator_message)
             else:
                 st.info(locator_message)
+    page_checks = st.session_state.get("page_checks") or []
+    if page_checks:
+        st.markdown("##### 页码与公司规则对比")
+        display_rows = [
+            {key: value for key, value in row.items() if key != "passed"}
+            for row in page_checks
+        ]
+        st.dataframe(
+            pd.DataFrame(display_rows),
+            width="stretch",
+            hide_index=True,
+        )
+        failed = [row for row in page_checks if not row.get("passed")]
+        if st.session_state.get("pages_confirmed") and st.session_state.get(
+            "page_check_auto_confirmed"
+        ):
+            st.success("页码与公司规则全部匹配，已自动确认，可直接进入 STEP2。")
+        elif failed:
+            st.warning(
+                "以下目标与公司规则对比未通过，需人工确认："
+                + "；".join(
+                    f"{row.get('目标表')}（{row.get('对比结果')}）"
+                    for row in failed
+                )
+            )
+
     _render_locator_review_panel(total_pages, gold_case)
 
 
@@ -370,6 +410,8 @@ def _clear_page_locations() -> None:
         ("page_matches", []),
         ("edited_pages", {}),
         ("pages_confirmed", False),
+        ("page_checks", []),
+        ("page_check_auto_confirmed", False),
     ):
         st.session_state[key] = value
 
@@ -647,6 +689,19 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
                         "locate_note": result.get("说明", ""),
                         "locate_method": locate_logic,
                     }
+                )
+                # 与公司 YAML 对比：全部通过则自动确认，否则留在人工核对。
+                batch_rule = resolve_rule(
+                    (updated.get("metadata") or {}).get("公司") or company,
+                    (updated.get("metadata") or {}).get("报告年度"),
+                    profile_id=active_profile.profile_id,
+                )
+                batch_checks = compare_pages_with_rule(
+                    updated.get("matches") or [], batch_rule
+                )
+                updated["page_checks"] = [check.to_row() for check in batch_checks]
+                updated["pages_confirmed"] = page_check_passed(
+                    batch_checks, updated.get("matches") or []
                 )
                 updated_documents[company] = updated
                 progress.progress(
