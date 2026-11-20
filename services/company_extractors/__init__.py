@@ -41,6 +41,26 @@ def get_postprocessor(name: str) -> Callable[..., Sequence[Any]] | None:
     return POSTPROCESSORS.get(key)
 
 
+def get_company_document_hooks(
+    name: str,
+) -> tuple[Callable[..., Any] | None, Callable[..., Any] | None]:
+    """Return optional company-specific locator and document extractor hooks."""
+    key = str(name or "").strip().lower()
+    if not key:
+        return None, None
+    module_name = "".join(ch for ch in key if ch.isalnum() or ch == "_")
+    if not module_name:
+        return None, None
+    try:
+        module = importlib.import_module(f".{module_name}", __name__)
+    except ImportError:
+        return None, None
+    return (
+        getattr(module, "locate_company_tables", None),
+        getattr(module, "extract_company_tables", None),
+    )
+
+
 def apply_company_extractor(
     name: str,
     tables: Sequence[Any],
@@ -86,6 +106,22 @@ def apply_company_extractor_for_tables(
         return tables, None
     try:
         updated = list(apply_company_extractor(name, tables, pdf_bytes=pdf_bytes))
+        contract_failures = []
+        for table in updated:
+            config = getattr(table, "table_config", None)
+            if not isinstance(config, dict):
+                continue
+            failure = str(config.get("_layout_contract_failure") or "").strip()
+            if failure:
+                contract_failures.append(
+                    f"{getattr(table, 'table_name', '')}: {failure}"
+                )
+        if contract_failures:
+            return updated, {
+                "extractor": name,
+                "status": "失败",
+                "message": "；".join(contract_failures)[:500],
+            }
         return updated, {
             "extractor": name,
             "status": "成功",

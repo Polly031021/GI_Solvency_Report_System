@@ -15,18 +15,6 @@ from ..solvency_pdf_locator import (
 
 from .locator_vision import _profile_instruction_block, _profile_prompt_values
 
-try:
-    _FITZ_MAJOR = int(str(fitz.VersionBind).split(".")[0])
-except (AttributeError, TypeError, ValueError):  # pragma: no cover
-    _FITZ_MAJOR = 0
-
-# PyMuPDF 2.x 的 Page.find_tables() 在部分页面（如众安 2023 p6）会触发
-# 原生崩溃（access violation 0xC0000005，Python 层 try/except 捕获不到，
-# 进程直接退出）。这个调用只用来判断"本页像不像表格"，数字行与续表词
-# 已能覆盖同类信号，因此在 2.x 上直接停用，1.x 保持原行为。
-_FIND_TABLES_ENABLED = _FITZ_MAJOR < 2
-
-
 def _radar_content_anchor(
     table_id: str,
     content_hits: list[str],
@@ -47,11 +35,53 @@ def _radar_content_anchor(
 def _solvency_radar(
     pdf_bytes: bytes,
     feature_config: dict,
+    *,
+    page_texts: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[list[str], dict[str, list[int]], str]:
     tables = feature_config.get("tables", [])
     hints: dict[str, list[int]] = {str(item["table_id"]): [] for item in tables}
     summaries: list[str] = []
-    page_texts: list[str] = []
+    if page_texts is not None:
+        extracted_texts = [str(text or "") for text in page_texts]
+        for index, raw_text in enumerate(extracted_texts):
+            compressed = " ".join(raw_text.replace("\x00", " ").split())
+            summaries.append(f"---PDF物理第{index + 1}页---\n{compressed[:1600]}")
+            compact_text = re.sub(r"\s+", "", raw_text)
+            numeric_lines = _numeric_table_lines(raw_text)
+            continued = any(term in compact_text for term in ("续表", "（续）", "(续)"))
+            table_like = numeric_lines >= 2 or continued
+            for table in tables:
+                table_id = str(table["table_id"])
+                if _excluded_detail_page(raw_text, table):
+                    continue
+                title_hits = _term_hits(raw_text, table.get("title_terms", []))
+                content_hits = _term_hits(raw_text, table.get("content_terms", []))
+                header_hits = _term_hits(raw_text, table.get("header_terms", []))
+                continuation_hits = _term_hits(
+                    raw_text,
+                    table.get("continuation_terms", []),
+                )
+                terminal_hits = _term_hits(raw_text, table.get("terminal_terms", []))
+                strong_anchor = bool(title_hits) and (
+                    len(content_hits) + len(header_hits) >= 1 or numeric_lines >= 2
+                )
+                content_anchor = _radar_content_anchor(
+                    table_id,
+                    content_hits,
+                    header_hits,
+                    terminal_hits,
+                    table_like,
+                )
+                explicit_continuation = (
+                    continued
+                    and table_like
+                    and bool(content_hits or header_hits or continuation_hits)
+                )
+                if strong_anchor or content_anchor or explicit_continuation:
+                    hints[table_id].append(index + 1)
+        return extracted_texts, hints, _radar_hint_text(hints, tables)
+
+    page_texts = []
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         for index in range(len(document)):
@@ -61,16 +91,12 @@ def _solvency_radar(
             compressed = " ".join(raw_text.replace("\x00", " ").split())
             summaries.append(f"---PDF物理第{index + 1}页---\n{compressed[:1600]}")
             compact_text = re.sub(r"\s+", "", raw_text)
-            if _FIND_TABLES_ENABLED:
-                try:
-                    has_table = bool(page.find_tables().tables)
-                except Exception:
-                    has_table = False
-            else:
-                has_table = False
             numeric_lines = _numeric_table_lines(raw_text)
             continued = any(term in compact_text for term in ("续表", "（续）", "(续)"))
-            table_like = has_table or numeric_lines >= 2 or continued
+            # ``page.find_tables()`` is disproportionately expensive and has
+            # caused native crashes in some PyMuPDF builds. Numeric table lines
+            # and continuation markers carry the same signal needed by radar.
+            table_like = numeric_lines >= 2 or continued
             for table in tables:
                 table_id = str(table["table_id"])
                 if _excluded_detail_page(raw_text, table):
@@ -99,6 +125,13 @@ def _solvency_radar(
                     hints[table_id].append(index + 1)
     finally:
         document.close()
+    return page_texts, hints, _radar_hint_text(hints, tables)
+
+
+def _radar_hint_text(
+    hints: dict[str, list[int]],
+    tables: list[dict],
+) -> str:
     hint_lines = []
     by_id = {str(item["table_id"]): item for item in tables}
     for table_id, pages in hints.items():
@@ -106,7 +139,7 @@ def _solvency_radar(
             hint_lines.append(
                 f"- {by_id[table_id]['table_name']}：候选物理页码 {sorted(set(pages))}"
             )
-    return page_texts, hints, "\n".join(hint_lines) or "- Python雷达未找到强候选页"
+    return "\n".join(hint_lines) or "- Python雷达未找到强候选页"
 
 
 def _merge_locator_pages(

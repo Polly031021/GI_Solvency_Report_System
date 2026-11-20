@@ -103,6 +103,32 @@ CAPITAL_COMPONENT_ZERO_TABLE_IDS = frozenset({
     "SOLVENCY_MAIN",
 })
 
+# 这些指标在指定表中使用 "-" / "--" 明确表示业务值为 0。
+# 与普通空白不同，这是源表主动披露的零值口径。
+DISCLOSED_DASH_ZERO_CODES = CAPITAL_COMPONENT_ZERO_CODES | frozenset({
+    "CONTRACT_LOSS_ABSORPTION_EFFECT",
+})
+DISCLOSED_DASH_ZERO_TABLE_IDS = CAPITAL_COMPONENT_ZERO_TABLE_IDS | frozenset({
+    "MINIMUM_CAPITAL",
+})
+# 资本类金额表中的“-”通常表示该项不适用或余额为 0，而不是缺披露。
+# 百分比、文本和其他业务表不套用这个规则。
+DASH_ZERO_AMOUNT_TABLE_IDS = frozenset({
+    "ACTUAL_CAPITAL",
+    "SOLVENCY_MAIN",
+    "MINIMUM_CAPITAL",
+})
+# 核心偿付能力指标即使出现“-”也不能静默写 0，必须保留为缺失并提示核对。
+DASH_ZERO_AMOUNT_EXCLUDE_CODES = frozenset({
+    "RECOGNIZED_ASSETS",
+    "RECOGNIZED_LIABILITIES",
+    "ACTUAL_CAPITAL",
+    "MINIMUM_CAPITAL",
+    "QUANT_RISK_CAPITAL",
+    "CORE_SOLVENCY_RATIO",
+    "COMBINED_SOLVENCY_RATIO",
+})
+
 # 空白/占位符不再统一写成 0：只有明确写出的 0、资本明细空白和资本明细
 # 短横线保留 0 规则；其余空白、“不适用”“未披露”和无法解析文本按缺失处理，
 # 不生成数值记录，但写入“匹配诊断”并在填报汇总中计数，避免假 0 顶掉真值。
@@ -468,6 +494,10 @@ def _normalize_label(value: str) -> str:
         text = re.sub(r"十二\s*个月", "12个月", text)
         text = re.sub(r"三\s*个月", "3个月", text)
         text = re.sub(r"一\s*年", "12个月", text)
+        lcr_match = re.search(r"LCR\s*([123])", text, flags=re.IGNORECASE)
+        period_match = re.search(r"(3|12)\s*个月", text)
+        if lcr_match and period_match:
+            text = f"LCR{lcr_match.group(1)}未来{period_match.group(1)}个月"
     return text
 
 
@@ -1357,8 +1387,7 @@ def normalize_tables(
                 target_unit = str(metric.get("标准单位", "")).strip()
                 note = ""
                 blank_capital_zero = False
-                blank_numeric_zero = False
-                capital_dash_zero = False
+                disclosed_dash_zero = False
                 if data_type in {"文本", "评级", "布尔"}:
                     value = raw_value.strip()
                     if not value:
@@ -1374,23 +1403,55 @@ def normalize_tables(
                             _metric_code in CAPITAL_COMPONENT_ZERO_CODES
                             and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
                         )
+                        _dash_zero_scope = (
+                            (
+                                _metric_code in DISCLOSED_DASH_ZERO_CODES
+                                and _table_id in DISCLOSED_DASH_ZERO_TABLE_IDS
+                            )
+                            or (
+                                _table_id in DASH_ZERO_AMOUNT_TABLE_IDS
+                                and data_type == "金额"
+                                and _metric_code not in DASH_ZERO_AMOUNT_EXCLUDE_CODES
+                            )
+                        )
                         if not _raw_text:
-                            # ★ 用户口径：空白单元格表示 0，不是未填报，
-                            #   也不是未披露。文本型指标仍跳过空白。
-                            #   未映射的原始指标不套用该口径：空白即缺失。
                             if metric.get("_unmapped"):
                                 continue
-                            numeric_value = 0.0
                             if _capital_scope:
+                                # 只有资本四层级的空白按 0 处理。其他空白
+                                # 很可能来自列错位、跨页断裂或表头丢失，
+                                # 继续写 0 会生成难以发现的假数据。
+                                numeric_value = 0.0
                                 blank_capital_zero = True
                             else:
-                                blank_numeric_zero = True
+                                if diagnostics is not None and label:
+                                    diagnostics.append({
+                                        "目标表": table.table_name,
+                                        "来源页码": "、".join(
+                                            map(
+                                                str,
+                                                table.source_pages or [table.page],
+                                            )
+                                        ),
+                                        "原始项目": label,
+                                        "指标编码": _metric_code,
+                                        "状态": MISSING_NUMERIC_DIAGNOSTIC_STATUS,
+                                        "原因": (
+                                            "原始值为空白，按缺失处理（未写0）；"
+                                            "请检查表头、列对齐和跨页提取"
+                                        ),
+                                        "最佳候选": str(metric.get("指标名称", "")),
+                                        "最佳得分": 1.0,
+                                        "第二候选": "",
+                                        "第二得分": 0,
+                                    })
+                                continue
                         elif (
                             _raw_text in {"-", "--", "—", "–", "－"}
-                            and _capital_scope
+                            and _dash_zero_scope
                         ):
                             numeric_value = 0.0
-                            capital_dash_zero = True
+                            disclosed_dash_zero = True
                         else:
                             # ★ P0-1：空白、“不适用”“未披露”、无法解析文本
                             #   一律按缺失处理，不写 0，也不静默丢行。
@@ -1480,12 +1541,8 @@ def normalize_tables(
                         note = "资本明细空白，按0处理" + (
                             f"；{note}" if note else ""
                         )
-                    elif blank_numeric_zero:
-                        note = "空白单元格，按0处理" + (
-                            f"；{note}" if note else ""
-                        )
-                    elif capital_dash_zero:
-                        note = "资本明细占位符'-'，按0处理" + (
+                    elif disclosed_dash_zero:
+                        note = "源表占位符'-'，按业务口径0处理" + (
                             f"；{note}" if note else ""
                         )
 

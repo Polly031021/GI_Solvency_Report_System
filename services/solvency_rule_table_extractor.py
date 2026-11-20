@@ -444,6 +444,12 @@ def validate_rule_page_rows(
     strategy_id: str | None = None,
 ) -> tuple[bool, str]:
     """用 STEP1 的逐页完整性校验器给规则法结果做质量门禁。"""
+    config = dict(table_config or {})
+    deferred = config.get("defer_completeness_to_extractor", False)
+    if isinstance(deferred, str):
+        deferred = deferred.strip().lower() in {"1", "true", "yes", "on"}
+    if deferred:
+        return True, "完整性校验延迟到公司专属 extractor（跨页表）"
     if grid is None or not page_has_searchable_text(grid):
         return True, "本页无可用文字网格，规则法结果未做完整性校验"
     try:

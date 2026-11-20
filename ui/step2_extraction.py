@@ -36,14 +36,17 @@ from services.solvency_rule_table_extractor import (
     page_has_searchable_text,
     preview_page_engine,
 )
-from services.batch_workflow import document_pdf_bytes, extract_document_tables
+from services.batch_workflow import (
+    document_pdf_bytes,
+    ensure_document_pdf_context,
+    extract_document_tables,
+)
 from services.solvency_table_extractor import TABLE_SIGNATURES
 
 from .batch_workspace import (
     batch_documents,
     failed_batch_companies,
     render_batch_status,
-    replace_document,
     selected_batch_document,
 )
 from .cache import read_gold_manifest, render_pdf_page
@@ -1697,6 +1700,7 @@ def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
         base_url = st.session_state.llm_base_url
         model_name = st.session_state.llm_model
         def extract_document(company: str, document: dict):
+            pdf_context = ensure_document_pdf_context(document)
             outcome = extract_document_tables(
                 company=company,
                 pdf_bytes=document_pdf_bytes(document),
@@ -1709,6 +1713,9 @@ def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
                 base_url=base_url,
                 model=model_name,
                 max_workers=workers,
+                text_context=pdf_context,
+                metadata=document.get("metadata") or {},
+                profile_id=active_profile.profile_id,
             )
             return company, document, outcome
 
@@ -1749,7 +1756,6 @@ def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
                     }
                 )
                 updated_documents[company] = updated
-                replace_document(active_profile, company, updated)
                 progress.progress(
                     index / max(len(target_documents), 1),
                     text=(

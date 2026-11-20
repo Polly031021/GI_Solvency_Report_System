@@ -44,7 +44,6 @@ from .batch_workspace import (
     batch_documents,
     failed_batch_companies,
     render_batch_status,
-    replace_document,
 )
 from .cache import (
     cached_step3_target_template,
@@ -1059,6 +1058,9 @@ def _render_batch_results(active_profile: ReportProfile) -> None:
                 st.session_state.pop("batch_last_active_profile", None)
                 st.session_state.pop("batch_located", None)
                 st.session_state.pop("batch_page_overrides", None)
+                st.session_state.pop("batch_standard_data", None)
+                st.session_state.pop("batch_standard_summary", None)
+                st.session_state.pop("batch_standard_diagnostics", None)
                 st.rerun()
 
 
@@ -1131,6 +1133,9 @@ def _render_shared_batch_standardization(
     def run_standardization(target_documents: list[tuple[str, dict]]) -> None:
         nonlocal documents
         st.session_state.pop("step3_gap_merged_data", None)
+        st.session_state.pop("batch_standard_data", None)
+        st.session_state.pop("batch_standard_summary", None)
+        st.session_state.pop("batch_standard_diagnostics", None)
         context = build_context_from_profile(
             active_profile,
             api_key=st.session_state.llm_api_key,
@@ -1161,6 +1166,9 @@ def _render_shared_batch_standardization(
                 context=context,
                 period_overrides=period_overrides,
                 extraction_traces=document.get("extraction_traces") or [],
+                metadata=document.get("metadata") or {},
+                text_context=document.get("pdf_context"),
+                build_workbook=False,
             )
             outcome["period_overrides"] = period_overrides
             outcome["period_message"] = period_message
@@ -1204,7 +1212,6 @@ def _render_shared_batch_standardization(
                     }
                 )
                 updated_documents[company] = updated
-                replace_document(active_profile, company, updated)
                 progress.progress(
                     index / max(len(target_documents), 1),
                     text=(
@@ -1249,8 +1256,11 @@ def _render_shared_batch_standardization(
             else pd.DataFrame()
         )
         st.session_state.standard_data = merged
+        st.session_state.batch_standard_data = merged
         st.session_state.standard_target_summary = summary_frame
+        st.session_state.batch_standard_summary = summary_frame
         st.session_state.normalization_diagnostics = diagnostics_frame
+        st.session_state.batch_standard_diagnostics = diagnostics_frame
         st.session_state.standardization_warnings = all_warnings
         st.session_state.standard_template_label = "批量共享文件池"
         st.session_state.standard_workbook_bytes = batch_result_workbook_bytes(
@@ -1319,9 +1329,14 @@ def _render_shared_batch_standardization(
     if isinstance(_merged_override, pd.DataFrame) and not _merged_override.empty:
         merged_current = _merged_override.copy()
     else:
-        merged_current = merge_standard_frames(
-            document.get("standard_data")
-            for document in documents.values()
+        cached_merged = st.session_state.get("batch_standard_data")
+        merged_current = (
+            cached_merged.copy()
+            if isinstance(cached_merged, pd.DataFrame)
+            else merge_standard_frames(
+                document.get("standard_data")
+                for document in documents.values()
+            )
         )
     if merged_current.empty:
         st.info("尚无批量标准化结果。")
@@ -1345,31 +1360,39 @@ def _render_shared_batch_standardization(
 
     # Build the batch summary from the shared document pool, not from a
     # previous single-file run that may still sit in session_state.
-    summary_frames = []
-    for company, document in documents.items():
-        summary = document.get("standard_summary")
-        if isinstance(summary, pd.DataFrame) and not summary.empty:
-            summary_frames.append(
-                summary.assign(
-                    公司=company,
-                    报告期=document.get("metadata", {}).get("报告期", ""),
+    cached_summary = st.session_state.get("batch_standard_summary")
+    if isinstance(cached_summary, pd.DataFrame):
+        summary_current = cached_summary.copy()
+    else:
+        summary_frames = []
+        for company, document in documents.items():
+            summary = document.get("standard_summary")
+            if isinstance(summary, pd.DataFrame) and not summary.empty:
+                summary_frames.append(
+                    summary.assign(
+                        公司=company,
+                        报告期=document.get("metadata", {}).get("报告期", ""),
+                    )
                 )
-            )
-    summary_current = (
-        pd.concat(summary_frames, ignore_index=True)
-        if summary_frames
-        else pd.DataFrame()
-    )
-    diagnostics_frames = []
-    for company, document in documents.items():
-        diagnostics = document.get("standard_diagnostics")
-        if isinstance(diagnostics, pd.DataFrame) and not diagnostics.empty:
-            diagnostics_frames.append(diagnostics.assign(公司=company))
-    diagnostics_current = (
-        pd.concat(diagnostics_frames, ignore_index=True)
-        if diagnostics_frames
-        else pd.DataFrame()
-    )
+        summary_current = (
+            pd.concat(summary_frames, ignore_index=True)
+            if summary_frames
+            else pd.DataFrame()
+        )
+    cached_diagnostics = st.session_state.get("batch_standard_diagnostics")
+    if isinstance(cached_diagnostics, pd.DataFrame):
+        diagnostics_current = cached_diagnostics.copy()
+    else:
+        diagnostics_frames = []
+        for company, document in documents.items():
+            diagnostics = document.get("standard_diagnostics")
+            if isinstance(diagnostics, pd.DataFrame) and not diagnostics.empty:
+                diagnostics_frames.append(diagnostics.assign(公司=company))
+        diagnostics_current = (
+            pd.concat(diagnostics_frames, ignore_index=True)
+            if diagnostics_frames
+            else pd.DataFrame()
+        )
 
     st.markdown("#### 各公司缺填指标")
     if (

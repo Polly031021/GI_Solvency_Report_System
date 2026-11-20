@@ -28,6 +28,10 @@ from .solvency_company_identity import (
 from .solvency_normalizer import (
     CAPITAL_COMPONENT_ZERO_CODES,
     CAPITAL_COMPONENT_ZERO_TABLE_IDS,
+    DISCLOSED_DASH_ZERO_CODES,
+    DISCLOSED_DASH_ZERO_TABLE_IDS,
+    DASH_ZERO_AMOUNT_TABLE_IDS,
+    DASH_ZERO_AMOUNT_EXCLUDE_CODES,
     DEFAULT_AMOUNT_SOURCE_UNIT,
     NARROW_TABLE_COLUMNS,
     STANDARD_COLUMNS,
@@ -1607,7 +1611,17 @@ def standardize_to_target(
                             else:
                                 continue
                         elif _cell in {"-", "--", "—", "–", "/"}:
-                            if _info["code"] in CAPITAL_COMPONENT_ZERO_CODES:
+                            if (
+                                (
+                                    _info["code"] in DISCLOSED_DASH_ZERO_CODES
+                                    and _source_table_id in DISCLOSED_DASH_ZERO_TABLE_IDS
+                                )
+                                or (
+                                    _source_table_id in DASH_ZERO_AMOUNT_TABLE_IDS
+                                    and _info.get("dtype") == "金额"
+                                    and _info["code"] not in DASH_ZERO_AMOUNT_EXCLUDE_CODES
+                                )
+                            ):
                                 _v = 0.0
                             else:
                                 continue

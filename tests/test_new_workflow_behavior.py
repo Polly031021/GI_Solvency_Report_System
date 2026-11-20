@@ -283,7 +283,7 @@ def test_blank_capital_components_are_zero_filled() -> None:
 
 
 def test_numeric_placeholders_are_missing_not_zero() -> None:
-    """不适用/未披露/文本/非资本短横线按缺失处理；空白另行按0。"""
+    """不适用、未披露、文本、短横线和普通空白都按缺失处理。"""
     table = FlexibleTable(
         table_id="SOLVENCY_MAIN",
         table_name="偿付能力充足率指标",
@@ -344,8 +344,8 @@ def test_numeric_placeholders_are_missing_not_zero() -> None:
     print("PASS 非空占位符按缺失处理，不写假0")
 
 
-def test_blank_numeric_cells_are_zero() -> None:
-    """空白数值单元格按0处理，并计入已填报。"""
+def test_blank_numeric_cells_are_missing() -> None:
+    """非资本明细的空白数值单元格必须按缺失处理，不能写假0。"""
     table = FlexibleTable(
         table_id="SOLVENCY_MAIN",
         table_name="偿付能力充足率指标",
@@ -370,14 +370,56 @@ def test_blank_numeric_cells_are_zero() -> None:
         include_derived=False,
     )
     assets = result.data[result.data["指标编码"] == "RECOGNIZED_ASSETS"]
-    assert len(assets) == 2
-    assert set(assets["期间口径"]) == {"本季度末数", "上季度末数"}
-    assert assets["数值"].eq(0).all()
-    assert assets["备注"].astype(str).str.contains("空白单元格，按0处理").all()
+    assert assets.empty
+    liab = result.data[result.data["指标编码"] == "RECOGNIZED_LIABILITIES"]
+    assert len(liab) == 1
+    assert liab.iloc[0]["期间口径"] == "上季度末数"
+    assert liab.iloc[0]["数值"] == 0
     summary = result.target_summary.set_index("指标编码")
-    assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "已填报"
-    assert int(summary.loc["RECOGNIZED_ASSETS", "缺失值单元格数"]) == 0
-    print("PASS 空白数值单元格按0处理")
+    assert summary.loc["RECOGNIZED_ASSETS", "填报状态"] == "未填报"
+    assert summary.loc["RECOGNIZED_ASSETS", "诊断状态"] == "值为空"
+    assert any("已按缺失处理（未写0）" in warning for warning in result.warnings)
+    print("PASS 非资本空白数值单元格按缺失处理，不写假0")
+
+
+def test_contract_loss_dash_is_zero() -> None:
+    """最低资本表中的特定类别合同损失吸收效应占位符明确表示0。"""
+    table = FlexibleTable(
+        table_id="MINIMUM_CAPITAL",
+        table_name="S05-最低资本表",
+        page=1,
+        rows=[
+            ["行次", "项目", "期末数", "期初数"],
+            ["1.6", "特定类别保险合同损失吸收效应", "--", "-"],
+            ["1.2.2", "非寿险业务保险风险-巨灾风险最低资本", "--", "-"],
+        ],
+        unit="万元",
+    )
+    taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
+    catalog = step3_metric_catalog(taxonomy, include_derived=False)
+    result = standardize_to_target(
+        [table],
+        taxonomy,
+        {"公司": "测试财险", "报告期": "2025Q4", "来源文件": "测试财险.pdf"},
+        "财险",
+        catalog,
+        report_profile_id="NON_LIFE_SOLVENCY",
+        allowed_company_types=("财险",),
+        include_derived=False,
+    )
+    rows = result.data[
+        result.data["指标编码"].eq("CONTRACT_LOSS_ABSORPTION_EFFECT")
+    ]
+    assert len(rows) == 2
+    assert rows["数值"].eq(0).all()
+    assert set(rows["期间口径"]) == {"本季度末数", "上季度末数"}
+    assert rows["备注"].astype(str).str.contains("按业务口径0处理").all()
+    catastrophe = result.data[
+        result.data["指标编码"].eq("NON_LIFE_CATASTROPHE_RISK_CAPITAL")
+    ]
+    assert len(catastrophe) == 2
+    assert catastrophe["数值"].eq(0).all()
+    print("PASS 资本类金额指标占位符按0提取")
 
 
 def test_supplement_rows_keep_company_and_report_period() -> None:
@@ -545,8 +587,15 @@ def test_lcr_period_wording_is_normalized() -> None:
     """LCR1/LCR3 的“三个月/一年”应匹配到未来3个月/12个月口径。"""
     taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
     cases = {
+        "LCR1未来3个月": "LCR1_3M",
+        "LCR1未来12个月": "LCR1_12M",
+        "LCR2未来3个月": "LCR2_3M",
+        "LCR2未来12个月": "LCR2_12M",
+        "LCR3未来3个月": "LCR3_3M",
+        "LCR3未来12个月": "LCR3_12M",
         "流动性覆盖率 LCR1（三个月）（%）": "LCR1_3M",
         "流动性覆盖率 LCR1（一年）（%）": "LCR1_12M",
+        "基本情景下公司整体流动性覆盖率LCR1未来12个月": "LCR1_12M",
         "LCR3（3个月）": "LCR3_3M",
         "LCR3（12个月）": "LCR3_12M",
     }
@@ -593,7 +642,8 @@ if __name__ == "__main__":
     test_profile_token_and_whole_page_keys()
     test_blank_capital_components_are_zero_filled()
     test_numeric_placeholders_are_missing_not_zero()
-    test_blank_numeric_cells_are_zero()
+    test_blank_numeric_cells_are_missing()
+    test_contract_loss_dash_is_zero()
     test_supplement_rows_keep_company_and_report_period()
     test_source_unit_is_converted_to_standard_unit()
     test_semantic_period_aliases_and_three_year_average()

@@ -44,6 +44,10 @@ def _is_value_line(line: str) -> bool:
 
 
 def _page_text(doc, page_number: int) -> str:
+    if isinstance(doc, (list, tuple)):
+        if page_number < 1 or page_number > len(doc):
+            return ""
+        return str(doc[page_number - 1] or "")
     if page_number < 1 or page_number > len(doc):
         return ""
     return doc.load_page(page_number - 1).get_text() or ""
@@ -198,7 +202,12 @@ def complete_operating_rows(table: Any, doc) -> list[list[str]]:
     return _normalize_rows(_dedupe_rows(rows))
 
 
-def complete_operating_tables(tables: Sequence[Any], pdf_bytes: bytes) -> Sequence[Any]:
+def complete_operating_tables(
+    tables: Sequence[Any],
+    pdf_bytes: bytes,
+    *,
+    page_texts: Sequence[str] | None = None,
+) -> Sequence[Any]:
     """对 NON_LIFE_OPERATING_METRICS 表做通用补全；其他表原样返回。"""
     targets = [
         table
@@ -209,7 +218,11 @@ def complete_operating_tables(tables: Sequence[Any], pdf_bytes: bytes) -> Sequen
         return tables
     import fitz
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    doc = (
+        list(page_texts)
+        if page_texts is not None
+        else fitz.open(stream=pdf_bytes, filetype="pdf")
+    )
     try:
         for table in targets:
             rows = complete_operating_rows(table, doc)
@@ -224,5 +237,6 @@ def complete_operating_tables(tables: Sequence[Any], pdf_bytes: bytes) -> Sequen
                 }
             ]
     finally:
-        doc.close()
+        if page_texts is None:
+            doc.close()
     return tables

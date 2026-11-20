@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from services import extraction_rules as rules
+from services.company_extractors.dadi import _contract_failure
 
 
 def _write_rule(directory: Path, name: str, text: str) -> Path:
@@ -134,6 +136,68 @@ tables:
         for path in directory.glob("*"):
             path.unlink(missing_ok=True)
         directory.rmdir()
+
+
+def test_dadi_layout_contract_is_applied_to_profile_tables() -> None:
+    resolved = rules.resolve_rule(
+        "大地财产",
+        2022,
+        profile_id="NON_LIFE_SOLVENCY",
+    )
+    assert resolved is not None
+    assert resolved.layout_contracts["SOLVENCY_MAIN"]["headers"] == [
+        "项目",
+        "本季度数",
+        "上季度数",
+        "基本情景下季度预测数",
+    ]
+    merged = rules.apply_rule_to_tables(
+        [
+            {"table_id": "SOLVENCY_MAIN"},
+            {"table_id": "NON_LIFE_OPERATING_METRICS"},
+        ],
+        resolved,
+    )
+    main_contract = merged[0]["_layout_contract"]
+    assert main_contract["min_rows"] == 15
+    assert "上季度数" in main_contract["headers"]
+    assert "认可资产" in main_contract["required_rows"]
+    operating_contract = merged[1]["_layout_contract"]
+    assert operating_contract["headers"] == [
+        "指标名称",
+        "本季度数",
+        "本年度累计数",
+    ]
+    print("PASS 大地版式契约进入表配置")
+
+
+def test_layout_contract_rejects_missing_previous_period_column() -> None:
+    table = SimpleNamespace(
+        table_config={
+            "_layout_contract": {
+                "headers": ["项目", "本季度数", "上季度数"],
+                "min_rows": 2,
+                "required_rows": ["认可资产"],
+            }
+        }
+    )
+    failure = _contract_failure(
+        table,
+        [
+            ["项目", "本季度数"],
+            ["认可资产", "100"],
+        ],
+    )
+    assert "表头不匹配" in failure
+    assert "上季度数" in failure
+    assert not _contract_failure(
+        table,
+        [
+            ["项目", "本季度数", "上季度数"],
+            ["认可资产", "100", "90"],
+        ],
+    )
+    print("PASS 版式契约拒绝缺失上季度列的错表")
 
 
 def test_repository_rules_cover_all_profile_tables() -> None:
@@ -265,6 +329,8 @@ if __name__ == "__main__":
     test_missing_year_keeps_rule_and_warns()
     test_structure_version_selection()
     test_apply_rule_merges_profile_config_without_mutating()
+    test_dadi_layout_contract_is_applied_to_profile_tables()
+    test_layout_contract_rejects_missing_previous_period_column()
     test_repository_rules_cover_all_profile_tables()
     test_alias_table_id_matches_builtin_rule_key()
     test_unknown_table_id_raises()

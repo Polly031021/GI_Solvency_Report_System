@@ -6,6 +6,7 @@ from typing import Callable, Mapping
 
 from ..solvency_table_boundaries import boundary_instruction_for_table
 from ..solvency_pdf_locator import (
+    PdfTextContext,
     PageMatch,
     _excluded_detail_page,
     _three_year_page_has_explicit_value,
@@ -41,6 +42,7 @@ def locate_tables_hybrid(
     profile_context: Mapping[str, object] | None = None,
     mode: str = "hybrid",
     llm_verify: bool = False,
+    text_context: PdfTextContext | None = None,
 ) -> tuple[list[PageMatch], str]:
     """Locate target disclosures through rules, optionally with LLM support.
 
@@ -57,9 +59,25 @@ def locate_tables_hybrid(
     llm_configured = all(str(value or "").strip() for value in (api_key, base_url, model))
     verify_with_llm = rule_mode and llm_verify and llm_configured
 
-    local_matches = locate_tables(pdf_bytes, feature_config)
+    local_matches = locate_tables(
+        pdf_bytes,
+        feature_config,
+        page_texts=(
+            text_context.page_texts
+            if text_context is not None
+            else None
+        ),
+    )
     local_by_id = {item.table_id: item for item in local_matches}
-    page_texts, radar_hints, hint_text = _solvency_radar(pdf_bytes, feature_config)
+    page_texts, radar_hints, hint_text = _solvency_radar(
+        pdf_bytes,
+        feature_config,
+        page_texts=(
+            text_context.fitz_page_texts
+            if text_context is not None
+            else None
+        ),
+    )
     tables = feature_config.get("tables", [])
     directory_hints, directory_message = locate_directory_candidates(
         page_texts,

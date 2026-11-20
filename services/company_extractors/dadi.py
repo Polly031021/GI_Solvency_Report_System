@@ -28,7 +28,7 @@ pages；全部按正文标签定位，不写死年份与页码；重复执行结
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from . import register
 
@@ -49,6 +49,7 @@ _LIQUIDITY_HEADER = ["指标名称", "本季度数", "上季度数"]
 _THREE_YEAR_HEADER = ["项目", "数值"]
 
 _TAG_MAIN_RE = re.compile(r"表\s*3\.1\s*[：:]?\s*偿付能力充足率")
+_TAG_LCR_RE = re.compile(r"表\s*3\.2\s*[：:]?\s*流动性风险监管指标")
 _TAG_LIQUIDITY_RE = re.compile(r"表\s*3\.3\s*[：:]?\s*流动性风险监测指标")
 _TAG_ACTUAL_1_RE = re.compile(r"表\s*9\.1\s*[：:]?\s*实际资本")
 _TAG_ACTUAL_2_RE = re.compile(r"表\s*9\.2\s*[：:]?\s*实际资本")
@@ -175,6 +176,79 @@ def _sync_blocks(table: Any, rows: list[list[str]], pages: Sequence[int]) -> Non
     table.rows = [list(row) for row in rows]
     page = int(pages[0]) if pages else 1
     table.table_blocks = [{"page": page, "rows": [list(row) for row in rows]}]
+
+
+def _contract_failure(table: Any, rows: list[list[str]]) -> str:
+    config = getattr(table, "table_config", None)
+    contract = (
+        config.get("_layout_contract")
+        if isinstance(config, dict)
+        else None
+    )
+    if not isinstance(contract, dict):
+        return ""
+    if not rows:
+        return "版式契约：重建结果为空"
+    def contract_values(value: Any) -> list[str]:
+        if isinstance(value, str):
+            values = re.split(r"[、|,，\n\r]+", value)
+        elif isinstance(value, (list, tuple)):
+            values = value
+        else:
+            values = []
+        return [_clean(item) for item in values if _clean(item)]
+
+    expected_headers = contract_values(contract.get("headers"))
+    actual_headers = [_clean(value) for value in rows[0]]
+    if expected_headers and actual_headers[: len(expected_headers)] != expected_headers:
+        return (
+            "版式契约：表头不匹配，"
+            f"预期 {expected_headers}，实际 {actual_headers}"
+        )
+    min_rows = int(contract.get("min_rows", 1) or 1)
+    if len(rows) < min_rows:
+        return f"版式契约：仅 {len(rows)} 行，少于最低要求 {min_rows} 行"
+    required_rows = contract_values(contract.get("required_rows"))
+    flattened_rows = {_clean("".join(row)) for row in rows[1:]}
+    missing_rows = [
+        label for label in required_rows
+        if not any(label in row for row in flattened_rows)
+    ]
+    if missing_rows:
+        return f"版式契约：缺少必要行 {missing_rows}"
+    return ""
+
+
+def _accept_rebuilt(
+    table: Any,
+    rows: list[list[str]],
+    pages: Sequence[int],
+    *,
+    blocks: Sequence[dict[str, Any]] | None = None,
+) -> bool:
+    failure = _contract_failure(table, rows)
+    config = dict(getattr(table, "table_config", None) or {})
+    if failure:
+        header = rows[0] if rows else []
+        table.rows = [list(header)] if header else []
+        table.table_blocks = []
+        config["_layout_contract_failure"] = failure
+        table.table_config = config
+        return False
+    config.pop("_layout_contract_failure", None)
+    table.table_config = config
+    if blocks:
+        table.rows = [list(row) for row in rows]
+        table.table_blocks = [
+            {
+                "page": int(block["page"]),
+                "rows": [list(row) for row in block["rows"]],
+            }
+            for block in blocks
+        ]
+    else:
+        _sync_blocks(table, rows, pages)
+    return True
 
 
 def _pages_with(texts: Sequence[str], pattern: re.Pattern[str], preferred: Sequence[int]) -> list[int]:
@@ -349,8 +423,64 @@ def _rebuild_minimum_capital(texts: Sequence[str], pages: Sequence[int]) -> list
 # --------------------------------------------------------------------------- #
 # LIQUIDITY_MONITORING
 # --------------------------------------------------------------------------- #
-def _rebuild_liquidity(texts: Sequence[str], pages: Sequence[int]) -> list[list[str]]:
+def _rebuild_lcr_rows(lines: Sequence[str]) -> list[list[str]]:
+    start = next(
+        (index for index, line in enumerate(lines) if _TAG_LCR_RE.search(line)),
+        None,
+    )
+    if start is None:
+        return []
+    body = _header_end(lines, start, "上季度数")
+    if body is None:
+        return []
+    parsed = _parse_body(
+        lines[body:],
+        n_values=2,
+        keep_row_no=True,
+        stop=_stop_heading,
+    )
     rows: list[list[str]] = []
+    active_lcr = ""
+    for row_no, label, value_current, value_previous in parsed:
+        if row_no in {"1", "2", "3"}:
+            match = re.search(r"LCR\s*([123])", label, flags=re.IGNORECASE)
+            active_lcr = match.group(1) if match else ""
+            continue
+        if row_no in {"4", "5", "6", "7"}:
+            # 4/5 是自测压力情景，不能映射到必测 LCR2/LCR3。
+            active_lcr = ""
+            continue
+        if not active_lcr:
+            continue
+        compact_label = label.replace(" ", "").replace("\u3000", "")
+        if "未来3个月" in compact_label:
+            month = 3
+        elif "未来12个月" in compact_label:
+            month = 12
+        else:
+            continue
+        rows.append([
+            f"LCR{active_lcr}未来{month}个月",
+            value_current,
+            value_previous,
+        ])
+    return rows
+
+
+def _rebuild_liquidity_parts(
+    texts: Sequence[str],
+    pages: Sequence[int],
+) -> tuple[list[list[str]], list[dict[str, Any]]]:
+    lcr_rows: list[list[str]] = []
+    lcr_source_pages: list[int] = []
+    for page in _pages_with(texts, _TAG_LCR_RE, pages):
+        parsed = _rebuild_lcr_rows(_split_row_prefix(_lines(texts[page - 1])))
+        if parsed:
+            lcr_rows.extend(parsed)
+            lcr_source_pages.append(page)
+
+    monitoring_rows: list[list[str]] = []
+    monitoring_blocks: list[dict[str, Any]] = []
     for page in _pages_with(texts, _TAG_LIQUIDITY_RE, pages):
         lines = _split_row_prefix(_lines(texts[page - 1]))
         start = _first_tag_index(lines, _TAG_LIQUIDITY_RE)
@@ -359,8 +489,38 @@ def _rebuild_liquidity(texts: Sequence[str], pages: Sequence[int]) -> list[list[
         body = _header_end(lines, start, "上季度数")
         if body is None:
             continue
-        rows.extend(_parse_body(lines[body:], n_values=2, stop=_stop_heading))
-    return [_LIQUIDITY_HEADER, *rows]
+        page_rows = _parse_body(lines[body:], n_values=2, stop=_stop_heading)
+        monitoring_rows.extend(page_rows)
+        if page_rows:
+            monitoring_blocks.append(
+                {
+                    "page": page,
+                    "rows": [_LIQUIDITY_HEADER, *page_rows],
+                }
+            )
+
+    unique_lcr = list({
+        row[0]: row for row in lcr_rows
+    }.values())
+    unique_monitoring = list({
+        row[0]: row for row in monitoring_rows
+    }.values())
+    rows = [_LIQUIDITY_HEADER, *unique_lcr, *unique_monitoring]
+    blocks: list[dict[str, Any]] = []
+    if unique_lcr:
+        blocks.append(
+            {
+                "page": min(lcr_source_pages) if lcr_source_pages else pages[0],
+                "rows": [_LIQUIDITY_HEADER, *unique_lcr],
+            }
+        )
+    blocks.extend(monitoring_blocks)
+    return rows, blocks
+
+
+def _rebuild_liquidity(texts: Sequence[str], pages: Sequence[int]) -> list[list[str]]:
+    rows, _blocks = _rebuild_liquidity_parts(texts, pages)
+    return rows
 
 
 # --------------------------------------------------------------------------- #
@@ -382,6 +542,181 @@ def _rebuild_three_year(texts: Sequence[str], pages: Sequence[int]) -> list[list
     ]
 
 
+def locate_company_tables(
+    pdf_bytes: bytes,
+    table_configs: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, list[int]]:
+    """Locate Dadi target tables directly from company-specific table captions."""
+    import fitz
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        texts = [page.get_text() or "" for page in doc]
+    finally:
+        doc.close()
+
+    operating_pages = [
+        page
+        for page in _pages_with_terms(
+            texts,
+            ("指标名称", "本年度累计数"),
+            [],
+        )
+        if any(
+            term in texts[page - 1]
+            for term in ("主要经营指标", "效益类指标", "规模类指标")
+        )
+    ]
+    actual_pages = sorted(
+        set(_pages_with(texts, _TAG_ACTUAL_1_RE, []))
+        | set(_pages_with(texts, _TAG_ACTUAL_2_RE, []))
+    )
+    liquidity_pages = sorted(
+        set(_pages_with(texts, _TAG_LCR_RE, []))
+        | set(_pages_with(texts, _TAG_LIQUIDITY_RE, []))
+    )
+    three_year_pages = [
+        page
+        for page in _pages_with_terms(texts, ("近三年平均投资收益率",), [])
+    ]
+    mapping = {
+        "SOLVENCY_MAIN": _pages_with(texts, _TAG_MAIN_RE, []),
+        "NON_LIFE_OPERATING_METRICS": operating_pages,
+        "ACTUAL_CAPITAL": actual_pages,
+        "MINIMUM_CAPITAL": _pages_with(texts, _TAG_MINIMUM_RE, []),
+        "LIQUIDITY_MONITORING": liquidity_pages,
+        "THREE_YEAR_INVESTMENT_RETURN": three_year_pages,
+    }
+    requested = {
+        str(config.get("table_id") or "")
+        for config in table_configs
+        if str(config.get("table_id") or "")
+    }
+    if requested:
+        mapping = {
+            table_id: pages
+            for table_id, pages in mapping.items()
+            if table_id in requested
+        }
+    return {
+        table_id: pages
+        for table_id, pages in mapping.items()
+        if pages
+    }
+
+
+def extract_company_tables(
+    pdf_bytes: bytes,
+    table_configs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Extract all Dadi target tables without invoking the generic table path."""
+    import fitz
+    import pandas as pd
+    from services.batch_extraction import FlexibleTable
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        texts = [page.get_text() or "" for page in doc]
+    finally:
+        doc.close()
+    pages_by_table = locate_company_tables(pdf_bytes, table_configs)
+    tables: list[Any] = []
+    logs: list[dict[str, Any]] = []
+
+    for config in table_configs:
+        table_id = str(config.get("table_id") or "").strip()
+        table_name = str(config.get("table_name") or table_id).strip()
+        pages = list(pages_by_table.get(table_id) or [])
+        if not pages:
+            logs.append(
+                {
+                    "目标表": table_name,
+                    "物理页码": "",
+                    "识别方式": "公司专属规则",
+                    "状态": "失败",
+                    "说明": "公司专属定位未找到目标表",
+                }
+            )
+            continue
+
+        blocks: list[dict[str, Any]] | None = None
+        if table_id == "SOLVENCY_MAIN":
+            rows = _rebuild_solvency_main(texts, pages)
+        elif table_id in {"NON_LIFE_OPERATING_METRICS", "OPERATING_METRICS"}:
+            rows = _rebuild_operating(texts, pages)
+        elif table_id == "ACTUAL_CAPITAL":
+            rows = _rebuild_actual_capital(texts, pages)
+        elif table_id == "MINIMUM_CAPITAL":
+            rows = _rebuild_minimum_capital(texts, pages)
+        elif table_id == "LIQUIDITY_MONITORING":
+            rows, blocks = _rebuild_liquidity_parts(texts, pages)
+        elif table_id == "THREE_YEAR_INVESTMENT_RETURN":
+            rows = _rebuild_three_year(texts, pages)
+        else:
+            continue
+
+        if not rows:
+            logs.append(
+                {
+                    "目标表": table_name,
+                    "物理页码": "、".join(map(str, pages)),
+                    "识别方式": "公司专属规则",
+                    "状态": "失败",
+                    "说明": "公司专属解析未取得表体",
+                }
+            )
+            continue
+
+        frame = pd.DataFrame([list(row) for row in rows])
+        table = FlexibleTable(
+            table_id=table_id,
+            table_name=table_name,
+            page=pages[0],
+            source_pages=pages,
+            rows=[list(row) for row in rows],
+            to_frame=lambda *args, _frame=frame, **kwargs: _frame,
+            strategy="公司专属规则",
+            quality_score=1.0,
+            evidence="公司专属页码与表体解析",
+            table_config=dict(config),
+            unit="万元",
+            unit_source="万元",
+            source_grid_raw=[list(row) for row in rows],
+            table_blocks=(
+                blocks
+                if blocks
+                else [{"page": pages[0], "rows": [list(row) for row in rows]}]
+            ),
+        )
+        failure = _contract_failure(table, rows)
+        if failure:
+            logs.append(
+                {
+                    "目标表": table_name,
+                    "物理页码": "、".join(map(str, pages)),
+                    "识别方式": "公司专属规则",
+                    "状态": "失败",
+                    "说明": failure,
+                }
+            )
+            continue
+        tables.append(table)
+        logs.append(
+            {
+                "目标表": table_name,
+                "物理页码": "、".join(map(str, pages)),
+                "识别方式": "公司专属规则",
+                "状态": "成功",
+                "说明": f"公司专属解析 {len(rows) - 1} 条数据行",
+            }
+        )
+    return {
+        "tables": tables,
+        "logs": logs,
+        "pages_by_table": pages_by_table,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
@@ -401,27 +736,27 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
             if table_id == "SOLVENCY_MAIN":
                 rows = _rebuild_solvency_main(texts, pages)
                 if len(rows) > 5:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages)
             elif table_id in {"NON_LIFE_OPERATING_METRICS", "OPERATING_METRICS"}:
                 rows = _rebuild_operating(texts, pages)
                 if len(rows) > 10:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages)
             elif table_id == "ACTUAL_CAPITAL":
                 rows = _rebuild_actual_capital(texts, pages)
                 if len(rows) > 10:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages)
             elif table_id == "MINIMUM_CAPITAL":
                 rows = _rebuild_minimum_capital(texts, pages)
                 if len(rows) > 10:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages)
             elif table_id == "LIQUIDITY_MONITORING":
-                rows = _rebuild_liquidity(texts, pages)
+                rows, blocks = _rebuild_liquidity_parts(texts, pages)
                 if len(rows) > 5:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages, blocks=blocks)
             elif table_id == "THREE_YEAR_INVESTMENT_RETURN":
                 rows = _rebuild_three_year(texts, pages)
                 if rows:
-                    _sync_blocks(table, rows, pages)
+                    _accept_rebuilt(table, rows, pages)
     finally:
         doc.close()
     return tables

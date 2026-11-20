@@ -26,8 +26,14 @@ from .batch_extraction import (
     sniff_unit_from_text,
 )
 from .registered_capital_extractor import append_registered_capital
+from .extraction_rules import rule_signature
 from .solvency_normalizer import STANDARD_COLUMNS
-from .solvency_pdf_locator import PageMatch, extract_report_metadata
+from .solvency_pdf_locator import (
+    PageMatch,
+    PdfTextContext,
+    build_pdf_text_context,
+    extract_report_metadata,
+)
 from .solvency_rule_table_extractor import (
     ENGINE_LABELS,
     MODE_RULE,
@@ -84,12 +90,28 @@ def ensure_document_metadata(document: dict[str, Any]) -> dict[str, Any]:
     metadata = document.get("metadata")
     if document.get("metadata_loaded") and isinstance(metadata, dict):
         return document
-    pdf_bytes = document_pdf_bytes(document)
-    if not pdf_bytes:
+    text_context = ensure_document_pdf_context(document)
+    if text_context is None:
         return document
-    document["metadata"] = extract_report_metadata(pdf_bytes)
+    document["metadata"] = extract_report_metadata(
+        document_pdf_bytes(document),
+        text_context=text_context,
+    )
     document["metadata_loaded"] = True
     return document
+
+
+def ensure_document_pdf_context(document: dict[str, Any]) -> PdfTextContext | None:
+    """Build or reuse the page-text cache for one uploaded PDF."""
+    existing = document.get("pdf_context")
+    if isinstance(existing, PdfTextContext):
+        return existing
+    pdf_bytes = document_pdf_bytes(document)
+    if not pdf_bytes:
+        return None
+    context = build_pdf_text_context(pdf_bytes)
+    document["pdf_context"] = context
+    return context
 
 
 def _table_terms(match: PageMatch) -> tuple[str, ...]:
@@ -337,6 +359,9 @@ def extract_document_tables(
     base_url: str = "",
     model: str = "",
     max_workers: int = 4,
+    text_context: PdfTextContext | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    profile_id: str = "",
 ) -> BatchExtractionOutcome:
     """Extract confirmed pages for one PDF without touching Streamlit state."""
     outcome = BatchExtractionOutcome()
@@ -344,6 +369,70 @@ def extract_document_tables(
     if not located:
         outcome.status = "失败"
         outcome.note = "没有已确认页码的目标表。"
+        return outcome
+
+    from .company_extractors import (
+        extractor_from_matches,
+        get_company_document_hooks,
+    )
+
+    company_extractor_name = extractor_from_matches(matches)
+    company_document_extractor = None
+    if company_extractor_name:
+        _company_locator, company_document_extractor = get_company_document_hooks(
+            company_extractor_name
+        )
+    if company_document_extractor is not None:
+        company_result = company_document_extractor(
+            pdf_bytes,
+            [
+                match.table_config
+                for match in matches
+                if isinstance(match.table_config, dict)
+            ],
+        )
+        outcome.tables = list(company_result.get("tables") or [])
+        outcome.logs = list(company_result.get("logs") or [])
+
+        from .extraction_rules import resolve_rule, resolve_rule_for_pdf
+        from .extraction_trace import build_traces
+
+        if metadata:
+            resolved_rule = resolve_rule(
+                metadata.get("公司") or company,
+                metadata.get("报告年度"),
+                profile_id=profile_id,
+            )
+        else:
+            resolved_rule, metadata = resolve_rule_for_pdf(
+                pdf_bytes,
+                company_hint=company,
+                profile_id=profile_id,
+                text_context=text_context,
+            )
+        outcome.resolved_rule = resolved_rule
+        outcome.traces = build_traces(
+            resolved_rule=resolved_rule,
+            matches=located,
+            logs=outcome.logs,
+            tables=outcome.tables,
+        )
+        failed = [log for log in outcome.logs if log.get("状态") != "成功"]
+        if not outcome.tables:
+            outcome.status = "失败"
+            outcome.note = "公司专属提取未生成任何目标表。"
+        elif failed:
+            outcome.status = "部分成功"
+            outcome.note = (
+                f"公司专属提取 {len(outcome.tables)} 张表，"
+                f"{len(failed)} 张表失败。"
+            )
+        else:
+            outcome.status = "成功"
+            outcome.note = (
+                f"公司专属提取 {len(outcome.tables)} 张表，"
+                "未调用通用表格提取。"
+            )
         return outcome
 
     page_to_matches: dict[int, list[PageMatch]] = {}
@@ -371,8 +460,22 @@ def extract_document_tables(
             for page in match.pages
         ]
 
+    if text_context is None:
+        try:
+            text_context = build_pdf_text_context(pdf_bytes)
+        except Exception:
+            text_context = None
+
+    def _cached_page_text(page: int) -> str:
+        if (
+            text_context is not None
+            and 1 <= page <= len(text_context.page_texts)
+        ):
+            return text_context.page_texts[page - 1]
+        return page_source_text(pdf_bytes, page)
+
     def run_task(page: int, match: PageMatch):
-        page_text = page_source_text(pdf_bytes, page)
+        page_text = _cached_page_text(page)
         has_text = len(re.sub(r"\s+", "", page_text or "")) >= 20
         effective_method = method
         auto_vision = (
@@ -430,7 +533,7 @@ def extract_document_tables(
                     frames_by_target[(str(match.table_id), page)] = frames
                     page_engines[page] = result.engine
                     page_units[page] = (
-                        sniff_unit_from_text(page_source_text(pdf_bytes, page))
+                        sniff_unit_from_text(_cached_page_text(page))
                         or ""
                     )
                     status = "成功"
@@ -481,7 +584,17 @@ def extract_document_tables(
     # 通用经营表补全：所有公司都执行，补齐 pdfplumber 漏掉的效益/规模/品质类指标。
     from .company_extractors._operating_table import complete_operating_tables
 
-    outcome.tables = list(complete_operating_tables(outcome.tables, pdf_bytes))
+    outcome.tables = list(
+        complete_operating_tables(
+            outcome.tables,
+            pdf_bytes,
+            page_texts=(
+                text_context.fitz_page_texts
+                if text_context is not None
+                else None
+            ),
+        )
+    )
     if extractor_result:
         outcome.logs.append(
             {
@@ -495,12 +608,22 @@ def extract_document_tables(
         )
 
     # R4：每张目标表的提取状态与未命中原因。
-    from .extraction_rules import resolve_rule_for_pdf
+    from .extraction_rules import resolve_rule, resolve_rule_for_pdf
     from .extraction_trace import build_traces
 
-    resolved_rule, _metadata = resolve_rule_for_pdf(
-        pdf_bytes, company_hint=company
-    )
+    if metadata:
+        resolved_rule = resolve_rule(
+            metadata.get("公司") or company,
+            metadata.get("报告年度"),
+            profile_id=profile_id,
+        )
+    else:
+        resolved_rule, metadata = resolve_rule_for_pdf(
+            pdf_bytes,
+            company_hint=company,
+            profile_id=profile_id,
+            text_context=text_context,
+        )
     outcome.resolved_rule = resolved_rule
     outcome.traces = build_traces(
         resolved_rule=resolved_rule,
@@ -547,15 +670,23 @@ def standardize_document_tables(
     period_overrides: Mapping[str, str] | None = None,
     keep_unmapped: bool = False,
     extraction_traces: Sequence[Mapping[str, Any]] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    text_context: PdfTextContext | None = None,
+    build_workbook: bool = True,
 ) -> dict[str, Any]:
     """Run STEP3 for one PDF and return its data, workbook and diagnostics."""
     try:
+        metadata_source = dict(metadata or {})
+        if not metadata_source:
+            metadata_source = extract_report_metadata(
+                pdf_bytes,
+                text_context=text_context,
+            )
         metadata = sanitize_tree(
             {
-                **extract_report_metadata(pdf_bytes),
+                **metadata_source,
                 "来源文件": pdf_name,
                 "公司": company,
-                "first_page_text": _full_pdf_text(pdf_bytes),
                 "导入批次": f"{company}:batch",
             }
         )
@@ -580,15 +711,27 @@ def standardize_document_tables(
             extraction_traces=extraction_traces,
         )
         report_period = str(metadata.get("报告期", "")).strip() or "2025Q4"
-        data = append_registered_capital(
-            result.data,
-            pdf_text=str(metadata.get("first_page_text", "")),
-            pdf_bytes=pdf_bytes,
-            pdf_name=pdf_name,
-            company_name=company,
-            report_period=report_period,
-            company_type=company_type,
+        data = result.data
+        has_registered_capital = (
+            not data.empty
+            and "指标编码" in data.columns
+            and data["指标编码"].astype(str).eq("REGISTERED_CAPITAL").any()
         )
+        if not has_registered_capital:
+            pdf_text = (
+                "\n".join(text_context.fitz_page_texts)
+                if text_context is not None
+                else _full_pdf_text(pdf_bytes)
+            )
+            data = append_registered_capital(
+                data,
+                pdf_text=pdf_text,
+                pdf_bytes=pdf_bytes if not pdf_text else None,
+                pdf_name=pdf_name,
+                company_name=company,
+                report_period=report_period,
+                company_type=company_type,
+            )
         summary = _target_summary(
             result.target_catalog,
             data,
@@ -601,7 +744,11 @@ def standardize_document_tables(
             "summary": summary,
             "diagnostics": result.diagnostics,
             "warnings": list(result.warnings),
-            "workbook_bytes": result_workbook_bytes(result),
+            "workbook_bytes": (
+                result_workbook_bytes(result)
+                if build_workbook
+                else b""
+            ),
             "metadata": metadata,
             "说明": f"标准窄表 {len(data)} 条。",
         }
@@ -693,10 +840,15 @@ def sync_documents_from_uploads(
         retained.add(company)
         previous = updated.get(company)
         signature = upload_signature(uploaded)
+        current_rule_signature = rule_signature(
+            company,
+            profile_id=profile_id,
+        )
         if (
             previous
             and previous.get("profile_id") == profile_id
             and previous.get("upload_signature") == signature
+            and previous.get("rule_signature") == current_rule_signature
         ):
             previous["uploaded_file"] = uploaded
             continue
@@ -705,7 +857,9 @@ def sync_documents_from_uploads(
             "pdf_name": name,
             "uploaded_file": uploaded,
             "upload_signature": signature,
+            "rule_signature": current_rule_signature,
             "pdf_bytes": None,
+            "pdf_context": None,
             "profile_id": profile_id,
             "metadata": {},
             "metadata_loaded": False,

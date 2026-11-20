@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ _DIRECT_FIELDS = {
     "unit",
     "notes",
     "columns",
+    "defer_completeness_to_extractor",
     # 续页相关：不止一次出现“YAML 里写了却不生效”，这里补进白名单。
     "include_continuation",
     "max_pages",
@@ -79,6 +81,7 @@ class CompanyRule:
     source: str = ""
     # 公司专属提取器名称（如 pingan）；空表示只用通用规则。
     extractor: str = ""
+    layout_contracts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ class ResolvedRule:
     tables: Mapping[str, Mapping[str, Any]]
     warnings: tuple[str, ...] = ()
     extractor: str = ""
+    layout_contracts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     def table(self, table_id: str) -> Mapping[str, Any] | None:
         return self.tables.get(table_id)
@@ -203,6 +207,45 @@ def _parse_tables(
     return tables
 
 
+def _parse_layout_contracts(
+    raw: Any,
+    *,
+    source: str,
+    known_tables: set[str],
+) -> dict[str, dict[str, Any]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ExtractionConfigError(f"{source} 的 layout_contracts 必须是映射。")
+    contracts: dict[str, dict[str, Any]] = {}
+    for raw_id, raw_contract in raw.items():
+        table_id = str(raw_id or "").strip()
+        if table_id not in known_tables:
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts 引用未知 table_id：{table_id}"
+            )
+        if not isinstance(raw_contract, Mapping):
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id} 必须是映射。"
+            )
+        try:
+            min_rows = int(raw_contract.get("min_rows", 1))
+        except (TypeError, ValueError) as exc:
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.min_rows 必须是整数。"
+            ) from exc
+        if min_rows < 1:
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.min_rows 必须大于 0。"
+            )
+        contracts[table_id] = {
+            "headers": list(_as_terms(raw_contract.get("headers"))),
+            "required_rows": list(_as_terms(raw_contract.get("required_rows"))),
+            "min_rows": min_rows,
+        }
+    return contracts
+
+
 def _parse_rule(path: Path, known_tables: set[str]) -> CompanyRule:
     try:
         import yaml
@@ -234,6 +277,11 @@ def _parse_rule(path: Path, known_tables: set[str]) -> CompanyRule:
 
     tables = _parse_tables(
         payload.get("tables"),
+        source=path.name,
+        known_tables=known_tables,
+    )
+    layout_contracts = _parse_layout_contracts(
+        company.get("layout_contracts"),
         source=path.name,
         known_tables=known_tables,
     )
@@ -281,6 +329,7 @@ def _parse_rule(path: Path, known_tables: set[str]) -> CompanyRule:
         structure_versions=tuple(versions),
         source=path.name,
         extractor=str(company.get("extractor") or "").strip(),
+        layout_contracts=layout_contracts,
     )
 
 
@@ -383,6 +432,49 @@ def clear_cache() -> None:
     _CACHE["rules"] = None
 
 
+def rule_signature(
+    company: object,
+    year: object = None,
+    *,
+    profile_id: str = "",
+    directory: str | Path | None = None,
+) -> str:
+    """Stable fingerprint for a company rule and its extractor implementation."""
+    try:
+        resolved = resolve_rule(
+            company,
+            year,
+            profile_id=profile_id,
+            directory=directory,
+        )
+    except Exception:
+        resolved = None
+    if resolved is None:
+        return "generic"
+    target_dir = Path(directory) if directory is not None else RULES_DIR
+    parts: list[str] = [
+        resolved.canonical,
+        resolved.rule_version,
+        resolved.source,
+        resolved.extractor,
+    ]
+    rule_path = target_dir / resolved.source if resolved.source else None
+    if rule_path is not None and rule_path.is_file():
+        stat = rule_path.stat()
+        parts.extend((str(stat.st_mtime_ns), str(stat.st_size)))
+    if resolved.extractor:
+        module_path = (
+            Path(__file__).resolve().parent
+            / "company_extractors"
+            / f"{resolved.extractor}.py"
+        )
+        if module_path.is_file():
+            stat = module_path.stat()
+            parts.extend((str(stat.st_mtime_ns), str(stat.st_size)))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
 def resolve_rule(
     company: object,
     year: object = None,
@@ -445,6 +537,7 @@ def resolve_rule(
         tables=tables,
         warnings=tuple(warnings),
         extractor=matched.extractor,
+        layout_contracts=matched.layout_contracts,
     )
 
 
@@ -461,6 +554,23 @@ def _rule_table_for(
     for key, config in resolved.tables.items():
         if aliases.get(key, key) == primary:
             return config
+    return None
+
+
+def _layout_contract_for(
+    table_id: str,
+    resolved: ResolvedRule,
+    aliases: Mapping[str, str],
+) -> Mapping[str, Any] | None:
+    contracts = resolved.layout_contracts or {}
+    if table_id in contracts:
+        return contracts[table_id]
+    primary = aliases.get(table_id, table_id)
+    if primary in contracts:
+        return contracts[primary]
+    for key, contract in contracts.items():
+        if aliases.get(key, key) == primary:
+            return contract
     return None
 
 
@@ -496,6 +606,13 @@ def apply_rule_to_tables(
                 "page_match": rule_config.get("page_match", "prefer"),
                 "extractor": resolved.extractor,
             }
+        contract = (
+            _layout_contract_for(table_id, resolved, aliases)
+            if table_id
+            else None
+        )
+        if contract:
+            merged["_layout_contract"] = dict(contract)
         out.append(merged)
     return out
 
@@ -515,6 +632,7 @@ def resolve_rule_for_pdf(
     company_hint: str = "",
     profile_id: str = "",
     directory: str | Path | None = None,
+    text_context: Any = None,
 ) -> tuple[ResolvedRule | None, dict[str, Any]]:
     """按 PDF 封面解析公司规则，返回 (rule, metadata)。
 
@@ -524,7 +642,10 @@ def resolve_rule_for_pdf(
     try:
         from .solvency_pdf_locator import extract_report_metadata
 
-        metadata = extract_report_metadata(pdf_bytes)
+        metadata = extract_report_metadata(
+            pdf_bytes,
+            text_context=text_context,
+        )
     except Exception:
         metadata = {}
     rule = resolve_rule(

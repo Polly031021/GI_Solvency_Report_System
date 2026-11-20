@@ -526,6 +526,7 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
     )
     from services.batch_workflow import (
         document_pdf_bytes,
+        ensure_document_pdf_context,
         ensure_document_metadata,
         reset_document_after_pages,
     )
@@ -640,6 +641,7 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
 
         def locate_document(company: str, document: dict):
             pdf_bytes = document_pdf_bytes(document)
+            pdf_context = ensure_document_pdf_context(document)
             result = locate_one_pdf_bytes(
                 company,
                 pdf_bytes,
@@ -652,8 +654,9 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
                     else "hybrid"
                 ),
                 llm_verify=llm_verify,
+                text_context=pdf_context,
             )
-            return company, document, pdf_bytes, result
+            return company, document, pdf_bytes, pdf_context, result
 
         with ThreadPoolExecutor(max_workers=int(locate_workers)) as pool:
             futures = {
@@ -663,7 +666,7 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
             for index, future in enumerate(as_completed(futures), 1):
                 company = futures[future]
                 try:
-                    company, document, pdf_bytes, result = future.result()
+                    company, document, pdf_bytes, pdf_context, result = future.result()
                 except Exception as exc:
                     result = {
                         "状态": "异常",
@@ -673,10 +676,12 @@ def _render_locator_batch_tab(active_profile: ReportProfile) -> None:
                     }
                     document = documents[company]
                     pdf_bytes = b""
+                    pdf_context = None
                 updated = reset_document_after_pages(document)
                 updated.update(
                     {
                         "pdf_bytes": pdf_bytes,
+                        "pdf_context": pdf_context,
                         "metadata": result.get("metadata")
                         or document.get("metadata", {}),
                         "metadata_loaded": bool(result.get("metadata")),

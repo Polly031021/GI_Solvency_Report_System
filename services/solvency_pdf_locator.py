@@ -57,24 +57,71 @@ class DocumentTypeProfile:
     notes: str
 
 
+@dataclass(frozen=True)
+class PdfTextContext:
+    """Reusable page text extracted from one PDF.
+
+    ``page_texts`` follows the layout-preserving pdfplumber path used by table
+    locating. ``fitz_page_texts`` keeps the PyMuPDF text used by the radar and
+    document type classifier. Keeping both preserves existing matching
+    behaviour while avoiding repeated full-document extraction.
+    """
+
+    page_texts: tuple[str, ...]
+    fitz_page_texts: tuple[str, ...]
+
+
 LOW_TEXT_MIN_CHARACTERS = 24
 
 
-def analyze_document_type(pdf_bytes: bytes) -> DocumentTypeProfile:
+def build_pdf_text_context(pdf_bytes: bytes) -> PdfTextContext:
+    """Extract both text views once for reuse across STEP1-STEP3."""
+    fitz_page_texts: list[str] = []
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for index in range(len(document)):
+            page = document.load_page(index)
+            fitz_page_texts.append(page.get_text("text") or "")
+    finally:
+        document.close()
+    return PdfTextContext(
+        page_texts=tuple(extract_page_texts(pdf_bytes)),
+        fitz_page_texts=tuple(fitz_page_texts),
+    )
+
+
+def extract_page_texts_with_fitz(pdf_bytes: bytes) -> list[str]:
+    """Return one plain-text string per page using PyMuPDF."""
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return [
+            document.load_page(index).get_text("text") or ""
+            for index in range(len(document))
+        ]
+    finally:
+        document.close()
+
+
+def analyze_document_type(
+    pdf_bytes: bytes,
+    *,
+    page_texts: Iterable[str] | None = None,
+) -> DocumentTypeProfile:
     """Classify a PDF by text-layer coverage and recommend a locator method.
 
     Text-layer coverage is deterministic and free: reports exported from Word
     or with an OCR layer are suitable for the offline rule locator, while
     image-only scans need vision-model support or manual page entry.
     """
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    char_counts: list[int] = []
-    try:
-        for index in range(len(document)):
-            text = document.load_page(index).get_text() or ""
-            char_counts.append(len(re.sub(r"\s+", "", text)))
-    finally:
-        document.close()
+    texts = (
+        list(page_texts)
+        if page_texts is not None
+        else extract_page_texts_with_fitz(pdf_bytes)
+    )
+    char_counts = [
+        len(re.sub(r"\s+", "", text or ""))
+        for text in texts
+    ]
 
     total_pages = len(char_counts)
     low_numbers = [
@@ -889,8 +936,17 @@ def locate_directory_candidates(
     located = sum(bool(pages) for pages in result.values())
     return result, f"目录物理页偏移量={offset}（{votes}条证据），生成{located}类候选"
 
-def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
-    page_texts = extract_page_texts(pdf_bytes)
+def locate_tables(
+    pdf_bytes: bytes,
+    feature_config: dict,
+    *,
+    page_texts: Iterable[str] | None = None,
+) -> list[PageMatch]:
+    page_texts = (
+        list(page_texts)
+        if page_texts is not None
+        else extract_page_texts(pdf_bytes)
+    )
     results: list[PageMatch] = []
     tables = feature_config.get("tables", [])
     for table in tables:
@@ -995,8 +1051,16 @@ def locate_tables(pdf_bytes: bytes, feature_config: dict) -> list[PageMatch]:
     return results
 
 
-def extract_report_metadata(pdf_bytes: bytes) -> dict:
-    page_texts = extract_page_texts(pdf_bytes)
+def extract_report_metadata(
+    pdf_bytes: bytes,
+    *,
+    text_context: PdfTextContext | None = None,
+) -> dict:
+    page_texts = list(
+        text_context.page_texts
+        if text_context is not None
+        else extract_page_texts(pdf_bytes)
+    )
     head = "\n".join(page_texts[:3])
     compact = _compact(head)
     cover_compact = _compact(page_texts[0]) if page_texts else ""
@@ -1009,13 +1073,17 @@ def extract_report_metadata(pdf_bytes: bytes) -> dict:
     #   这里改为无条件补充：pdfplumber 成功时只是多加了一段冗余文本，
     #   不影响后续正则匹配（公司名、报告期都能继续命中）。
     try:
-        import fitz
-        _doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        _fitz_pages = [
-            (_doc.load_page(i).get_text() or "")
-            for i in range(min(3, len(_doc)))
-        ]
-        _doc.close()
+        if text_context is not None:
+            _fitz_pages = list(text_context.fitz_page_texts[:3])
+        else:
+            _doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            try:
+                _fitz_pages = [
+                    (_doc.load_page(i).get_text() or "")
+                    for i in range(min(3, len(_doc)))
+                ]
+            finally:
+                _doc.close()
         if _fitz_pages:
             _fitz_head = "\n".join(_fitz_pages)
             if _fitz_head.strip():

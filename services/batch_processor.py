@@ -19,9 +19,15 @@ from .solvency_company_identity import (
 )
 from .extraction_rules import apply_rule_to_tables, resolve_rule
 from .solvency_hybrid_pipeline import locate_tables_hybrid
+from .solvency_pdf_locator import (
+    PageMatch,
+    PdfTextContext,
+    analyze_document_type,
+    build_pdf_text_context,
+    extract_report_metadata,
+)
 from .solvency_metric_registry import extend_taxonomy
 from .solvency_normalizer import load_taxonomy
-from .solvency_pdf_locator import PageMatch, analyze_document_type, extract_report_metadata
 from .solvency_rule_table_extractor import MODE_RULE, extract_page_with_method
 from .solvency_step3_standardizer import (
     result_workbook_bytes,
@@ -273,6 +279,7 @@ def locate_one_pdf_bytes(
     *,
     mode: str = "hybrid",
     llm_verify: bool = False,
+    text_context: PdfTextContext | None = None,
 ) -> dict:
     """只跑定位（STEP1），不提取也不标准化，返回结果供人工确认。"""
     result = {
@@ -283,7 +290,12 @@ def locate_one_pdf_bytes(
         "metadata": {},
     }
     try:
-        result["metadata"] = extract_report_metadata(pdf_bytes)
+        if text_context is None:
+            text_context = build_pdf_text_context(pdf_bytes)
+        result["metadata"] = extract_report_metadata(
+            pdf_bytes,
+            text_context=text_context,
+        )
         # 公司级规则：封面公司 + 报告年度路由；未配置公司的行为完全不变。
         resolved_rule = resolve_rule(
             result["metadata"].get("公司") or company_name,
@@ -301,20 +313,62 @@ def locate_one_pdf_bytes(
             result["rule"] = resolved_rule.label
             result["rule_source"] = resolved_rule.source
             result["rule_warnings"] = list(resolved_rule.warnings)
-        matches, locator_message = locate_tables_hybrid(
-            pdf_bytes,
-            feature_config,
-            api_key=ctx.api_key,
-            base_url=ctx.base_url,
-            model=ctx.model,
-            profile_context=ctx.profile.locator_context(),
-            mode=mode,
-            llm_verify=llm_verify,
-        )
+        from .company_extractors import get_company_document_hooks
+
+        company_locator = None
+        if resolved_rule is not None and resolved_rule.extractor:
+            company_locator, _company_extractor = get_company_document_hooks(
+                resolved_rule.extractor
+            )
+        if company_locator is not None:
+            special_pages = company_locator(
+                pdf_bytes,
+                feature_config.get("tables", []),
+            )
+            matches = [
+                PageMatch(
+                    table_id=str(table.get("table_id") or ""),
+                    table_name=str(table.get("table_name") or ""),
+                    pages=list(special_pages.get(str(table.get("table_id") or "")) or []),
+                    score=100.0,
+                    evidence="公司专属页码与表体结构",
+                    review_required=False,
+                    review_reason="",
+                    sources={},
+                    strategy_id=str(table.get("strategy_id") or ""),
+                    table_config=dict(table),
+                    confidence=100,
+                    confidence_basis="公司专属定位",
+                )
+                for table in feature_config.get("tables", [])
+            ]
+            locator_message = (
+                "公司专属定位："
+                + "、".join(
+                    f"{match.table_name}={'、'.join(map(str, match.pages)) or '未找到'}"
+                    for match in matches
+                )
+            )
+        else:
+            matches, locator_message = locate_tables_hybrid(
+                pdf_bytes,
+                feature_config,
+                api_key=ctx.api_key,
+                base_url=ctx.base_url,
+                model=ctx.model,
+                profile_context=ctx.profile.locator_context(),
+                mode=mode,
+                llm_verify=llm_verify,
+                text_context=text_context,
+            )
         # 扫描版 PDF：规则法没有文字层信号，自动改走大模型识别。
-        if mode == "rule":
+        if mode == "rule" and company_locator is None:
             auto_matches, auto_note = _auto_vision_for_scanned(
-                pdf_bytes, feature_config, ctx, llm_verify=llm_verify
+                pdf_bytes,
+                feature_config,
+                ctx,
+                llm_verify=llm_verify,
+                text_context=text_context,
             )
             if auto_note:
                 locator_message = f"{locator_message}；{auto_note}" if locator_message else auto_note
@@ -338,6 +392,7 @@ def _auto_vision_for_scanned(
     ctx: "BatchContext",
     *,
     llm_verify: bool,
+    text_context: PdfTextContext | None = None,
 ) -> tuple[list[PageMatch], str]:
     """扫描版 PDF 自动改走视觉大模型定位。
 
@@ -345,7 +400,14 @@ def _auto_vision_for_scanned(
     未配置模型接口时返回空结果和一条明确提示，不改动调用方结果。
     """
     try:
-        profile = analyze_document_type(pdf_bytes)
+        profile = analyze_document_type(
+            pdf_bytes,
+            page_texts=(
+                text_context.fitz_page_texts
+                if text_context is not None
+                else None
+            ),
+        )
     except Exception:
         return [], ""
     if getattr(profile, "doc_type", "") != "SCANNED":
@@ -394,8 +456,12 @@ def process_one_pdf_bytes(
     }
 
     try:
+        text_context = build_pdf_text_context(pdf_bytes)
         # STEP1：定位（应用公司级规则，与 locate_one_pdf_bytes 保持一致）
-        metadata = extract_report_metadata(pdf_bytes)
+        metadata = extract_report_metadata(
+            pdf_bytes,
+            text_context=text_context,
+        )
         resolved_rule = resolve_rule(
             metadata.get("公司") or company_name,
             metadata.get("报告年度"),
@@ -415,10 +481,15 @@ def process_one_pdf_bytes(
             feature_config,
             api_key=ctx.api_key, base_url=ctx.base_url, model=ctx.model,
             profile_context=ctx.profile.locator_context(),
+            text_context=text_context,
         )
         if not [m for m in matches if m.pages]:
             _vision_matches, _vision_note = _auto_vision_for_scanned(
-                pdf_bytes, feature_config, ctx, llm_verify=False
+                pdf_bytes,
+                feature_config,
+                ctx,
+                llm_verify=False,
+                text_context=text_context,
             )
             if _vision_matches:
                 matches = _vision_matches
@@ -507,7 +578,7 @@ def process_one_pdf_bytes(
         # STEP3：标准化
         company_type = ctx.company_type_map.get(company_name, ctx.default_company_type)
         metadata = sanitize_tree({
-            **extract_report_metadata(pdf_bytes),
+            **metadata,
             "来源文件": f"{company_name}.pdf",
             "公司": company_name,
             "导入批次": f"{company_name}:batch",

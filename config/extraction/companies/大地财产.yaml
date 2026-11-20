@@ -9,7 +9,7 @@
 #   ACTUAL_CAPITAL                2022=33,34  2023=31,32  2024=33,34  2025=35,36
 #   THREE_YEAR_INVESTMENT_RETURN  2022 无此表  2023=21  2024=24  2025=25
 #   MINIMUM_CAPITAL               2022=39  2023=37  2024=39  2025=41
-#   LIQUIDITY_MONITORING          2022=22  2023=19  2024=22  2025=23
+#   LIQUIDITY_MONITORING          2022=21,22  2023=19  2024=22  2025=23
 #
 # expected_pages 只列实测页，tolerance: 0 使窗口恰好落在 min..max 之间；
 # page_match: prefer 保留“窗口未命中时回退全文锚点”的兜底，未来页码小幅
@@ -28,33 +28,79 @@ company:
   notes: >-
     2022-2025 版式稳定；页码逐年小幅漂移，已按实测页列窗口。
     经营表、实际资本、最低资本、流动性监测的结构性问题由 dadi extractor 修复。
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [项目, 本季度数, 上季度数, 基本情景下季度预测数]
+      min_rows: 15
+      required_rows:
+        - 认可资产
+        - 认可负债
+        - 实际资本
+        - 最低资本
+        - 核心偿付能力充足率
+        - 综合偿付能力充足率
+    NON_LIFE_OPERATING_METRICS:
+      headers: [指标名称, 本季度数, 本年度累计数]
+      min_rows: 20
+      required_rows:
+        - 保险业务收入
+        - 净利润
+        - 综合成本率
+        - 签单保费
+    ACTUAL_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 20
+      required_rows:
+        - 核心一级资本
+        - 附属一级资本
+        - 实际资本合计
+    MINIMUM_CAPITAL:
+      headers: [行次, 项目, 期末数, 期初数]
+      min_rows: 30
+      required_rows:
+        - 量化风险最低资本
+        - 非寿险业务保险风险最低资本合计
+        - 市场风险-最低资本合计
+        - 信用风险-最低资本合计
+        - 最低资本
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 16
+      required_rows:
+        - LCR1未来3个月
+        - LCR1未来12个月
+        - LCR2未来3个月
+        - LCR2未来12个月
+        - LCR3未来3个月
+        - LCR3未来12个月
 
 tables:
   SOLVENCY_MAIN:
     expected_pages: [17, 20, 21]
     tolerance: 0
-    page_match: prefer
+    page_match: strict
     anchor_terms: [偿付能力充足率]
     required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
 
   NON_LIFE_OPERATING_METRICS:
     expected_pages: [20, 22, 23, 24]
     tolerance: 0
-    page_match: prefer
+    page_match: strict
     anchor_terms: [主要经营指标]
     required_items: [保险业务收入, 净利润, 综合成本率, 签单保费]
+    defer_completeness_to_extractor: true
 
   ACTUAL_CAPITAL:
     expected_pages: [31, 32, 33, 34, 35, 36]
     tolerance: 0
-    page_match: prefer
+    page_match: strict
     anchor_terms: [实际资本, 实际资本调整过程]
     required_items: [核心一级资本, 附属一级资本, 实际资本合计]
 
   THREE_YEAR_INVESTMENT_RETURN:
     expected_pages: [21, 24, 25]
     tolerance: 0
-    page_match: prefer
+    page_match: strict
     # 大地不披露近三年投资收益率的线框表，只有“（五）”小节两行正文。
     anchor_terms: [近三年平均投资收益率]
     required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
@@ -62,7 +108,7 @@ tables:
   MINIMUM_CAPITAL:
     expected_pages: [37, 39, 41]
     tolerance: 0
-    page_match: prefer
+    page_match: strict
     anchor_terms: [量化风险最低资本]
     # Profile 默认终止词“最低资本合计”会命中“1.1 寿险…合计”，导致只留 3 行；
     # 清空后由页内区域与 dadi extractor 的整表重建负责。
@@ -70,7 +116,8 @@ tables:
     required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
 
   LIQUIDITY_MONITORING:
-    expected_pages: [19, 22, 23]
+    expected_pages: [19, 21, 22, 23]
     tolerance: 0
-    page_match: prefer
-    anchor_terms: [流动性风险监测指标]
+    page_match: strict
+    anchor_terms: [流动性风险监管指标, 流动性风险监测指标]
+    required_items: [LCR1, LCR2, LCR3, 经营活动净现金流]

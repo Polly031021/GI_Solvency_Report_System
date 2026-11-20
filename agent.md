@@ -99,6 +99,8 @@ tests/                     35 个脚本式回归测试
 plans/                     **入库**的改造计划与实战手册（docs/ 不入库）
   refactor-plan-track-and-rule-config.md   改造计划与进度
   company-extraction-playbook.md           公司专属提取实战手册
+  company-layout-contract-migration.md      公司专属全链路迁移 SOP 与批次
+  company-migration-template.md             单家公司迁移记录模板
 tools/                     离线小工具（STEP7 缺失指标补录表、缺口报告、指标目录生成）
 docs/                      设计文档（pdf_export_design.md）— **不入库，本地参考**
 tmp/                       临时脚本/预览图/样例 PDF，产物不提交
@@ -414,7 +416,8 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 ## 8. 目前进度
 
 > 后续计划与优先级以 `plans/next-steps-2026-11.md` 为准；89 家覆盖记录见
-> `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
+> `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。公司专属全链路
+> 迁移接口、SOP、验收与批次见 `plans/company-layout-contract-migration.md`。
 
 ### 已完成
 
@@ -469,6 +472,27 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 
 ### 近期主要变更（供追溯）
 
+- **公司专属全链路入口（2026-11-20）**：公司 extractor 可提供
+  `locate_company_tables()` 和 `extract_company_tables()`。STEP1 优先使用
+  公司专属页码，STEP2 在整份 PDF 上一次完成目标表重建；成功时完全跳过通用
+  页级抽表。大地已迁移，2023 经营表直接解析 30 行，不再触发“其他渠道签单保费”
+  页级误判。
+- **公司版式契约（2026-11-20）**：公司 YAML 可声明 `layout_contracts`，
+  锁定目标表表头、期间列、最低行数和必要业务行。大地财产已启用第一版契约；
+  契约不通过时整个表判失败并透出原因，不再把错列结果送入 STEP3。
+- **假 0 修复（2026-11-20）**：普通数值空白不再默认写 0，只有
+  `CORE_T1/T2`、`ANC_T1/T2` 且来自实际资本/偿付能力主表时才按 0 处理。
+  其他空白、错列和跨页断裂统一标记缺失，避免假 0 覆盖真实缺失。
+- **资本占位符与 LCR（2026-11-20）**：实际资本、偿付能力主表和最低资本表中的
+  非核心金额项，明确披露 `-`/`--` 时按业务零值处理；核心偿付能力指标仍保留缺失。
+  LCR 标签统一规范为 `LCR{1,2,3}未来{3,12}个月`，覆盖长场景名、三个月/一年
+  和期限前置写法。
+- **批量 PDF 性能（2026-11-20）**：新增 `PdfTextContext`，每份 PDF 的
+  pdfplumber/PyMuPDF 页文本只提取一次，STEP1 元数据、页码定位、扫描件判断、
+  STEP2 页级提取和经营表补全共用缓存；STEP3 复用 STEP1 元数据，不再全文重扫，
+  批量模式也不再逐公司生成 Excel，只在最终下载时生成整批工作簿。
+  `page.find_tables()` 已从规则定位雷达移除，改用数字表格行与续表词信号，
+  以避免高开销和部分 PyMuPDF 版本的原生崩溃。
 - `app.py`：初始化 `pdf_capture.install()`。
 - `dashboard_components.py`：删除浏览器打印 JS（-450 行），`render_print_control` 委托服务端导出。
 - `step7_solvency/report.py`：`start_document` / `begin_module` / `end_module` 埋点，发布 `_s7_pdf_meta`；

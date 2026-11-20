@@ -27,6 +27,11 @@ from services.batch_workflow import (  # noqa: E402
     sync_documents_from_uploads,
 )
 from services.solvency_pdf_locator import PageMatch  # noqa: E402
+from services.solvency_pdf_locator import (  # noqa: E402
+    analyze_document_type,
+    build_pdf_text_context,
+    extract_report_metadata,
+)
 from services.solvency_step3_standardizer import batch_result_workbook_bytes  # noqa: E402
 from services.solvency_normalizer import STANDARD_COLUMNS  # noqa: E402
 from services.solvency_rule_table_extractor import MODE_RULE, MODE_VISION  # noqa: E402
@@ -120,6 +125,42 @@ def test_89_pdf_upload_sync_is_lazy() -> None:
     print("PASS 89 份 PDF 上传同步零正文读取，状态表显示定位/提取逻辑")
 
 
+def test_rule_signature_change_invalidates_cached_results() -> None:
+    pdf = build_three_table_pdf()
+    uploads = [
+        SimpleNamespace(
+            name="大地财产.pdf",
+            size=len(pdf),
+            file_id="file-dadi",
+            getvalue=lambda: pdf,
+        )
+    ]
+    documents = sync_documents_from_uploads(
+        {},
+        uploads,
+        profile_id="NON_LIFE_SOLVENCY",
+    )
+    documents["大地财产"].update(
+        {
+            "locate_status": "成功",
+            "raw_tables": [object()],
+            "standard_status": "成功",
+        }
+    )
+    documents["大地财产"]["rule_signature"] = "stale-rule"
+    refreshed = sync_documents_from_uploads(
+        documents,
+        uploads,
+        profile_id="NON_LIFE_SOLVENCY",
+    )
+    document = refreshed["大地财产"]
+    assert document["locate_status"] == ""
+    assert document["raw_tables"] == []
+    assert document["standard_status"] == ""
+    assert document["rule_signature"] != "stale-rule"
+    print("PASS 公司规则或 extractor 变化后自动清除旧提取结果")
+
+
 def test_locate_success_without_pages_is_reported_as_failed() -> None:
     documents = {
         "甲公司": {
@@ -141,6 +182,7 @@ def test_locate_success_without_pages_is_reported_as_failed() -> None:
 
 def test_batch_rule_extraction_and_standardization() -> None:
     pdf = build_three_table_pdf()
+    text_context = build_pdf_text_context(pdf)
     matches = [
         _match(
             "SOLVENCY_MAIN",
@@ -160,6 +202,8 @@ def test_batch_rule_extraction_and_standardization() -> None:
         method="全部规则法（离线，零模型调用）",
         allow_llm_fallback=False,
         whole_page=True,
+        text_context=text_context,
+        profile_id="NON_LIFE_SOLVENCY",
     )
     assert extraction.status == "成功", extraction.note
     assert {table.table_id for table in extraction.tables} == {
@@ -195,6 +239,97 @@ def test_batch_rule_extraction_and_standardization() -> None:
         str(cell) for row in liquidity.rows for cell in row
     )
     print("PASS 批量默认规则法提取并标准化多个目标表")
+
+
+def test_cached_text_context_skips_repeated_pdf_extraction() -> None:
+    pdf = build_three_table_pdf()
+    context = build_pdf_text_context(pdf)
+
+    with (
+        patch(
+            "services.solvency_pdf_locator.extract_page_texts",
+            side_effect=AssertionError("pdfplumber full scan should be reused"),
+        ),
+        patch(
+            "services.solvency_pdf_locator.extract_page_texts_with_fitz",
+            side_effect=AssertionError("PyMuPDF full scan should be reused"),
+        ),
+    ):
+        metadata = extract_report_metadata(pdf, text_context=context)
+        profile = analyze_document_type(
+            pdf,
+            page_texts=context.fitz_page_texts,
+        )
+
+    assert metadata["页数"] == len(context.page_texts)
+    assert profile.total_pages == len(context.fitz_page_texts)
+    print("PASS PDF 页文本上下文可复用，不再重复全文扫描")
+
+
+def test_batch_standardization_skips_individual_workbook() -> None:
+    pdf = build_three_table_pdf()
+    context = build_pdf_text_context(pdf)
+    matches = [
+        _match(
+            "SOLVENCY_MAIN",
+            "偿付能力充足率指标",
+            ["认可资产", "综合偿付能力充足率"],
+        )
+    ]
+    extraction = extract_document_tables(
+        company="甲公司",
+        pdf_bytes=pdf,
+        matches=matches,
+        text_context=context,
+        profile_id="NON_LIFE_SOLVENCY",
+    )
+    profile = read_profile_registry(profile_registry_token())["NON_LIFE_SOLVENCY"]
+    batch_context = build_context_from_profile(
+        profile,
+        api_key="",
+        base_url="",
+        model="",
+        use_vision=False,
+    )
+    metadata = {
+        "公司": "甲公司",
+        "报告年度": 2025,
+        "报告季度": "Q4",
+        "报告期": "2025Q4",
+        "页数": len(context.page_texts),
+    }
+
+    with (
+        patch.object(
+            batch_workflow,
+            "extract_report_metadata",
+            side_effect=AssertionError("STEP3 should reuse STEP1 metadata"),
+        ),
+        patch.object(
+            batch_workflow,
+            "_full_pdf_text",
+            side_effect=AssertionError("STEP3 should reuse cached page text"),
+        ),
+        patch.object(
+            batch_workflow,
+            "result_workbook_bytes",
+            side_effect=AssertionError("batch should not build per-company Excel"),
+        ),
+    ):
+        outcome = standardize_document_tables(
+            company="甲公司",
+            pdf_name="甲公司.pdf",
+            pdf_bytes=pdf,
+            tables=extraction.tables,
+            context=batch_context,
+            metadata=metadata,
+            text_context=context,
+            build_workbook=False,
+        )
+
+    assert outcome["状态"] == "成功", outcome["说明"]
+    assert outcome["workbook_bytes"] == b""
+    print("PASS 批量 STEP3 复用缓存且不生成逐公司 Excel")
 
 
 def test_merged_workbook_has_exactly_one_sheet() -> None:
@@ -373,8 +508,11 @@ def test_batch_workspace_renders_step1_to_step4() -> None:
 if __name__ == "__main__":
     test_upload_sync_keeps_same_pdf_results()
     test_89_pdf_upload_sync_is_lazy()
+    test_rule_signature_change_invalidates_cached_results()
     test_locate_success_without_pages_is_reported_as_failed()
     test_batch_rule_extraction_and_standardization()
+    test_cached_text_context_skips_repeated_pdf_extraction()
+    test_batch_standardization_skips_individual_workbook()
     test_merged_workbook_has_exactly_one_sheet()
     test_batch_workbook_uses_the_single_flow_format()
     test_scanned_page_routes_to_vision_model_in_batch()
