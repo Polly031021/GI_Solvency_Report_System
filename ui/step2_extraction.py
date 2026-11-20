@@ -816,9 +816,31 @@ def _engine_summary(mode_by_page: dict[int, str]) -> str:
     return "；".join(parts)
 
 
+def _refresh_extraction_traces(
+    tables: list[FlexibleTable],
+    logs: list[dict],
+    profile_id: str = "",
+) -> None:
+    """构建/刷新“目标表 → 状态 + 未命中原因”，供 STEP2/STEP3 展示。"""
+    from services.extraction_rules import resolve_rule
+    from services.extraction_trace import build_traces
+
+    metadata = st.session_state.get("metadata") or {}
+    resolved = resolve_rule(
+        metadata.get("公司", ""),
+        metadata.get("报告年度"),
+        profile_id=profile_id,
+    )
+    st.session_state.extraction_traces = build_traces(
+        resolved_rule=resolved,
+        matches=st.session_state.get("page_matches") or [],
+        logs=logs,
+        tables=tables,
+    )
+
+
 def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
     """STEP2：并发提取各页、合并跨页表格并生成工作簿。"""
-    del active_profile  # Profile 已通过 task 内的表配置传入
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(tasks)
@@ -861,6 +883,7 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
                 }
             )
         _store_extraction_result(logs, raw_tables)
+        _refresh_extraction_traces(raw_tables, logs, active_profile.profile_id)
         status_box.write(_engine_summary(mode_by_page))
     failed_count = sum(1 for log in logs if log["状态"] == "失败")
     if failed_count:
@@ -1300,6 +1323,11 @@ def _reextract_table(tables: list, index: int, method_option: str) -> None:
     replacement = new_tables[0]
     tables[index : index + 1] = new_tables
     st.session_state.raw_tables = tables
+    _refresh_extraction_traces(
+        tables,
+        st.session_state.ai_extraction_logs,
+        str(st.session_state.get("active_profile_id") or ""),
+    )
     st.session_state.pop(f"table_editor_{table.table_id}", None)
     st.session_state.extraction_edit_events.append(
         {
@@ -1409,6 +1437,14 @@ def _render_step3_preview(active_profile: ReportProfile) -> None:
 def _render_extraction_results(active_profile: ReportProfile | None = None) -> None:
     """STEP2：中间表预览、金标准对比与下载。"""
     if st.session_state.raw_tables:
+        traces = st.session_state.get("extraction_traces") or []
+        if traces:
+            st.markdown("##### 目标表提取状态与未命中原因")
+            st.dataframe(
+                pd.DataFrame(traces),
+                width="stretch",
+                hide_index=True,
+            )
         tables = st.session_state.raw_tables
         gold_case = find_gold_case(
             st.session_state.pdf_bytes,
@@ -1696,6 +1732,7 @@ def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
                     {
                         "raw_tables": outcome.tables,
                         "extraction_logs": outcome.logs,
+                        "extraction_traces": getattr(outcome, "traces", []),
                         "extraction_status": outcome.status,
                         "extraction_note": outcome.note,
                         "extraction_method": method_label,

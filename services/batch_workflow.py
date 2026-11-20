@@ -53,6 +53,8 @@ class BatchExtractionOutcome:
     note: str = ""
     traceback: str = ""
     missing_tables: list[dict[str, Any]] = field(default_factory=list)
+    traces: list[dict[str, str]] = field(default_factory=list)
+    resolved_rule: Any = None
 
 
 def upload_signature(uploaded: Any) -> tuple[str, int | None, str]:
@@ -487,6 +489,21 @@ def extract_document_tables(
                 "说明": extractor_result["message"],
             }
         )
+
+    # R4：每张目标表的提取状态与未命中原因。
+    from .extraction_rules import resolve_rule_for_pdf
+    from .extraction_trace import build_traces
+
+    resolved_rule, _metadata = resolve_rule_for_pdf(
+        pdf_bytes, company_hint=company
+    )
+    outcome.resolved_rule = resolved_rule
+    outcome.traces = build_traces(
+        resolved_rule=resolved_rule,
+        matches=located,
+        logs=outcome.logs,
+        tables=outcome.tables,
+    )
     failed_pages = [log for log in outcome.logs if log["状态"] == "失败"]
     if not outcome.tables:
         outcome.status = "失败"
@@ -525,6 +542,7 @@ def standardize_document_tables(
     context: Any,
     period_overrides: Mapping[str, str] | None = None,
     keep_unmapped: bool = False,
+    extraction_traces: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run STEP3 for one PDF and return its data, workbook and diagnostics."""
     try:
@@ -555,6 +573,7 @@ def standardize_document_tables(
             include_derived=context.include_derived,
             period_overrides=period_overrides,
             keep_unmapped=keep_unmapped,
+            extraction_traces=extraction_traces,
         )
         report_period = str(metadata.get("报告期", "")).strip() or "2025Q4"
         data = append_registered_capital(

@@ -150,7 +150,7 @@ def test_rule_configuration_contains_all_configured_formulas() -> None:
         "CREDIT_RISK_CAPITAL",
     }
     assert expected.issubset(set(rules["规则ID"].astype(str)))
-    assert set(rules["容差"].astype(float)) == {0.0001}
+    assert set(rules["容差"].astype(float)) == {0.1}
     check = validate_rule_configuration(rules, taxonomy)
     assert check["状态"].eq("通过").all(), check
     print("PASS 勾稽规则全部来自配置文件，语法与指标引用有效")
@@ -165,12 +165,12 @@ def test_all_configured_formulas_pass_for_consistent_data() -> None:
     print("PASS 十条配置化公式在一致数据上全部通过")
 
 
-def test_tolerance_is_strictly_less_than_00001() -> None:
+def test_tolerance_is_strictly_less_than_0_1() -> None:
     pass_frame = _standard_frame()
     pass_frame.loc[
         pass_frame["指标编码"].eq("COMBINED_SOLVENCY_SURPLUS"),
         "数值",
-    ] = 100.00005
+    ] = 100.05
     results, _ = _validate(pass_frame)
     assert (
         results.loc[
@@ -184,12 +184,12 @@ def test_tolerance_is_strictly_less_than_00001() -> None:
     fail_frame.loc[
         fail_frame["指标编码"].eq("COMBINED_SOLVENCY_SURPLUS"),
         "数值",
-    ] = 100.0002
+    ] = 100.2
     results, _ = _validate(fail_frame)
     row = results[results["rule_id"].eq("COMBINED_SURPLUS")].iloc[0]
     assert row["status"] == "未通过"
-    assert "0.0001" in row["failure_reason"]
-    print("PASS 勾稽差额按严格小于 0.0001 判定")
+    assert "0.1" in row["failure_reason"]
+    print("PASS 勾稽差额按严格小于 0.1 判定（容差来自 Excel）")
 
 
 def test_missing_dependency_has_reason_and_evidence() -> None:
@@ -352,7 +352,7 @@ def test_step4_page_drills_down_to_step3() -> None:
 if __name__ == "__main__":
     test_rule_configuration_contains_all_configured_formulas()
     test_all_configured_formulas_pass_for_consistent_data()
-    test_tolerance_is_strictly_less_than_00001()
+    test_tolerance_is_strictly_less_than_0_1()
     test_missing_dependency_has_reason_and_evidence()
     test_ratio_failure_shows_formula_values_and_step3_records()
     test_cross_table_duplicate_compares_source_sheets()

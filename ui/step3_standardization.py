@@ -421,6 +421,7 @@ def _render_step3_single_tab(active_profile: ReportProfile, taxonomy: pd.DataFra
                     include_derived=include_derived,
                     template_warnings=template_warnings,
                     period_overrides=period_overrides,
+                    extraction_traces=st.session_state.get("extraction_traces") or [],
                 )
 
                 status_box.write("正在生成 STEP5 可直接读取的标准窄表工作簿…")
@@ -1159,6 +1160,7 @@ def _render_shared_batch_standardization(
                 tables=document.get("raw_tables") or [],
                 context=context,
                 period_overrides=period_overrides,
+                extraction_traces=document.get("extraction_traces") or [],
             )
             outcome["period_overrides"] = period_overrides
             outcome["period_message"] = period_message

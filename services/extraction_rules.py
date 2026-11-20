@@ -507,3 +507,30 @@ def rule_summary(resolved: ResolvedRule | None) -> str:
     if resolved.warnings:
         parts.extend(resolved.warnings)
     return "；".join(parts)
+
+
+def resolve_rule_for_pdf(
+    pdf_bytes: bytes,
+    *,
+    company_hint: str = "",
+    profile_id: str = "",
+    directory: str | Path | None = None,
+) -> tuple[ResolvedRule | None, dict[str, Any]]:
+    """按 PDF 封面解析公司规则，返回 (rule, metadata)。
+
+    批量提取的 matches 里不带报告年度，这里统一从封面补一次；
+    解析失败不阻断，返回 (None, {})。
+    """
+    try:
+        from .solvency_pdf_locator import extract_report_metadata
+
+        metadata = extract_report_metadata(pdf_bytes)
+    except Exception:
+        metadata = {}
+    rule = resolve_rule(
+        metadata.get("公司") or company_hint,
+        metadata.get("报告年度"),
+        profile_id=profile_id,
+        directory=directory,
+    )
+    return rule, metadata

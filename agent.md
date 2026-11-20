@@ -416,6 +416,12 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 - STEP7 图表 14 个模块、中英文切换、图片覆盖、AI 点评、按图表选择导出范围。
 - **PDF 导出改为服务端生成**：矢量图、1600×900 横版、自动分页、封面封底，摆脱浏览器打印。
   导出按钮在选中单个一级/二级模块时也可用（`ui/navigation.py`）。
+- **R4 缺失原因透出（2026-11-20）**：新增 `services/extraction_trace.py`；
+  STEP2 预览区显示“目标表提取状态与未命中原因”，STEP3 诊断新增 `来源缺失` 行；
+  原因码覆盖 `RULE_NOT_FOUND` / `YEAR_UNKNOWN` / `ANCHOR_NOT_FOUND` /
+  `SIGNATURE_MISSING` / `REQUIRED_ITEM_MISSING`。测试 `tests/test_extraction_trace.py`。
+- 勾稽容差改由 Excel 维护：`config/solvency_validation_rules.xlsx` 12 条规则容差统一为 0.1。
+- 劳合社/利宝/法巴天星/黄河为非传统财险主体，版式遗留已确认忽略。
 - 同比口径统一为"部分年度不参与增速"。
 - 提取表定义外置到 `config/extraction/tables.yaml`，内置常量保留兜底；Profile 的
   `NON_LIFE_OPERATING_METRICS` 与内置 `OPERATING_METRICS` 通过 aliases 共用定义。
@@ -447,10 +453,9 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 | 寿险 Profile | 仅有财险工作簿，`LIFE_SOLVENCY` 相关代码路径未验证 |
 | 金标准对比 | `gold_standard/manifest.json` 不在仓库内，该功能默认跳过（本地可自建） |
 | 自动化测试 | 仍是脚本式，未接入 pytest/CI |
-| R4 缺失原因透出 | `RULE_NOT_FOUND` / `PAGE_OUT_OF_TOLERANCE` / `ANCHOR_NOT_FOUND` 等尚未写入 STEP2 日志、STEP3 诊断备注、STEP7 缺口清单 |
-| 少数公司版式遗留 | 劳合社无资本绝对值、利宝大额折行、法巴天星 S02 表头错位、黄河经营表标签裂；见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md` §6 |
+| 少数公司版式遗留 | 劳合社、利宝、法巴天星、黄河属非传统财险/特殊披露，**已确认忽略**，不补 extractor |
 | 扫描件联调 | 中煤 2024/2025、恒邦 2024、太平科技 2025 需配置模型接口后实测视觉链路 |
-| 勾稽告警配置 | `SCHEMA_ALLOWED_PERIOD`（预测/累计期间不在字典允许范围）、比率勾稽容差 0.0001 过严（舍入差 0.01-0.05 百分点），属既有配置问题，待业务确认 |
+| 勾稽剩余项 | 容差已改为 Excel 维护（0.1）；`SCHEMA_ALLOWED_PERIOD`（字典允许期间）、预测期间构成类缺子项、`DUPLICATE_*` 跨表差异待处理 |
 
 ### 近期主要变更（供追溯）
 

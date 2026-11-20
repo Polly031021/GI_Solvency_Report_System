@@ -39,6 +39,7 @@ from .solvency_normalizer import (
 )
 from .solvency_table_boundaries import TABLE_CANONICAL_HEADERS
 from .solvency_table_extractor import ExtractedTable
+from .extraction_trace import build_diagnostics as _trace_diagnostics
 
 
 TARGET_SHEET_NAME = "指标清单"
@@ -1144,6 +1145,7 @@ def standardize_to_target(
     template_warnings: Sequence[str] = (),
     period_overrides: Mapping[str, str] | None = None,
     keep_unmapped: bool = False,
+    extraction_traces: Sequence[Mapping[str, Any]] | None = None,
 ) -> Step3StandardizationResult:
     """Fill a target list and return the canonical STEP5-compatible narrow table."""
     # ★ 修复：报告期兜底 —— 从 metadata / 文件名 / 首文文本依次抓
@@ -1964,6 +1966,15 @@ def standardize_to_target(
             summary["缺失值单元格数"] = (
                 summary["指标编码"].astype(str).str.strip()
                 .map(_missing_counts).fillna(0).astype(int)
+            )
+
+    # R4：把公司规则未命中/表缺失原因并入诊断（“来源缺失”）。
+    if extraction_traces:
+        extra_rows = _trace_diagnostics(extraction_traces)
+        if extra_rows:
+            diagnostic_frame = pd.concat(
+                [pd.DataFrame(extra_rows), diagnostic_frame],
+                ignore_index=True,
             )
 
     return Step3StandardizationResult(

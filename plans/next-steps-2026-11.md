@@ -28,73 +28,34 @@
 
 ## 1. P0：正确性收尾（优先做）
 
-### 1.1 R4 缺失原因透出（唯一未交付的原始需求）
+### 1.1 R4 缺失原因透出（✅ 已完成 2026-11-20）
 
-目标：任何“该表该指标没提取到”都能在三个位置看到原因，不再只有空值。
+实现：
 
-新建 `services/extraction_trace.py`：
+- `services/extraction_trace.py`：`build_traces()` 生成表级状态与原因码，`build_diagnostics()` 转 STEP3 诊断行
+- STEP2 单文件/批量：`extraction_traces` 存入 session / document；预览区新增“目标表提取状态与未命中原因”表
+- STEP3：`standardize_to_target(..., extraction_traces=...)`，诊断表新增 `来源缺失` 行（目标表/页码/原因）
+- 原因码：`RULE_NOT_FOUND` / `YEAR_UNKNOWN` / `ANCHOR_NOT_FOUND` / `SIGNATURE_MISSING` / `REQUIRED_ITEM_MISSING`（`PAGE_DRIFT` / `PAGE_OUT_OF_TOLERANCE` 仍由 `rule_note` 显示）
+- 测试：`tests/test_extraction_trace.py`（7 项）
 
-```
-build_trace(resolved_rule, matches, logs) -> list[ExtractionTrace]
-```
+待补齐：STEP7 缺口清单暂未单独展示原因列，可复用 `build_diagnostics()` 的行结构。
 
-原因码（沿用旧计划 §2.3）：
+### 1.2 勾稽告警治理（部分完成）
 
-| 码 | 触发 |
-| --- | --- |
-| `RULE_NOT_FOUND` | 公司无 YAML |
-| `YEAR_UNKNOWN` | 封面未识别年度 |
-| `PAGE_DRIFT` | 窗口内偏移 |
-| `PAGE_OUT_OF_TOLERANCE` | 窗口外全文回退 |
-| `ANCHOR_NOT_FOUND` | 全文无锚点 |
-| `SIGNATURE_MISSING` | 页内有表但缺核心词 |
-| `REQUIRED_ITEM_MISSING` | 表已提取但必填行缺失 |
-| `UNIT_UNKNOWN` | 单位未识别 |
+已完成：**容差改为 Excel 维护**。`config/solvency_validation_rules.xlsx` 的 12 条规则容差
+统一改为 **0.1**（百分点/万元按原单位）；`COMBINED_RATIO` / `CORE_RATIO` 不再因舍入误报，
+`tests/test_step4_validation.py` 同步为 0.1 口径。
 
-落点：
+待确认：
 
-1. STEP2 日志：新增列 `规则来源`、`未命中原因`（单文件 `ui/step2_extraction.py` + 批量 `outcome.logs`）
-2. STEP3：`diagnostics` 增加原因列，标准窄表 `备注` 写中文原因（`solvency_step3_standardizer`）
-3. STEP7：缺口清单 `说明` 列带原因（`step3_metric_gap.py`）
+1. `SCHEMA_ALLOWED_PERIOD`：字典允许期间与披露列不匹配（预测列/累计列）
+2. 构成类勾稽在“下季度预测”期间缺子项（主表预测列只披露汇总项）——属应缺，建议规则“适用期间”排除预测
+3. `DUPLICATE_*` 跨表一致性：S02/S05 未提取到对应行（如 S02 实际资本合计），需先补提取再看差异
 
-验收：
+### 1.3 四家版式遗留（已确认忽略）
 
-- 故意把某公司 `expected_pages` 改错 → STEP2 日志、STEP3 诊断、STEP7 缺口三处可见
-- `strict` 模式缺锚点 → 该表 `pages=[]`，原因可见，数值为缺失不为 0
-- 恢复配置后结果回到基线
-
-预估：2–3 天。
-
-### 1.2 勾稽告警治理（需业务拍板）
-
-现状（平安/人保 2022–2025 均存在，属既有）：
-
-- `SCHEMA_ALLOWED_PERIOD`：偿付能力主表“下季度末预测数”、经营表“本年累计数”不在部分指标字典允许期间
-- `COMBINED_RATIO` / `CORE_RATIO`：主表万元整数 → 比率舍入差 0.01–0.05 百分点，超过 0.0001 容差
-- 跨表核对、`DUPLICATE_*`：主表/S02/S05 同指标取值差异
-
-待确认方案：
-
-1. 更新 `config/solvency_taxonomy.xlsx` 允许期间（补预测/累计）
-2. 比率勾稽容差 0.0001 → 0.1 百分点（或按规则单独配置）
-3. 跨表核对指定优先来源（主表 > S02 > S05）
-
-验收：跑 `validate_standard_data_detailed`，失败项归零或只剩“源表精度”类并已归类。
-
-预估：0.5–1 天（确认后）。
-
-### 1.3 四家版式遗留
-
-| 公司 | 问题 | 处理 |
-| --- | --- | --- |
-| 劳合社 | 主表无认可资产/实际资本绝对值 | 先确认其他章节是否披露；无则标“未披露”，不补 0 |
-| 利宝保险 | 经营表大额数字折行（752.03 万 vs 75 亿） | 复用 `byd` 的按列拼碎金额 |
-| 法巴天星 2025 | S02 表头与数据错位（行次被当数值） | 写 extractor 重排 S02 |
-| 黄河财险 | 近三年表原文缺失；经营表标签裂“保险/业务收入” | 标签合并 extractor；缺失记原文 |
-
-验收：每家在 `tests/test_three_companies_extraction` 中跑该年，关键指标与 PDF 一致；跨年差异可归因。
-
-预估：1–2 天。
+劳合社、利宝、法巴天星、黄河属于非传统财险主体（或特殊披露口径），
+**数据不完整属正常，不再投入 extractor 修复**；保留在文档中仅供追溯。
 
 ---
 
