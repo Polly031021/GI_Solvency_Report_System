@@ -403,6 +403,9 @@ S7_EXPORT_DEBUG=1 ./venv/Scripts/python.exe tmp/apptest_export_check.py
 
 ## 8. 目前进度
 
+> 后续计划与优先级以 `plans/next-steps-2026-11.md` 为准；89 家覆盖记录见
+> `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
+
 ### 已完成
 
 - STEP0–STEP8 全流程可跑通，财险 Profile（`NON_LIFE_SOLVENCY`）为默认。

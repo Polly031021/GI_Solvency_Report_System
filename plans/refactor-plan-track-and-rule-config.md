@@ -510,7 +510,10 @@ structure_versions:
 
 ---
 
-## 9. 交接状态（2026-11-18）
+## 9. 交接状态（2026-11-18，已被后续工作取代）
+
+> ⚠️ 2026-11-20：89 家公司覆盖已完成（见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`），
+> 后续计划以 **`plans/next-steps-2026-11.md`** 为准；本节仅保留当时的交接记录。
 
 **分支**：`feature/track-company-and-rule-config`（已推送 origin）
 **基线 tag**：`pre-refactor-2026-11`
