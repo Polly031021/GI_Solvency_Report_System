@@ -478,6 +478,10 @@ def extract_document_tables(
         located,
         pdf_bytes=pdf_bytes,
     )
+    # 通用经营表补全：所有公司都执行，补齐 pdfplumber 漏掉的效益/规模/品质类指标。
+    from .company_extractors._operating_table import complete_operating_tables
+
+    outcome.tables = list(complete_operating_tables(outcome.tables, pdf_bytes))
     if extractor_result:
         outcome.logs.append(
             {

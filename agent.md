@@ -203,6 +203,9 @@ services/company_extractors/_main_table.py 主表重建 helper（金额跨行/�
   `apply_company_extractor_for_tables()`：
   - 批量：`batch_workflow.extract_document_tables`
   - 单文件：`ui/step2_extraction.build_tables_from_page_results`（含单表重提取）
+- **经营表通用补全（2026-11-20）**：`_operating_table.complete_operating_tables()` 对所有公司生效，
+  按 PDF 文本补齐 pdfplumber 漏掉的效益/规模/品质类指标；支持无表头、编号标签、
+  换行标签合并、`--` 占位符、按清洗后标签去重。批量与单文件路径均已接入。
 - **必须同步 `table.rows` 与 `table.table_blocks`**：STEP3 `_expand_table_blocks`
   优先读 blocks，只改 rows 不生效。
 - 调试：`tests/test_three_companies_extraction.py`（`--company` 指定多家、`--years` 多年，写 Excel 到 tmp/），

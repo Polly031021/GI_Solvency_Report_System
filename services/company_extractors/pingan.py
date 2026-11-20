@@ -214,27 +214,10 @@ def _parse_operating_rows(text: str) -> list[list[str]]:
     return rows
 
 def _complete_operating(table: Any, doc) -> list[list[str]]:
-    rows = [list(row) for row in getattr(table, "rows", []) or []]
-    pages = list(getattr(table, "source_pages", []) or [getattr(table, "page", 1)])
-    parsed: list[list[str]] = []
-    for page_number in pages:
-        parsed.extend(_parse_operating_rows(_page_text(doc, int(page_number))))
+    # 通用补全（含 -- 占位符处理）已抽到 _operating_table，平安只需复用。
+    from ._operating_table import complete_operating_rows
 
-    existing = {str(row[0]).strip() for row in rows if row and str(row[0]).strip()}
-    for row in parsed:
-        label = str(row[0]).strip()
-        if not label or label in existing:
-            continue
-        rows.append(row)
-        existing.add(label)
-
-    # 签单保费在下一页“公司分类”表里，单独追加到“本年度累计数”列。
-    if not any("签单保费" in str(row[0]) for row in rows[1:] if row):
-        next_page = int(pages[-1] if pages else getattr(table, "page", 1)) + 1
-        match = SIGNED_PREMIUM_RE.search(_page_text(doc, next_page))
-        if match:
-            rows.append(["签单保费（万元）", "", match.group(1)])
-    return _normalize_operating_rows(rows)
+    return complete_operating_rows(table, doc)
 
 
 def _sync_blocks(table: Any, rows: list[list[str]], page: int) -> None:

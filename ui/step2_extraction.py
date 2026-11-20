@@ -588,6 +588,10 @@ def build_tables_from_page_results(
         st.session_state["_company_extractor_result"] = extractor_result
     else:
         st.session_state.pop("_company_extractor_result", None)
+    # 通用经营表补全：所有公司都执行（与批量路径一致）。
+    from services.company_extractors._operating_table import complete_operating_tables
+
+    raw_tables = list(complete_operating_tables(raw_tables, pdf_bytes))
     return raw_tables
 
 
