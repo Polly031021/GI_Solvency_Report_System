@@ -388,7 +388,14 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
                     _sync_blocks(table, rows, pages)
             elif table_id == "LIQUIDITY_MONITORING":
                 rows = _rebuild_liquidity(page_text, pages)
-                if not rows:
+                if not rows and getattr(table, "strategy", "") == "公司规则页码种子":
+                    rows = [list(_LIQ_HEADER)]
+                    section = "".join(re.sub(r"\s+", "", page_text(page)) for page in pages)
+                    for label in ("经营活动净现金流", "规模保费同比增速"):
+                        match = re.search(re.escape(label) + r"([-+]?\d[\d,]*(?:\.\d+)?%?)([-+]?\d[\d,]*(?:\.\d+)?%?)", section)
+                        if match:
+                            rows.append([label, match.group(1), match.group(2)])
+                if not rows or len(rows) < 2:
                     continue
                 unit = "元" if any("（元）" in row[0] for row in rows) else ""
                 _sync_blocks(table, rows, pages, unit=unit)

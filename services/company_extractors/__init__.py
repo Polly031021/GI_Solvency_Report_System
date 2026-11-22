@@ -55,10 +55,46 @@ def get_company_document_hooks(
         module = importlib.import_module(f".{module_name}", __name__)
     except ImportError:
         return None, None
-    return (
-        getattr(module, "locate_company_tables", None),
-        getattr(module, "extract_company_tables", None),
-    )
+    locator = getattr(module, "locate_company_tables", None)
+    extractor = getattr(module, "extract_company_tables", None)
+    if extractor is None and key in POSTPROCESSORS:
+        postprocessor = POSTPROCESSORS[key]
+
+        def extractor(pdf_bytes, table_configs):
+            from ._document import HEADERS, extract_document
+
+            configs = []
+            layout = {}
+            for supplied in table_configs:
+                config = dict(supplied)
+                table_id = str(config.get("table_id") or "")
+                primary = "NON_LIFE_OPERATING_METRICS" if table_id == "OPERATING_METRICS" else table_id
+                if primary not in HEADERS:
+                    continue
+                pages = list(config.get("_confirmed_pages", []) or [])
+                config["table_id"] = primary
+                table_names = {"SOLVENCY_MAIN": "偿付能力充足率指标",
+                               "NON_LIFE_OPERATING_METRICS": "主要经营指标（财险）",
+                               "ACTUAL_CAPITAL": "S02-实际资本明细表",
+                               "MINIMUM_CAPITAL": "S05-最低资本表",
+                               "LIQUIDITY_MONITORING": "流动性风险监测指标",
+                               "THREE_YEAR_INVESTMENT_RETURN": "近三年（综合）投资收益率"}
+                config.setdefault("table_name", table_names[primary])
+                config["_layout_contract"] = config.get("_layout_contract") or {
+                    "headers": HEADERS[primary],
+                    "min_rows": 2 if pages else 999999,
+                    "required_rows": list(config.get("required_items") or []),
+                }
+                configs.append(config)
+                strong_terms = (config.get("signature_terms") or config.get("content_terms")
+                                or config.get("required_items") or [])
+                layout[primary] = {"title": r"(?!)", "required": [], "unit": config.get("unit", "万元"),
+                                   "signature_terms": list(strong_terms)}
+                config["_confirmed_pages"] = pages
+            return extract_document(pdf_bytes, configs, layout, postprocessor, key, generic=True)
+
+        extractor.__name__ = f"{key}_document_extractor"
+    return locator, extractor
 
 
 def apply_company_extractor(

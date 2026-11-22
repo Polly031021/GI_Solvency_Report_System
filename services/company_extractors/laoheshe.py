@@ -7,10 +7,14 @@ extractor，便于后续有针对性的版式修补；当前不做任何改动�
 from __future__ import annotations
 
 from typing import Any, Sequence
+import re
 
 from . import register
 
 
 @register("laoheshe")
 def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
+    from . import register
+
+    _ = register
     return tables

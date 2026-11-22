@@ -12,6 +12,7 @@ from services.extraction_rules import (
     compare_pages_with_rule,
     page_check_passed,
     resolve_rule,
+    rule_signature,
 )
 from services.solvency_hybrid_pipeline import locate_tables_hybrid
 from services.solvency_gold_standard import evaluate_gold_case, find_gold_case
@@ -280,22 +281,32 @@ def _render_locator_target_panel(
                         selected_configs, resolved_rule
                     ),
                 }
-                matches, locator_message = locate_tables_hybrid(
-                    incoming,
-                    selected_feature_config,
-                    api_key=st.session_state.llm_api_key,
-                    base_url=st.session_state.llm_base_url,
-                    model=st.session_state.llm_model,
-                    profile_context=active_profile.locator_context(),
-                    mode=(
-                        "rule"
-                        if use_rule_mode
-                        else "rule_vision"
-                        if use_rule_vision_mode
-                        else "hybrid"
-                    ),
-                    llm_verify=llm_verify,
-                )
+                from services.company_extractors import get_company_document_hooks
+                company_locator, _ = get_company_document_hooks(resolved_rule.extractor if resolved_rule else "")
+                if company_locator is not None:
+                    pages = company_locator(incoming, selected_feature_config["tables"])
+                    matches = [PageMatch(table_id=config["table_id"], table_name=config["table_name"],
+                               pages=pages.get(config["table_id"], []), score=100.0,
+                               evidence="公司专属定位", confidence=100, confidence_basis="公司专属定位",
+                               table_config=dict(config)) for config in selected_feature_config["tables"]]
+                    locator_message = "公司专属定位完成。"
+                else:
+                    matches, locator_message = locate_tables_hybrid(
+                        incoming,
+                        selected_feature_config,
+                        api_key=st.session_state.llm_api_key,
+                        base_url=st.session_state.llm_base_url,
+                        model=st.session_state.llm_model,
+                        profile_context=active_profile.locator_context(),
+                        mode=(
+                            "rule"
+                            if use_rule_mode
+                            else "rule_vision"
+                            if use_rule_vision_mode
+                            else "hybrid"
+                        ),
+                        llm_verify=llm_verify,
+                    )
                 st.session_state.auto_page_matches = matches
                 st.session_state.page_matches = matches
                 st.session_state.pages_confirmed = False
@@ -485,6 +496,16 @@ def _render_locator_single_tab(active_profile: ReportProfile) -> None:
                     )
 
         total_pages = int(st.session_state.metadata.get("页数", 0) or 0)
+        current_signature = rule_signature(st.session_state.metadata.get("公司", ""),
+                                           st.session_state.metadata.get("报告年度"),
+                                           profile_id=active_profile.profile_id)
+        previous_signature = st.session_state.get("single_rule_signature")
+        if previous_signature and previous_signature != current_signature:
+            _clear_page_locations()
+            clear_extraction_results(clear_caches=True)
+            _drop_page_edit_widgets(table_configs)
+            st.info("公司提取规则已更新，请重新定位和提取。")
+        st.session_state.single_rule_signature = current_signature
         st.caption(f"当前文件：{uploaded_pdf.name}　|　文档共 {total_pages} 页")
         identity_warning = report_identity_warning(
             uploaded_pdf.name,

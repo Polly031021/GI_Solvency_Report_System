@@ -168,7 +168,7 @@ def test_dadi_company_specific_pipeline_extracts_all_tables() -> None:
     success_logs = [log for log in result["logs"] if log["状态"] == "成功"]
     assert len(success_logs) == 5
     assert any(
-        log["状态"] == "失败" and "近三年" in str(log["目标表"])
+        log["状态"] == "未披露" and "近三年" in str(log["目标表"])
         for log in result["logs"]
     )
     print("PASS 大地全链路专属定位与整份 PDF 提取")

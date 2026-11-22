@@ -848,6 +848,8 @@ def _refresh_extraction_traces(
 
 def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
     """STEP2：并发提取各页、合并跨页表格并生成工作簿。"""
+    if _run_company_document_extraction(active_profile):
+        return
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(tasks)
@@ -900,6 +902,28 @@ def _run_extraction(active_profile: ReportProfile, tasks: list[dict]) -> None:
         )
     else:
         st.success("所有页面提取成功！")
+
+
+def _run_company_document_extraction(active_profile: ReportProfile) -> bool:
+    from services.company_extractors import get_company_document_hooks
+    name = _resolve_company_extractor_name()
+    _, extractor = get_company_document_hooks(name)
+    if extractor is None:
+        return False
+    metadata = st.session_state.get("metadata") or {}
+    with st.spinner("正在执行公司专属整份 PDF 提取…"):
+        outcome = extract_document_tables(
+            company=metadata.get("公司", ""), pdf_bytes=st.session_state.pdf_bytes,
+            matches=st.session_state.page_matches, metadata=metadata,
+            profile_id=active_profile.profile_id,
+        )
+    _store_extraction_result(outcome.logs, outcome.tables)
+    st.session_state.extraction_traces = outcome.traces
+    if outcome.status == "成功":
+        st.success(outcome.note)
+    else:
+        st.warning(outcome.note)
+    return True
 
 
 def method_requires_credentials(method: str) -> bool:
@@ -1279,6 +1303,24 @@ def _render_table_editor(tables: list, selected_index: int) -> None:
 def _reextract_table(tables: list, index: int, method_option: str) -> None:
     """按 STEP1 确认的页码重新提取一张目标表并替换中间表。"""
     table = tables[index]
+    from services.company_extractors import get_company_document_hooks
+    _, document_extractor = get_company_document_hooks(_resolve_company_extractor_name())
+    if document_extractor is not None:
+        result = document_extractor(st.session_state.pdf_bytes,
+                 [{**item.table_config, "_confirmed_pages": list(item.pages)}
+                  for item in st.session_state.page_matches if item.table_id == table.table_id])
+        replacement = next((item for item in result["tables"] if item.table_id == table.table_id), None)
+        if replacement is None:
+            st.error("公司专属提取失败：" + "；".join(log["说明"] for log in result["logs"]))
+            return
+        tables[index] = replacement
+        logs = [log for log in st.session_state.ai_extraction_logs
+                if log.get("表编码") != table.table_id and log.get("目标表") != table.table_name]
+        logs.extend(result["logs"])
+        _store_extraction_result(logs, tables)
+        _refresh_extraction_traces(tables, logs, str(st.session_state.get("active_profile_id") or ""))
+        st.rerun()
+        return
     match = next(
         (item for item in st.session_state.page_matches if item.table_id == table.table_id),
         None,

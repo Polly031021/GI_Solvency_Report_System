@@ -6,7 +6,7 @@
 #   NON_LIFE_OPERATING_METRICS    13-14 11-12 12      12
 #   ACTUAL_CAPITAL                31    26    无      27
 #   MINIMUM_CAPITAL               34    31    20      30
-#   THREE_YEAR_INVESTMENT_RETURN  无    11    12      11
+#   THREE_YEAR_INVESTMENT_RETURN  无    11    12      11（文本行顺序重叠，需格式规则）
 #   LIQUIDITY_MONITORING          13-14 11    11-12   11
 #
 # 封面公司名四年一致：“长江财产保险股份有限公司”；均为四季度报告，

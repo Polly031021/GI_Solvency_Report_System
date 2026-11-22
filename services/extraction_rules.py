@@ -471,6 +471,13 @@ def rule_signature(
         if module_path.is_file():
             stat = module_path.stat()
             parts.extend((str(stat.st_mtime_ns), str(stat.st_size)))
+        for helper in sorted(module_path.parent.glob("_*.py")):
+            stat = helper.stat()
+            parts.extend((helper.name, str(stat.st_mtime_ns), str(stat.st_size)))
+    normalizer_path = Path(__file__).resolve().parent / "solvency_normalizer.py"
+    if normalizer_path.is_file():
+        stat = normalizer_path.stat()
+        parts.extend((normalizer_path.name, str(stat.st_mtime_ns), str(stat.st_size)))
     digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     return digest[:16]
 

@@ -200,12 +200,14 @@ def _contract_failure(table: Any, rows: list[list[str]]) -> str:
 
     expected_headers = contract_values(contract.get("headers"))
     actual_headers = [_clean(value) for value in rows[0]]
-    if expected_headers and actual_headers[: len(expected_headers)] != expected_headers:
+    if expected_headers and actual_headers != expected_headers:
         return (
             "版式契约：表头不匹配，"
             f"预期 {expected_headers}，实际 {actual_headers}"
         )
     min_rows = int(contract.get("min_rows", 1) or 1)
+    if expected_headers and any(len(row) != len(expected_headers) for row in rows):
+        return "版式契约：数据列数与表头不一致"
     if len(rows) < min_rows:
         return f"版式契约：仅 {len(rows)} 行，少于最低要求 {min_rows} 行"
     required_rows = contract_values(contract.get("required_rows"))
@@ -628,13 +630,14 @@ def extract_company_tables(
         table_name = str(config.get("table_name") or table_id).strip()
         pages = list(pages_by_table.get(table_id) or [])
         if not pages:
+            undisclosed = table_id == "THREE_YEAR_INVESTMENT_RETURN" and not any("近三年" in text for text in texts)
             logs.append(
                 {
                     "目标表": table_name,
                     "物理页码": "",
                     "识别方式": "公司专属规则",
-                    "状态": "失败",
-                    "说明": "公司专属定位未找到目标表",
+                    "状态": "未披露" if undisclosed else "失败",
+                    "说明": "原文未披露近三年投资收益率" if undisclosed else "公司专属定位未找到目标表",
                 }
             )
             continue

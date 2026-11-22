@@ -208,6 +208,8 @@ PERIOD_ALIASES = {
 #      "市场风险分散效应"相似，模糊匹配分差不够被判为"歧义"而丢弃。
 # ================================================================
 _EXACT_LABEL_LOCKS: dict[str, str] = {
+    "特定类保险合同损失吸收效应": "CONTRACT_LOSS_ABSORPTION_EFFECT",
+    "特定类别保险合同损失吸收效应": "CONTRACT_LOSS_ABSORPTION_EFFECT",
     "量化风险分散效应":          "QUANT_RISK_DIVERSIFICATION_EFFECT",
     "量化风险分散效应期末数":     "QUANT_RISK_DIVERSIFICATION_EFFECT",
     "量化风险分散效应期初数":     "QUANT_RISK_DIVERSIFICATION_EFFECT",
@@ -1399,10 +1401,6 @@ def normalize_tables(
                         _raw_text = (
                             "" if pd.isna(raw_value) else str(raw_value).strip()
                         )
-                        _capital_scope = (
-                            _metric_code in CAPITAL_COMPONENT_ZERO_CODES
-                            and _table_id in CAPITAL_COMPONENT_ZERO_TABLE_IDS
-                        )
                         _dash_zero_scope = (
                             (
                                 _metric_code in DISCLOSED_DASH_ZERO_CODES
@@ -1417,10 +1415,13 @@ def normalize_tables(
                         if not _raw_text:
                             if metric.get("_unmapped"):
                                 continue
-                            if _capital_scope:
-                                # 只有资本四层级的空白按 0 处理。其他空白
-                                # 很可能来自列错位、跨页断裂或表头丢失，
-                                # 继续写 0 会生成难以发现的假数据。
+                            blank_proof = next((item for item in (getattr(table, "blank_cell_evidence", None) or [])
+                                                if item.get("page") == table.page
+                                                and item.get("label") == _normalize_label(label)
+                                                and item.get("value_index") == column_index - value_start), None)
+                            if blank_proof:
+                                # 用户口径：有指标行且原PDF单元格确认空白才写0。
+                                # 提取结果空白本身不能证明原文为空。
                                 numeric_value = 0.0
                                 blank_capital_zero = True
                             else:
@@ -1437,8 +1438,8 @@ def normalize_tables(
                                         "指标编码": _metric_code,
                                         "状态": MISSING_NUMERIC_DIAGNOSTIC_STATUS,
                                         "原因": (
-                                            "原始值为空白，按缺失处理（未写0）；"
-                                            "请检查表头、列对齐和跨页提取"
+                                            "提取值为空白，尚无原PDF单元格空白确认依据；"
+                                            "按缺失处理（未写0），待核对是否漏提数字"
                                         ),
                                         "最佳候选": str(metric.get("指标名称", "")),
                                         "最佳得分": 1.0,
@@ -1538,7 +1539,7 @@ def normalize_tables(
                         continue
 
                     if blank_capital_zero:
-                        note = "资本明细空白，按0处理" + (
+                        note = "原PDF单元格已确认空白，按用户口径0处理" + (
                             f"；{note}" if note else ""
                         )
                     elif disclosed_dash_zero:
@@ -1640,10 +1641,6 @@ def normalize_tables(
                         if note
                         else period_default_note
                     )
-                if blank_capital_zero and "预测" in period:
-                    # 空白不自动解释为“下季度预测为0”，只对本期/上期资本明细生效。
-                    continue
-                
                 if period.endswith("/非认可价值") or period.endswith("/非认可"):
                     period = period.replace("/非认可价值", "").replace("/非认可", "")
                     period = period + "-非认可"

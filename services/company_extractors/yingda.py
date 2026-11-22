@@ -334,3 +334,90 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     finally:
         doc.close()
     return tables
+
+
+_DOCUMENT_LAYOUT = {
+    "SOLVENCY_MAIN": {
+        "title": "认可资产",
+        "required": [
+            "认可资产",
+            "认可负债",
+            "综合偿付能力充足率"
+        ],
+        "unit": "万元"
+    },
+    "NON_LIFE_OPERATING_METRICS": {
+        "title": "主要经营指标",
+        "required": [
+            "保险业务收入",
+            "净利润"
+        ],
+        "continuation": 2,
+        "tail_terms": [
+            "签单保费",
+            "综合成本率",
+            "车险车均保费"
+        ],
+        "stop": "(?:实际资本表|偿付能力状况表)",
+        "unit": "万元"
+    },
+    "ACTUAL_CAPITAL": {
+        "title": "实际资本表",
+        "required": [
+            "核心一级资本"
+        ],
+        "continuation": 3,
+        "tail_terms": [
+            "附属一级资本",
+            "附属二级资本",
+            "实际资本合计",
+            "核心一级资本"
+        ],
+        "stop": "(?:认可资产表|认可资产明细表)",
+        "unit": "万元"
+    },
+    "MINIMUM_CAPITAL": {
+        "title": "最低资本表",
+        "required": [
+            "量化风险最低资本"
+        ],
+        "continuation": 2,
+        "tail_terms": [
+            "附加资本",
+            "风险最低资本",
+            "最低资本"
+        ],
+        "stop": "(?:保费风险最低资本表|巨灾风险最低资本表)",
+        "unit": "万元"
+    },
+    "LIQUIDITY_MONITORING": {
+        "title": "流动性风险监测指标",
+        "required": [
+            "经营活动净现金流"
+        ],
+        "continuation": 1,
+        "tail_terms": [
+            "融资杠杆",
+            "持有关联方资产",
+            "经营活动现金流",
+            "AA级"
+        ],
+        "stop": "(?:实际资本表|偿付能力状况表)",
+        "unit": "万元"
+    },
+    "THREE_YEAR_INVESTMENT_RETURN": {
+        "title": "近三年.{0,35}平均(?:综合)?投资收益率",
+        "required": [],
+        "unit": "%"
+    }
+}
+
+
+def locate_company_tables(pdf_bytes, table_configs=()):
+    from ._document import locate_document
+    return locate_document(pdf_bytes, _DOCUMENT_LAYOUT)
+
+
+def extract_company_tables(pdf_bytes, table_configs):
+    from ._document import extract_document
+    return extract_document(pdf_bytes, table_configs, _DOCUMENT_LAYOUT, postprocess, "英大财产")

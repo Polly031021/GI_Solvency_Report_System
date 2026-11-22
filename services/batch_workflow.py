@@ -383,11 +383,26 @@ def extract_document_tables(
             company_extractor_name
         )
     if company_document_extractor is not None:
+        from .extraction_rules import resolve_rule
+
+        resolved_for_scope = resolve_rule(
+            (metadata or {}).get("公司") or company,
+            (metadata or {}).get("报告年度"),
+            profile_id=profile_id,
+        )
+        configured_tables = set((getattr(resolved_for_scope, "tables", {}) or {}).keys())
+        match_aliases = {"OPERATING_METRICS": "NON_LIFE_OPERATING_METRICS"}
+        scoped_matches = [
+            match for match in matches
+            if not configured_tables
+            or match.table_id in configured_tables
+            or match_aliases.get(match.table_id, match.table_id) in configured_tables
+        ]
         company_result = company_document_extractor(
             pdf_bytes,
             [
-                match.table_config
-                for match in matches
+                {**match.table_config, "_confirmed_pages": list(match.pages)}
+                for match in scoped_matches
                 if isinstance(match.table_config, dict)
             ],
         )
@@ -413,11 +428,11 @@ def extract_document_tables(
         outcome.resolved_rule = resolved_rule
         outcome.traces = build_traces(
             resolved_rule=resolved_rule,
-            matches=located,
+            matches=scoped_matches,
             logs=outcome.logs,
             tables=outcome.tables,
         )
-        failed = [log for log in outcome.logs if log.get("状态") != "成功"]
+        failed = [log for log in outcome.logs if log.get("状态") not in {"成功", "未披露"}]
         if not outcome.tables:
             outcome.status = "失败"
             outcome.note = "公司专属提取未生成任何目标表。"

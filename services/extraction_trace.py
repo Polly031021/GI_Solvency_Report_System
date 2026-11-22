@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 REASON_LABELS: dict[str, str] = {
@@ -58,16 +59,15 @@ def _rule_label(resolved_rule: Any) -> str:
     return str(label or source or "")
 
 
-def _page_status(pages: Iterable[int], logs: Sequence[Mapping[str, Any]]) -> tuple[str, str]:
+def _page_status(pages: Iterable[int], logs: Sequence[Mapping[str, Any]], table_name: str = "") -> tuple[str, str]:
     """根据日志判断这些页的提取状态，返回 (状态, 失败说明)。"""
     page_set = {int(page) for page in pages}
     failed: list[str] = []
     for log in logs or []:
-        try:
-            page = int(str(log.get("物理页码") or "").strip())
-        except (TypeError, ValueError):
+        if table_name and str(log.get("目标表") or "") not in {table_name, "", "整页全表"}:
             continue
-        if page not in page_set:
+        log_pages = {int(value) for value in re.findall(r"\d+", str(log.get("物理页码") or ""))}
+        if not log_pages.intersection(page_set):
             continue
         if str(log.get("状态") or "") == "失败":
             failed.append(str(log.get("说明") or "")[:120])
@@ -139,7 +139,7 @@ def build_traces(
             if year_unknown:
                 reason_text = f"{reason_text}；{REASON_LABELS['YEAR_UNKNOWN']}".strip("；")
         else:
-            status, failure_note = _page_status(pages, logs)
+            status, failure_note = _page_status(pages, logs, table_name)
             if status != "成功":
                 reason_code = "SIGNATURE_MISSING"
                 reason_text = failure_note or REASON_LABELS[reason_code]

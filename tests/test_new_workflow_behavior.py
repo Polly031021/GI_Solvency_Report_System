@@ -238,7 +238,7 @@ def test_profile_token_and_whole_page_keys() -> None:
 
 
 def test_blank_capital_components_are_zero_filled() -> None:
-    """实际资本表中的四层资本明细，空白单元格应按 0 生成记录。"""
+    """有原文空白确认依据的资本明细按0生成记录。"""
     table = FlexibleTable(
         table_id="ACTUAL_CAPITAL",
         table_name="S02 实际资本",
@@ -252,6 +252,10 @@ def test_blank_capital_components_are_zero_filled() -> None:
         ],
         unit="万元",
     )
+    table.blank_cell_evidence = [
+        {"page": 1, "label": label, "value_index": index}
+        for label, index in (("核心二级资本", 0), ("核心二级资本", 1), ("附属二级资本", 0))
+    ]
     taxonomy = load_taxonomy(str(ROOT / "config" / "solvency_taxonomy.xlsx"))
     catalog = step3_metric_catalog(taxonomy, include_derived=False)
     result = standardize_to_target(
@@ -276,7 +280,7 @@ def test_blank_capital_components_are_zero_filled() -> None:
         "ANC_T2_CAPITAL",
     }
     assert (rows["数值"] == 0).sum() == 3, rows[["指标编码", "期间口径", "数值"]]
-    assert rows["备注"].astype(str).str.contains("资本明细空白，按0处理").any()
+    assert rows["备注"].astype(str).str.contains("原PDF单元格已确认空白").any()
     summary = result.target_summary[result.target_summary["指标编码"] == "CORE_T2_CAPITAL"]
     assert summary["填报状态"].iloc[0] == "已填报"
     print("PASS 资本明细空白按0生成记录")
