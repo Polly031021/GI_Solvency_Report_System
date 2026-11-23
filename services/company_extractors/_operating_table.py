@@ -54,7 +54,12 @@ def _page_text(doc, page_number: int) -> str:
 
 
 def _strip_label(label: str) -> str:
-    return _LABEL_PREFIX_RE.sub("", str(label or "")).strip()
+    text = _LABEL_PREFIX_RE.sub("", str(label or ""))
+    text = _clean(text)
+    # 同一指标在不同帧里可能多出空格或行内单位；去重键必须忽略这两类
+    # 排版差异，否则 "(万元)" 与 " (万元)" 会被当成两条数据。
+    text = re.sub(r"[（(](?:万元|亿元|千元|元|%|％|百分点)[）)]$", "", text)
+    return text
 
 
 def _is_label_fragment(line: str) -> bool:

@@ -28,6 +28,16 @@ company:
     NON_LIFE_OPERATING_METRICS:
       headers: [指标名称, 本季度数, 本年度累计数]
       min_rows: 20
+      max_rows: 32
+      unique_rows: true
+      forbidden_rows:
+        - 经营活动净现金流
+        - 百元保费经营活动净现金流
+        - 特定业务现金流支出占比
+        - 现金及流动性管理工具占比
+        - 季均融资杠杆比例
+        - 应收款项占比
+        - 持有关联方资产占比
       required_rows: [保险业务收入, 净利润, 综合成本率, 签单保费]
     ACTUAL_CAPITAL:
       headers: [指标名称, 期末数, 期初数]

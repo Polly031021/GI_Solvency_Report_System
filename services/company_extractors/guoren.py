@@ -436,11 +436,12 @@ def _operating(grids: Sequence[_Grid]) -> list[tuple[int, str, list[list[str]]]]
 def _liquidity(grids: Sequence[_Grid]) -> list[tuple[int, str, list[list[str]]]] | None:
     return _rebuild(
         grids,
-        lambda grid: "持有关联方资产占比" in grid.text,
-        lambda row: any(
-            cell.strip().startswith("一、") and "经营活动净现金流" in cell for cell in row
+        lambda grid: (
+            "流动性风险监测指标" in grid.text
+            and "经营活动净现金流" in grid.text
         ),
-        lambda row: _has(row, "持有关联方资产占比"),
+        lambda row: _has(row, "经营活动净现金流"),
+        lambda row: _has(row, "持有关联方资产"),
         max_pages=2,
     )
 
@@ -486,3 +487,19 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         if table_id == "THREE_YEAR_INVESTMENT_RETURN":
             table.unit = ""
     return tables
+
+
+from ._document import STANDARD_NON_LIFE_LAYOUT, make_document_hooks
+
+_GUOREN_LAYOUT = dict(STANDARD_NON_LIFE_LAYOUT)
+_GUOREN_LAYOUT["SOLVENCY_MAIN"] = {
+    "title": "(?:主要)?偿付能力充足率指标",
+    "required": ["认可资产"],
+    "continuation": 1,
+    "tail_terms": ["综合偿付能力充足率", "核心偿付能力充足率"],
+    "stop": "(?:流动性风险|主要经营指标)",
+    "unit": "万元",
+}
+locate_company_tables, extract_company_tables = make_document_hooks(
+    _GUOREN_LAYOUT, "国任财险", postprocess
+)

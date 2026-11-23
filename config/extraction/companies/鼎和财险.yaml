@@ -25,6 +25,31 @@ company:
   canonical: 鼎和财险
   aliases: [鼎和财产, 鼎和财产保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [指标名称, 本季度末数, 上季度末数, 下季度末预测数]
+      min_rows: 10
+      required_rows: [认可资产, 认可负债, 综合偿付能力充足率]
+    NON_LIFE_OPERATING_METRICS:
+      headers: [指标名称, 本季度数, 本年度累计数]
+      min_rows: 20
+      required_rows: [保险业务收入, 净利润, 综合成本率, 签单保费]
+    ACTUAL_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 8
+      required_rows: [核心一级资本, 实际资本合计]
+    MINIMUM_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 20
+      required_rows: [量化风险最低资本, 最低资本]
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 5
+      required_rows: [经营活动净现金流]
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
   rule_version: 1
   extractor: dinghe
   notes: 2022-2025 版式稳定；经营表跨页、最低资本表网格断裂、近三年收益率为文本行，由 dinghe extractor 重建
@@ -37,7 +62,7 @@ tables:
     required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
 
   NON_LIFE_OPERATING_METRICS:
-    expected_pages: [14, 16, 17]
+    expected_pages: [14, 15, 16, 17, 18]
     tolerance: 0
     page_match: prefer
     anchor_terms: [主要经营指标]
@@ -51,7 +76,7 @@ tables:
     required_items: [核心一级资本, 附属一级资本, 实际资本合计]
 
   MINIMUM_CAPITAL:
-    expected_pages: [27, 28, 30]
+    expected_pages: [27, 28, 29, 30, 31]
     tolerance: 0
     page_match: prefer
     anchor_terms: [最低资本总表]
@@ -65,7 +90,7 @@ tables:
     required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
   LIQUIDITY_MONITORING:
-    expected_pages: [14, 16, 17]
+    expected_pages: [13, 14, 15, 16, 17]
     tolerance: 0
     page_match: prefer
     anchor_terms: [流动性风险监测指标]

@@ -219,6 +219,12 @@ def _rebuild_three_year(table: Any, doc: Any) -> bool:
         table.table_blocks = []
         return False
     rows = _parse_three_year_rows(lines, index + 1)
+    for row in rows:
+        label = str(row[0] if row else "")
+        if "综合收益率" in label and "综合投资收益率" not in label:
+            row[0] = label.replace("综合收益率", "综合投资收益率")
+        elif "平均投资收益率" not in label and "收益率" in label:
+            row[0] = label.replace("收益率", "投资收益率")
     if not rows:
         table.rows = []
         table.table_blocks = []
@@ -262,7 +268,10 @@ def _build_three_year_table(doc: Any) -> Any | None:
 # ---------------------------------------------------------------------------
 def _liquidity_heading_index(lines: Sequence[str]) -> int | None:
     for index, line in enumerate(lines):
-        if "流动性风险监测指标" in line.replace(" ", ""):
+        head = line.replace(" ", "")
+        if "流动性风险监测指标" in head:
+            return index
+        if "流动性风险" in head and "监测指标" in head:
             return index
     # 2022 年报把这一节写作“2、监测指标”，表头是“监测指标 / 指标名称”。
     for index, line in enumerate(lines):
@@ -519,3 +528,32 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     finally:
         doc.close()
     return rebuilt
+
+
+from ._document import STANDARD_NON_LIFE_LAYOUT, make_document_hooks
+
+_YONGCHENG_LAYOUT = dict(STANDARD_NON_LIFE_LAYOUT)
+_YONGCHENG_LAYOUT["SOLVENCY_MAIN"] = {
+    "title": "(?:主要)?偿付能力(?:充足率)?指标",
+    "required": ["认可资产", "综合偿付能力充足率"],
+    "unit": "元",
+}
+_YONGCHENG_LAYOUT["ACTUAL_CAPITAL"] = {
+    "title": "实际资本(?:各项指标对比表|明细表|表)",
+    "required": ["核心一级资本"],
+    "continuation": 3,
+    "tail_terms": ["附属一级资本", "实际资本合计", "核心一级资本"],
+    "stop": "(?:认可资产表|最低资本)",
+    "unit": "元",
+}
+_YONGCHENG_LAYOUT["MINIMUM_CAPITAL"] = {
+    "title": "(?:S05[-—－]?最低资本表|[一二三四五六七八九十]+、最低资本)",
+    "required": ["量化风险最低资本"],
+    "continuation": 2,
+    "tail_terms": ["风险最低资本", "最低资本"],
+    "stop": "(?:保费风险最低资本表|巨灾风险最低资本表)",
+    "unit": "元",
+}
+locate_company_tables, extract_company_tables = make_document_hooks(
+    _YONGCHENG_LAYOUT, "永诚保险", postprocess
+)

@@ -63,6 +63,55 @@ class BatchExtractionOutcome:
     resolved_rule: Any = None
 
 
+_TABLE_ID_ALIASES = {
+    "OPERATING_METRICS": "NON_LIFE_OPERATING_METRICS",
+}
+
+
+def _canonical_table_id(table_id: object) -> str:
+    value = str(table_id or "").strip()
+    return _TABLE_ID_ALIASES.get(value, value)
+
+
+def _reconcile_company_table_set(
+    outcome: BatchExtractionOutcome,
+    expected_matches: Sequence[PageMatch],
+) -> list[str]:
+    """Fail a company-specific result when an expected table disappears silently."""
+    actual = {
+        _canonical_table_id(getattr(table, "table_id", ""))
+        for table in outcome.tables
+        if getattr(table, "table_id", "")
+    }
+    logged: set[str] = {
+        str(log.get("目标表") or "").strip()
+        for log in outcome.logs
+        if str(log.get("状态") or "").strip() in {"失败", "未披露"}
+    }
+    unresolved: list[str] = []
+    for match in expected_matches:
+        table_id = _canonical_table_id(getattr(match, "table_id", ""))
+        table_name = str(getattr(match, "table_name", "") or table_id).strip()
+        if not table_id or table_id in actual:
+            continue
+        if table_name in logged:
+            continue
+        unresolved.append(table_id)
+        outcome.logs.append(
+            {
+                "目标表": table_name,
+                "物理页码": "、".join(map(str, getattr(match, "pages", []) or [])),
+                "识别方式": "公司专属规则",
+                "状态": "失败",
+                "说明": (
+                    "公司专属提取未返回预期目标表；"
+                    "按全链路规则阻断，不回退通用页级抽表。"
+                ),
+            }
+        )
+    return unresolved
+
+
 def upload_signature(uploaded: Any) -> tuple[str, int | None, str]:
     """Stable identity used to avoid re-reading unchanged uploads every rerun."""
     return (
@@ -408,6 +457,10 @@ def extract_document_tables(
         )
         outcome.tables = list(company_result.get("tables") or [])
         outcome.logs = list(company_result.get("logs") or [])
+        missing_expected = _reconcile_company_table_set(
+            outcome,
+            scoped_matches,
+        )
 
         from .extraction_rules import resolve_rule, resolve_rule_for_pdf
         from .extraction_trace import build_traces
@@ -440,7 +493,13 @@ def extract_document_tables(
             outcome.status = "部分成功"
             outcome.note = (
                 f"公司专属提取 {len(outcome.tables)} 张表，"
-                f"{len(failed)} 张表失败。"
+                f"{len(failed)} 张表失败"
+                + (
+                    f"；静默缺失预期表：{'、'.join(missing_expected)}"
+                    if missing_expected
+                    else ""
+                )
+                + "。"
             )
         else:
             outcome.status = "成功"

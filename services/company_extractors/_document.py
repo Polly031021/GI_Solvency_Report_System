@@ -14,6 +14,50 @@ RETURN = ["项目", "数值"]
 HEADERS = {"SOLVENCY_MAIN": MAIN, "NON_LIFE_OPERATING_METRICS": OPERATING,
            "ACTUAL_CAPITAL": CAPITAL, "MINIMUM_CAPITAL": CAPITAL,
            "LIQUIDITY_MONITORING": LIQUIDITY, "THREE_YEAR_INVESTMENT_RETURN": RETURN}
+STANDARD_NON_LIFE_LAYOUT = {
+    "SOLVENCY_MAIN": {
+        "title": "(?:主要)?偿付能力充足率指标",
+        "required": ["认可资产", "综合偿付能力充足率"],
+        "unit": "元",
+    },
+    "NON_LIFE_OPERATING_METRICS": {
+        "title": "(?:财产保险公司)?主要经营指标",
+        "required": ["保险业务收入", "净利润"],
+        "continuation": 2,
+        "tail_terms": ["签单保费", "综合成本率", "车险车均保费"],
+        "stop": "(?:实际资本表|偿付能力状况表|流动性风险)",
+        "unit": "万元",
+    },
+    "ACTUAL_CAPITAL": {
+        "title": "(?:S02[-—－]?)?实际资本表",
+        "required": ["核心一级资本"],
+        "continuation": 3,
+        "tail_terms": ["附属一级资本", "附属二级资本", "实际资本合计", "核心一级资本"],
+        "stop": "(?:认可资产表|认可资产明细表|最低资本表)",
+        "unit": "元",
+    },
+    "MINIMUM_CAPITAL": {
+        "title": "(?:S05[-—－]?)?最低资本表",
+        "required": ["量化风险最低资本"],
+        "continuation": 2,
+        "tail_terms": ["附加资本", "风险最低资本", "最低资本"],
+        "stop": "(?:保费风险最低资本表|巨灾风险最低资本表)",
+        "unit": "元",
+    },
+    "LIQUIDITY_MONITORING": {
+        "title": "流动性风险(?:监管|监测)指标",
+        "required": [],
+        "continuation": 1,
+        "tail_terms": ["LCR", "融资杠杆", "持有关联方资产", "经营活动净现金流"],
+        "stop": "(?:实际资本表|偿付能力状况表|主要经营指标)",
+        "unit": "元",
+    },
+    "THREE_YEAR_INVESTMENT_RETURN": {
+        "title": "近三年.{0,40}平均(?:综合)?投资收益率",
+        "required": [],
+        "unit": "%",
+    },
+}
 NUMBER = r"(?:[-－—–]{1,2}|[-+]?\d[\d,]*(?:\.\d+)?%?)"
 VALUES = re.compile(rf"^(.*?)\s+({NUMBER})(?:\s+({NUMBER}))?(?:\s+({NUMBER}))?\s*$")
 SECTION = re.compile(r"^(?:[一二三四五六七八九十]{1,3}[、．.]|[（(][一二三四五六七八九十]{1,3}[）)])")
@@ -39,10 +83,31 @@ def contract_failure(table, rows):
         return "版式契约：数据列数与表头不一致"
     if len(rows) < int(contract.get("min_rows", 1)):
         return f"版式契约：行数不足（{len(rows)}）"
-    labels = [compact(row[0]) for row in rows[1:]]
+    max_rows = contract.get("max_rows")
+    if max_rows is not None and len(rows) > int(max_rows):
+        return f"版式契约：行数超限（{len(rows)} > {max_rows}）"
+    labels = [
+        compact("".join(row[:-2])) if len(row) > 2 else compact(row[0])
+        for row in rows[1:]
+        if row
+    ]
     missing = [label for label in contract.get("required_rows", [])
                if not any(compact(label) in actual for actual in labels)]
-    return f"版式契约：缺少必要行 {missing}" if missing else ""
+    if missing:
+        return f"版式契约：缺少必要行 {missing}"
+    forbidden = [
+        label for label in contract.get("forbidden_rows", [])
+        if any(compact(label) in actual for actual in labels)
+    ]
+    if forbidden:
+        return f"版式契约：出现禁止行 {forbidden}"
+    duplicates = sorted({
+        label for label in labels
+        if label and labels.count(label) > 1
+    })
+    if contract.get("unique_rows") and duplicates:
+        return f"版式契约：指标行重复 {duplicates}"
+    return ""
 
 
 def _title_pages(texts, pattern, required):
@@ -193,6 +258,28 @@ def locate_document(pdf_bytes, layout):
     import fitz
     with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
         return locate_from_texts([page.get_text() for page in pdf], layout)
+
+
+def make_document_hooks(layout, company, postprocess):
+    """Build company hooks while keeping each layout explicit and isolated."""
+
+    def locate_company_tables(pdf_bytes, table_configs=()):
+        return locate_document(pdf_bytes, layout)
+
+    def extract_company_tables(pdf_bytes, table_configs):
+        return extract_document(
+            pdf_bytes,
+            table_configs,
+            layout,
+            postprocess,
+            company,
+        )
+
+    return locate_company_tables, extract_company_tables
+
+
+def make_standard_document_hooks(company, postprocess):
+    return make_document_hooks(STANDARD_NON_LIFE_LAYOUT, company, postprocess)
 
 
 def _number_rows(lines, width):
@@ -644,7 +731,16 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
                         blocks.append({"page": page, "rows": [list(CAPITAL), *body], "unit": unit})
                         break
             if not blocks:
-                continue
+                # Keep the located target alive so a company postprocessor can
+                # rebuild text-only or cross-page layouts from the PDF. A table
+                # that remains header-only will fail its contract later.
+                blocks = [
+                    {
+                        "page": pages[0],
+                        "rows": [list(HEADERS[table_id])],
+                        "unit": unit,
+                    }
+                ]
             rows = [row for block in blocks for row in block["rows"]]
             tables.append(FlexibleTable(table_id=table_id, table_name=config["table_name"],
                          page=pages[0], source_pages=pages, rows=rows, table_blocks=blocks,
@@ -656,9 +752,28 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
             pages.extend(block["page"] for block in priority_blocks.get(table_id, []))
             if table_id in HEADERS and table_id != "THREE_YEAR_INVESTMENT_RETURN":
                 blank_evidence[table_id] = _confirmed_blank_cells(pdf, pages, table_id)
-    tables = list(postprocess(tables, pdf_bytes=pdf_bytes))
     from ._operating_table import complete_operating_tables
     tables = list(complete_operating_tables(tables, pdf_bytes=pdf_bytes, page_texts=texts))
+    # Company postprocessors run last so they can remove rows that the shared
+    # operating-table completion recovered from an adjacent section.
+    tables = list(postprocess(tables, pdf_bytes=pdf_bytes))
+    for table in tables:
+        if table.table_id != "NON_LIFE_OPERATING_METRICS":
+            continue
+        width = len(OPERATING)
+        for block in table.table_blocks:
+            fixed = []
+            for row in block.get("rows", []):
+                cells = [str(cell or "").strip() for cell in row]
+                if len(cells) < width:
+                    cells.extend([""] * (width - len(cells)))
+                fixed.append(cells[:width])
+            block["rows"] = fixed
+        table.rows = [
+            list(row)
+            for block in table.table_blocks
+            for row in block.get("rows", [])
+        ]
     if generic:
         by_id = {table.table_id: table for table in tables}
         for config in configs:

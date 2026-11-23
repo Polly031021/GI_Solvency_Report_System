@@ -30,7 +30,12 @@ def test_repository_rules_load_and_normalize_aliases() -> None:
     )
     assert resolved is not None
     assert resolved.canonical == "人保产险"
-    assert resolved.tables["NON_LIFE_OPERATING_METRICS"]["expected_pages"] == [20, 21, 22]
+    assert resolved.tables["NON_LIFE_OPERATING_METRICS"]["expected_pages"] == [
+        20,
+        21,
+        22,
+        23,
+    ]
 
     # 2025 文件名带“（偿付能力）”，文件名差异不影响封面路由。
     taibao = rules.resolve_rule(
@@ -200,6 +205,54 @@ def test_layout_contract_rejects_missing_previous_period_column() -> None:
     print("PASS 版式契约拒绝缺失上季度列的错表")
 
 
+def test_structure_version_overrides_layout_contract() -> None:
+    directory = _temp_dir()
+    _write_rule(
+        directory,
+        "年度契约",
+        """
+company:
+  canonical: 年度契约
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [指标名称, 本季度末数]
+      min_rows: 2
+tables:
+  SOLVENCY_MAIN:
+    expected_pages: [10]
+structure_versions:
+  - since: 2025
+    layout_contracts:
+      SOLVENCY_MAIN:
+        headers: [指标名称, 本季度末数, 上季度末数]
+        min_rows: 5
+        max_rows: 20
+        unique_rows: true
+""",
+    )
+    try:
+        old = rules.resolve_rule("年度契约", 2024, directory=directory)
+        new = rules.resolve_rule("年度契约", 2025, directory=directory)
+        assert old is not None and new is not None
+        assert old.layout_contracts["SOLVENCY_MAIN"]["headers"] == [
+            "指标名称",
+            "本季度末数",
+        ]
+        contract = new.layout_contracts["SOLVENCY_MAIN"]
+        assert contract["headers"] == [
+            "指标名称",
+            "本季度末数",
+            "上季度末数",
+        ]
+        assert contract["max_rows"] == 20
+        assert contract["unique_rows"] is True
+    finally:
+        for path in directory.glob("*"):
+            path.unlink(missing_ok=True)
+        directory.rmdir()
+    print("PASS structure_versions 可按年份覆盖版式契约")
+
+
 def test_repository_rules_cover_all_profile_tables() -> None:
     """三家公司必须覆盖 Profile 的全部目标表，不能只配经营表。"""
     from services.report_profiles import load_profile_workbook
@@ -331,6 +384,7 @@ if __name__ == "__main__":
     test_apply_rule_merges_profile_config_without_mutating()
     test_dadi_layout_contract_is_applied_to_profile_tables()
     test_layout_contract_rejects_missing_previous_period_column()
+    test_structure_version_overrides_layout_contract()
     test_repository_rules_cover_all_profile_tables()
     test_alias_table_id_matches_builtin_rule_key()
     test_unknown_table_id_raises()

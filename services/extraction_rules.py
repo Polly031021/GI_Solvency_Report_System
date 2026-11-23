@@ -67,6 +67,7 @@ class StructureVersion:
     since: int
     notes: str
     tables: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    layout_contracts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -238,10 +239,31 @@ def _parse_layout_contracts(
             raise ExtractionConfigError(
                 f"{source}.layout_contracts.{table_id}.min_rows 必须大于 0。"
             )
+        max_rows_raw = raw_contract.get("max_rows")
+        max_rows: int | None = None
+        if max_rows_raw is not None:
+            try:
+                max_rows = int(max_rows_raw)
+            except (TypeError, ValueError) as exc:
+                raise ExtractionConfigError(
+                    f"{source}.layout_contracts.{table_id}.max_rows 必须是整数。"
+                ) from exc
+            if max_rows < min_rows:
+                raise ExtractionConfigError(
+                    f"{source}.layout_contracts.{table_id}.max_rows 不能小于 min_rows。"
+                )
+        unique_rows = raw_contract.get("unique_rows", False)
+        if not isinstance(unique_rows, bool):
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.unique_rows 必须是布尔值。"
+            )
         contracts[table_id] = {
             "headers": list(_as_terms(raw_contract.get("headers"))),
             "required_rows": list(_as_terms(raw_contract.get("required_rows"))),
             "min_rows": min_rows,
+            "max_rows": max_rows,
+            "forbidden_rows": list(_as_terms(raw_contract.get("forbidden_rows"))),
+            "unique_rows": unique_rows,
         }
     return contracts
 
@@ -313,6 +335,11 @@ def _parse_rule(path: Path, known_tables: set[str]) -> CompanyRule:
                 notes=str(item.get("notes") or "").strip(),
                 tables=_parse_tables(
                     item.get("tables"),
+                    source=f"{path.name}（since {since}）",
+                    known_tables=known_tables,
+                ),
+                layout_contracts=_parse_layout_contracts(
+                    item.get("layout_contracts"),
                     source=f"{path.name}（since {since}）",
                     known_tables=known_tables,
                 ),
@@ -528,11 +555,19 @@ def resolve_rule(
     tables: dict[str, dict[str, Any]] = {
         table_id: dict(config) for table_id, config in matched.tables.items()
     }
+    contracts: dict[str, dict[str, Any]] = {
+        table_id: dict(config)
+        for table_id, config in matched.layout_contracts.items()
+    }
     if active_version is not None:
         for table_id, config in active_version.tables.items():
             merged = dict(tables.get(table_id) or {})
             merged.update(config)
             tables[table_id] = merged
+        for table_id, config in active_version.layout_contracts.items():
+            merged_contract = dict(contracts.get(table_id) or {})
+            merged_contract.update(config)
+            contracts[table_id] = merged_contract
 
     return ResolvedRule(
         canonical=matched.canonical,
@@ -544,7 +579,7 @@ def resolve_rule(
         tables=tables,
         warnings=tuple(warnings),
         extractor=matched.extractor,
-        layout_contracts=matched.layout_contracts,
+        layout_contracts=contracts,
     )
 
 

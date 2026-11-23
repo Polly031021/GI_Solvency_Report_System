@@ -25,6 +25,8 @@ company:
     NON_LIFE_OPERATING_METRICS:
       headers: [指标名称, 本季度数, 本年度累计数]
       min_rows: 20
+      max_rows: 31
+      unique_rows: true
       required_rows: [保险业务收入, 净利润, 综合成本率, 签单保费]
     ACTUAL_CAPITAL:
       headers: [指标名称, 期末数, 期初数]
@@ -58,12 +60,12 @@ tables:
     required_items: [保险业务收入, 净利润, 综合成本率]
 
   ACTUAL_CAPITAL:
-    expected_pages: [36, 37]
+    expected_pages: [31, 36, 37]
     tolerance: 2
     page_match: prefer
 
   MINIMUM_CAPITAL:
-    expected_pages: [42, 43]
+    expected_pages: [37, 38, 39, 42, 43]
     tolerance: 2
     page_match: prefer
 

@@ -363,3 +363,24 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
                 _rebuild_minimum(doc, table)
         _append_three_year(doc, updated)
         return updated
+
+
+from ._document import STANDARD_NON_LIFE_LAYOUT, make_document_hooks
+
+_SHENNENG_LAYOUT = dict(STANDARD_NON_LIFE_LAYOUT)
+_SHENNENG_LAYOUT["SOLVENCY_MAIN"] = {
+    "title": "主要(?:偿付能力)?指标",
+    "required": ["认可资产", "综合偿付能力充足率"],
+    "unit": "元",
+}
+_SHENNENG_LAYOUT["MINIMUM_CAPITAL"] = {
+    "title": "(?:S05[-—－]?最低资本表|[一二三四五六七八九十]+、最低资本)",
+    "required": ["量化风险最低资本"],
+    "continuation": 2,
+    "tail_terms": ["风险最低资本", "最低资本"],
+    "stop": "(?:保费风险最低资本表|巨灾风险最低资本表)",
+    "unit": "元",
+}
+locate_company_tables, extract_company_tables = make_document_hooks(
+    _SHENNENG_LAYOUT, "申能财险", postprocess
+)

@@ -86,3 +86,10 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         elif table_id == "THREE_YEAR_INVESTMENT_RETURN":
             _fix_three_year_unit(table)
     return tables
+
+
+from ._document import make_standard_document_hooks
+
+locate_company_tables, extract_company_tables = make_standard_document_hooks(
+    "紫金财产", postprocess
+)

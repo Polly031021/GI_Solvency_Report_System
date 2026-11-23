@@ -100,7 +100,7 @@ tables:
     end_item: []
 
   LIQUIDITY_MONITORING:
-    expected_pages: [17]
+    expected_pages: [16, 17]
     tolerance: 0
     page_match: prefer
     start_item: []

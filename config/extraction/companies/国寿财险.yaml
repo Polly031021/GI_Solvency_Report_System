@@ -25,6 +25,31 @@ company:
     竖排碎片、2023-2025 近三年收益率表（选帧会误选成经营表）、流动性表两块合并与
     LCR 四值拆分、剔除自测情景与口径不匹配的公司整体净现金流行。
   extractor: guoshou
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [指标名称, 本季度末数, 上季度末数, 下季度末预测数]
+      min_rows: 15
+      required_rows: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    NON_LIFE_OPERATING_METRICS:
+      headers: [指标名称, 本季度数, 本年度累计数]
+      min_rows: 20
+      required_rows: [保险业务收入, 净利润, 综合成本率, 签单保费]
+    ACTUAL_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 10
+      required_rows: [核心一级资本, 附属一级资本, 实际资本合计]
+    MINIMUM_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 30
+      required_rows: [量化风险最低资本, 非寿险业务保险风险, 最低资本]
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 8
+      required_rows: [LCR1未来3个月, LCR1未来12个月, 经营活动净现金流]
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
 tables:
   SOLVENCY_MAIN:
@@ -33,7 +58,7 @@ tables:
     page_match: prefer
 
   NON_LIFE_OPERATING_METRICS:
-    expected_pages: [21, 24]
+    expected_pages: [21, 24, 25, 26, 27]
     tolerance: 2
     page_match: prefer
     anchor_terms: [主要经营指标]
@@ -43,12 +68,12 @@ tables:
     end_item: [其他渠道签单保费, 其他渠道]
 
   ACTUAL_CAPITAL:
-    expected_pages: [29, 37]
+    expected_pages: [29, 34, 37]
     tolerance: 2
     page_match: prefer
 
   MINIMUM_CAPITAL:
-    expected_pages: [34, 43]
+    expected_pages: [34, 40, 41, 43]
     tolerance: 2
     page_match: prefer
     # 最低资本表从“1 量化风险最低资本”到“4 最低资本”共 33-34 行。

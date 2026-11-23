@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Sequence
 
 from . import register
@@ -32,12 +33,79 @@ _WANYUAN_TABLES = (
 )
 
 _UNKNOWN_UNITS = {"", "未识别", "none", "null", "-"}
+_MONITORING_LABELS = (
+    "经营活动净现金流",
+    "百元保费经营活动净现金流",
+    "特定业务现金流支出占比",
+    "规模保费同比增速",
+    "现金及流动性管理工具占比",
+    "季均融资杠杆比例",
+    "AA级（含）以下境内固定收益类资产占比",
+    "持股比例大于5%的上市股票投资占比",
+    "应收款项占比",
+    "持有关联方资产占比",
+)
+_NUMBER = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$")
+
+
+def _normalize_label(value: str) -> str:
+    return re.sub(r"[\s：:（）()]", "", str(value or ""))
+
+
+def _rebuild_monitoring_rows(table: Any, pdf_bytes: bytes) -> None:
+    import fitz
+
+    pages = [
+        int(page)
+        for page in (getattr(table, "source_pages", None) or [])
+        if int(page) > 0
+    ]
+    lines: list[str] = []
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
+        for page in pages or range(1, len(pdf) + 1):
+            text = pdf[page - 1].get_text() or ""
+            lines.extend(line.strip() for line in text.splitlines() if line.strip())
+    normalized = [_normalize_label(line) for line in lines]
+    rows: list[list[str]] = []
+    for label in _MONITORING_LABELS:
+        key = _normalize_label(label)
+        try:
+            start = next(i for i, line in enumerate(normalized) if key in line)
+        except StopIteration:
+            continue
+        values: list[str] = []
+        for raw in lines[start + 1:start + 10]:
+            value = raw.replace(" ", "").replace("\u3000", "")
+            if not _NUMBER.fullmatch(value):
+                continue
+            # A lone small integer immediately before percentage values is a
+            # page number/footnote marker, not a metric value.
+            if re.fullmatch(r"\d{1,2}", value):
+                later = lines[start + 1:start + 10]
+                offset = later.index(raw)
+                if any("%" in token for token in later[offset + 1:offset + 4]):
+                    continue
+            values.append(value)
+            if len(values) == 2:
+                break
+        if len(values) == 2:
+            rows.append([label, values[0], values[1]])
+    if len(rows) < 9:
+        return
+    header = ["指标名称", "本季度数", "上季度数"]
+    table.rows = [header, *rows]
+    table.table_blocks = [
+        {
+            "page": pages[0] if pages else int(getattr(table, "page", 1) or 1),
+            "rows": [header, *rows],
+        }
+    ]
+    table.strategy = "专属提取·众安·流动性监测文本重建"
 
 
 @register("zhongan")
 def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     """补齐实际资本/最低资本表的表级单位；异常由调用方兜底。"""
-    del pdf_bytes  # 单位写在页标题里，无需再解析 PDF
     for table in tables:
         table_id = str(getattr(table, "table_id", "") or "")
         if table_id not in _WANYUAN_TABLES:
@@ -46,6 +114,8 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         if unit.lower() in _UNKNOWN_UNITS:
             table.unit = "万元"
             table.unit_source = "万元"
+        if table_id == "LIQUIDITY_MONITORING" and len(table.rows or []) < 9:
+            _rebuild_monitoring_rows(table, pdf_bytes)
     return tables
 
 

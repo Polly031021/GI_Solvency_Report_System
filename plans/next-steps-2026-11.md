@@ -7,6 +7,7 @@
   - `plans/company-extraction-playbook.md`（方法论）
   - `plans/company-layout-contract-migration.md`（公司专属全链路迁移手册）
   - `plans/company-migration-template.md`（单家公司迁移记录模板）
+  - `plans/large-company-contract-validation.md`（22 家逐表逐年契约验收）
   - `plans/data-coverage-audit.md`（Data 盘点）
   - `plans/refactor-plan-track-and-rule-config.md`（早期计划，§9 已过时）
 
@@ -80,8 +81,18 @@
 - YAML `layout_contracts`
 - 契约失败整表阻断
 - 规则/extractor 指纹缓存失效
-- 大地 2022/2023 全链路样板
-- 大地 LCR1/LCR2/LCR3 × 3/12 个月专属解析
+- 前十大 + 12 家大型公司共 22 家接入公司专属 hooks
+- 22 家六表契约与逐表逐年合同审计工具
+- STEP3 批量入口复用公司专属定位/提取
+- 预期表集合对账，静默少表不再判成功
+- 契约支持 `max_rows`、`forbidden_rows`、`unique_rows` 和年度覆盖
+
+当前结论：
+
+- 22 家文字层可提取目标表通过当前契约矩阵。
+- 3 个公司/年份无 PDF 样例：大家 2022、申能 2022–2023。
+- 诚泰 2022 有 4 张纯图片表尚未文本验收。
+- 契约通过不等于数值核对完成；STEP4/STEP7 仍需继续回归。
 
 第一批迁移：
 

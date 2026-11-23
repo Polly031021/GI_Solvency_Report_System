@@ -17,8 +17,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from services.batch_processor import build_context_from_profile  # noqa: E402
+from services.batch_processor import (  # noqa: E402
+    build_context_from_profile,
+    process_one_pdf_bytes,
+)
 from services.batch_workflow import (  # noqa: E402
+    BatchExtractionOutcome,
     document_pdf_bytes,
     extract_document_tables,
     merge_standard_frames,
@@ -36,6 +40,7 @@ from services.solvency_step3_standardizer import batch_result_workbook_bytes  # 
 from services.solvency_normalizer import STANDARD_COLUMNS  # noqa: E402
 from services.solvency_rule_table_extractor import MODE_RULE, MODE_VISION  # noqa: E402
 import services.batch_workflow as batch_workflow  # noqa: E402
+import services.batch_processor as batch_processor  # noqa: E402
 from ui.cache import read_profile_registry, profile_registry_token  # noqa: E402
 from ui.batch_workspace import batch_status_frame, failed_batch_companies  # noqa: E402
 from tests.test_new_workflow_behavior import build_three_table_pdf  # noqa: E402
@@ -264,6 +269,140 @@ def test_cached_text_context_skips_repeated_pdf_extraction() -> None:
     assert metadata["页数"] == len(context.page_texts)
     assert profile.total_pages == len(context.fitz_page_texts)
     print("PASS PDF 页文本上下文可复用，不再重复全文扫描")
+
+
+def test_company_specific_expected_table_cannot_disappear_silently() -> None:
+    matches = [
+        PageMatch(
+            table_id="SOLVENCY_MAIN",
+            table_name="偿付能力主表",
+            pages=[10],
+            score=100.0,
+            evidence="company",
+            review_required=False,
+            review_reason="",
+            sources={},
+            strategy_id=None,
+            table_config={},
+            confidence=100,
+            confidence_basis="company",
+        ),
+        PageMatch(
+            table_id="MINIMUM_CAPITAL",
+            table_name="最低资本表",
+            pages=[30, 31],
+            score=100.0,
+            evidence="company",
+            review_required=False,
+            review_reason="",
+            sources={},
+            strategy_id=None,
+            table_config={},
+            confidence=100,
+            confidence_basis="company",
+        ),
+    ]
+    outcome = BatchExtractionOutcome(
+        tables=[SimpleNamespace(table_id="SOLVENCY_MAIN")],
+        logs=[
+            {
+                "目标表": "偿付能力主表",
+                "状态": "成功",
+                "说明": "ok",
+            }
+        ],
+    )
+    missing = batch_workflow._reconcile_company_table_set(outcome, matches)
+    assert missing == ["MINIMUM_CAPITAL"]
+    assert outcome.logs[-1]["状态"] == "失败"
+    assert "未返回预期目标表" in outcome.logs[-1]["说明"]
+
+    disclosed = BatchExtractionOutcome(
+        tables=[SimpleNamespace(table_id="SOLVENCY_MAIN")],
+        logs=[
+            {
+                "目标表": "最低资本表",
+                "状态": "未披露",
+                "说明": "原文无此表",
+            }
+        ],
+    )
+    assert batch_workflow._reconcile_company_table_set(disclosed, matches) == []
+    assert len(disclosed.logs) == 1
+    print("PASS 公司专属提取静默少表会失败，明确未披露不重复报错")
+
+
+def test_step3_batch_uses_company_document_pipeline() -> None:
+    pdf = build_three_table_pdf()
+    profile = read_profile_registry(profile_registry_token())[
+        "NON_LIFE_SOLVENCY"
+    ]
+    batch_context = build_context_from_profile(
+        profile,
+        api_key="",
+        base_url="",
+        model="",
+        use_vision=False,
+    )
+    from services.extraction_rules import resolve_rule
+
+    resolved = resolve_rule(
+        "平安产险",
+        2025,
+        profile_id=profile.profile_id,
+    )
+    assert resolved is not None
+    outcome = BatchExtractionOutcome(
+        tables=[SimpleNamespace(table_id="SOLVENCY_MAIN")],
+        logs=[
+            {
+                "目标表": "偿付能力充足率指标",
+                "状态": "成功",
+                "说明": "ok",
+            }
+        ],
+        status="成功",
+        note="公司专属提取 1 张表，未调用通用表格提取。",
+    )
+    standardized = {
+        "状态": "成功",
+        "data": pd.DataFrame([{"指标编码": "RECOGNIZED_ASSETS"}]),
+        "workbook_bytes": b"company-workbook",
+        "说明": "标准窄表 1 条。",
+    }
+
+    with (
+        patch.object(batch_processor, "resolve_rule", return_value=resolved),
+        patch(
+            "services.batch_processor.locate_tables_hybrid",
+            side_effect=AssertionError("STEP3 must not call generic locator"),
+        ),
+        patch(
+            "services.company_extractors.get_company_document_hooks",
+            return_value=(lambda *_args: {"SOLVENCY_MAIN": [1]}, object()),
+        ),
+        patch.object(
+            batch_workflow,
+            "extract_document_tables",
+            return_value=outcome,
+        ),
+        patch.object(
+            batch_workflow,
+            "standardize_document_tables",
+            return_value=standardized,
+        ),
+    ):
+        result = process_one_pdf_bytes(
+            "平安产险",
+            pdf,
+            batch_context,
+        )
+
+    assert result["状态"] == "成功"
+    assert result["提取表数"] == 1
+    assert result["窄表记录数"] == 1
+    assert result["workbook_bytes"] == b"company-workbook"
+    print("PASS STEP3 批量入口复用公司专属定位与整份 PDF 提取")
 
 
 def test_batch_standardization_skips_individual_workbook() -> None:
@@ -512,6 +651,8 @@ if __name__ == "__main__":
     test_locate_success_without_pages_is_reported_as_failed()
     test_batch_rule_extraction_and_standardization()
     test_cached_text_context_skips_repeated_pdf_extraction()
+    test_company_specific_expected_table_cannot_disappear_silently()
+    test_step3_batch_uses_company_document_pipeline()
     test_batch_standardization_skips_individual_workbook()
     test_merged_workbook_has_exactly_one_sheet()
     test_batch_workbook_uses_the_single_flow_format()

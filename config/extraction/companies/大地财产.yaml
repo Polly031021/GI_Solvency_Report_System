@@ -73,6 +73,12 @@ company:
         - LCR2未来12个月
         - LCR3未来3个月
         - LCR3未来12个月
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows:
+        - 近三年平均投资收益率
+        - 近三年平均综合投资收益率
 
 tables:
   SOLVENCY_MAIN:
@@ -116,7 +122,7 @@ tables:
     required_items: [量化风险最低资本, 控制风险最低资本, 最低资本]
 
   LIQUIDITY_MONITORING:
-    expected_pages: [19, 21, 22, 23]
+    expected_pages: [18, 19, 21, 22, 23]
     tolerance: 0
     page_match: strict
     anchor_terms: [流动性风险监管指标, 流动性风险监测指标]

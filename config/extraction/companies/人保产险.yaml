@@ -56,21 +56,21 @@ tables:
     required_items: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
 
   NON_LIFE_OPERATING_METRICS:
-    expected_pages: [20, 21, 22]
+    expected_pages: [20, 21, 22, 23]
     tolerance: 0
     page_match: prefer
     anchor_terms: [主要经营指标]
     required_items: [保险业务收入, 净利润, 综合成本率]
 
   ACTUAL_CAPITAL:
-    expected_pages: [34, 35]
+    expected_pages: [34, 35, 36]
     tolerance: 0
     page_match: prefer
     anchor_terms: [实际资本表]
     required_items: [核心一级资本, 附属一级资本, 实际资本合计]
 
   MINIMUM_CAPITAL:
-    expected_pages: [40, 41, 42, 43]
+    expected_pages: [40, 41, 42, 43, 44]
     tolerance: 0
     page_match: prefer
     anchor_terms: [最低资本表]

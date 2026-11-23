@@ -607,3 +607,10 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
             _rebuild_three_year(doc, by_id["THREE_YEAR_INVESTMENT_RETURN"])
         _append_three_year(doc, updated)
         return updated
+
+
+from ._document import make_standard_document_hooks
+
+locate_company_tables, extract_company_tables = make_standard_document_hooks(
+    "泰康在线", postprocess
+)

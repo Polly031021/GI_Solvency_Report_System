@@ -529,3 +529,32 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         if "THREE_YEAR_INVESTMENT_RETURN" not in seen:
             _append_three_year(doc, updated)
         return updated
+
+
+from ._document import STANDARD_NON_LIFE_LAYOUT, make_document_hooks
+
+_HUATAI_LAYOUT = dict(STANDARD_NON_LIFE_LAYOUT)
+_HUATAI_LAYOUT["SOLVENCY_MAIN"] = {
+    "title": "公司主要指标",
+    "required": ["主要偿付能力指标", "认可资产"],
+    "unit": "万元",
+}
+_HUATAI_LAYOUT["NON_LIFE_OPERATING_METRICS"] = {
+    "title": "(?:财产保险公司)?(?:主要)?经营指标",
+    "required": [],
+    "continuation": 2,
+    "tail_terms": ["签单保费", "综合成本率", "车险车均保费"],
+    "stop": "(?:流动性风险|近三年|实际资本表)",
+    "unit": "万元",
+}
+_HUATAI_LAYOUT["LIQUIDITY_MONITORING"] = {
+    "title": "(?:主要)?流动性风险(?:监管|监测)指标",
+    "required": [],
+    "continuation": 1,
+    "tail_terms": ["LCR", "经营活动净现金流", "融资杠杆"],
+    "stop": "(?:主要经营指标|近三年|实际资本表)",
+    "unit": "%",
+}
+locate_company_tables, extract_company_tables = make_document_hooks(
+    _HUATAI_LAYOUT, "华泰财险", postprocess
+)

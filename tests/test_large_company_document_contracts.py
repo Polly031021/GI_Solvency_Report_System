@@ -1,0 +1,42 @@
+"""Structural checks for the top-ten plus large-company migration scope."""
+
+from pathlib import Path
+
+from services.company_extractors import get_company_document_hooks
+from services.extraction_rules import resolve_rule
+from tools.large_company_contract_audit import scope_companies
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_all_large_companies_have_document_hooks_and_six_contracts() -> None:
+    companies = scope_companies(
+        ROOT / "财险公司列表.xlsx",
+        {"前十大", "大型公司"},
+    )
+    assert len(companies) == 22
+    missing_hooks: list[str] = []
+    missing_contracts: list[str] = []
+    for company in companies:
+        rule = resolve_rule(company, 2025, profile_id="NON_LIFE_SOLVENCY")
+        assert rule is not None, company
+        locator, extractor = get_company_document_hooks(rule.extractor)
+        if not callable(locator) or not callable(extractor):
+            missing_hooks.append(rule.canonical)
+        if set(rule.layout_contracts) != {
+            "SOLVENCY_MAIN",
+            "NON_LIFE_OPERATING_METRICS",
+            "ACTUAL_CAPITAL",
+            "MINIMUM_CAPITAL",
+            "LIQUIDITY_MONITORING",
+            "THREE_YEAR_INVESTMENT_RETURN",
+        }:
+            missing_contracts.append(rule.canonical)
+    assert not missing_hooks, missing_hooks
+    assert not missing_contracts, missing_contracts
+    print("PASS 22 家大型公司均有公司专属 hooks 与六表契约")
+
+
+if __name__ == "__main__":
+    test_all_large_companies_have_document_hooks_and_six_contracts()

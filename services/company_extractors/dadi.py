@@ -210,6 +210,9 @@ def _contract_failure(table: Any, rows: list[list[str]]) -> str:
         return "版式契约：数据列数与表头不一致"
     if len(rows) < min_rows:
         return f"版式契约：仅 {len(rows)} 行，少于最低要求 {min_rows} 行"
+    max_rows = contract.get("max_rows")
+    if max_rows is not None and len(rows) > int(max_rows):
+        return f"版式契约：{len(rows)} 行，超过上限 {max_rows} 行"
     required_rows = contract_values(contract.get("required_rows"))
     flattened_rows = {_clean("".join(row)) for row in rows[1:]}
     missing_rows = [
@@ -218,6 +221,21 @@ def _contract_failure(table: Any, rows: list[list[str]]) -> str:
     ]
     if missing_rows:
         return f"版式契约：缺少必要行 {missing_rows}"
+    forbidden_rows = contract_values(contract.get("forbidden_rows"))
+    forbidden = [
+        label for label in forbidden_rows
+        if any(label in row for row in flattened_rows)
+    ]
+    if forbidden:
+        return f"版式契约：出现禁止行 {forbidden}"
+    if contract.get("unique_rows"):
+        labels = [_clean(row[0]) for row in rows[1:] if row]
+        duplicates = sorted({
+            label for label in labels
+            if label and labels.count(label) > 1
+        })
+        if duplicates:
+            return f"版式契约：指标行重复 {duplicates}"
     return ""
 
 

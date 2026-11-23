@@ -458,3 +458,10 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     finally:
         doc.close()
     return tables
+
+
+from ._document import make_standard_document_hooks
+
+locate_company_tables, extract_company_tables = make_standard_document_hooks(
+    "永安财险", postprocess
+)

@@ -434,3 +434,10 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
         _append_minimum(doc, updated)
         _append_three_year(doc, updated)
     return updated
+
+
+from ._document import make_standard_document_hooks
+
+locate_company_tables, extract_company_tables = make_standard_document_hooks(
+    "华安财险", postprocess
+)

@@ -625,3 +625,19 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
             table.note = payload["note"]
             table.strategy = "专属提取·诚泰·按线框表重建"
     return tables
+
+
+from ._document import STANDARD_NON_LIFE_LAYOUT, make_document_hooks
+
+_CHENGTAI_LAYOUT = dict(STANDARD_NON_LIFE_LAYOUT)
+_CHENGTAI_LAYOUT["LIQUIDITY_MONITORING"] = {
+    "title": "流动性风险监测指标",
+    "required": [],
+    "continuation": 2,
+    "tail_terms": ["监测指标", "持有关联方资产", "应收款项占比"],
+    "stop": "(?!)",
+    "unit": "万元",
+}
+locate_company_tables, extract_company_tables = make_document_hooks(
+    _CHENGTAI_LAYOUT, "诚泰财产", postprocess
+)

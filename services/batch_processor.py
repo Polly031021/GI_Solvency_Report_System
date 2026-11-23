@@ -434,6 +434,38 @@ def _auto_vision_for_scanned(
         return [], f"扫描版视觉定位未得到结果：{message or '无候选'}"
     return list(matches), f"扫描版自动转视觉大模型识别（{len(matches)} 张表）"
 
+
+def _apply_page_overrides(
+    matches: list[PageMatch],
+    page_overrides: dict[str, list[int]] | None,
+) -> list[PageMatch]:
+    if not page_overrides:
+        return matches
+    updated: list[PageMatch] = []
+    for match in matches:
+        pages = page_overrides.get(match.table_name)
+        if pages is None:
+            updated.append(match)
+            continue
+        updated.append(
+            PageMatch(
+                table_id=match.table_id,
+                table_name=match.table_name,
+                pages=list(pages),
+                score=match.score,
+                evidence="人工确认",
+                review_required=False,
+                review_reason="",
+                sources=match.sources,
+                strategy_id=match.strategy_id,
+                table_config=match.table_config,
+                confidence=match.confidence,
+                confidence_basis="人工确认页码",
+            )
+        )
+    return updated
+
+
 def process_one_pdf_bytes(
     company_name: str,
     pdf_bytes: bytes,
@@ -476,6 +508,86 @@ def process_one_pdf_bytes(
                 ),
             }
             result["规则"] = resolved_rule.label
+
+        # 已验证公司必须从 STEP1 到 STEP3 使用同一条专属链路。
+        # STEP3 过去在这里重新走通用定位/页级抽表，导致同一 PDF 在
+        # STEP2 与批量 STEP3 得到不同表结构。
+        from .company_extractors import get_company_document_hooks
+
+        company_document_extractor = None
+        if resolved_rule is not None and resolved_rule.extractor:
+            _company_locator, company_document_extractor = (
+                get_company_document_hooks(resolved_rule.extractor)
+            )
+        if company_document_extractor is not None:
+            from .batch_workflow import (
+                extract_document_tables,
+                standardize_document_tables,
+            )
+
+            located_result = locate_one_pdf_bytes(
+                company_name,
+                pdf_bytes,
+                ctx,
+                mode=extraction_method,
+                text_context=text_context,
+            )
+            matches = _apply_page_overrides(
+                list(located_result.get("matches") or []),
+                page_overrides,
+            )
+            located = [match for match in matches if match.pages]
+            result["定位表数"] = len(located)
+            if not located:
+                result["状态"] = "失败"
+                result["说明"] = (
+                    str(located_result.get("说明") or "")
+                    + "公司专属定位未得到任何目标表。"
+                )
+                return result
+
+            outcome = extract_document_tables(
+                company=company_name,
+                pdf_bytes=pdf_bytes,
+                matches=matches,
+                method=extraction_method,
+                allow_llm_fallback=allow_llm_fallback,
+                whole_page=whole_page,
+                api_key=ctx.api_key,
+                base_url=ctx.base_url,
+                model=ctx.model,
+                text_context=text_context,
+                metadata=located_result.get("metadata"),
+                profile_id=ctx.profile.profile_id,
+            )
+            standardized = standardize_document_tables(
+                company=company_name,
+                pdf_name=f"{company_name}.pdf",
+                pdf_bytes=pdf_bytes,
+                tables=outcome.tables,
+                context=ctx,
+                metadata=located_result.get("metadata"),
+                text_context=text_context,
+                extraction_traces=outcome.traces,
+                build_workbook=True,
+            )
+            result["提取表数"] = len(outcome.tables)
+            standard_data = standardized.get("data")
+            result["窄表记录数"] = (
+                len(standard_data) if standard_data is not None else 0
+            )
+            result["workbook_bytes"] = standardized.get("workbook_bytes") or b""
+            result["说明"] = (
+                f"{outcome.note} {standardized.get('说明', '')}"
+            ).strip()
+            if outcome.status == "失败" or standardized.get("状态") == "失败":
+                result["状态"] = "失败"
+            elif outcome.status == "部分成功" or standardized.get("状态") == "异常":
+                result["状态"] = "部分成功"
+            else:
+                result["状态"] = "成功"
+            return result
+
         matches, _locate_message = locate_tables_hybrid(
             pdf_bytes,
             feature_config,
@@ -496,31 +608,8 @@ def process_one_pdf_bytes(
                 result["说明"] = _vision_note
             elif _vision_note:
                 result["说明"] = _vision_note
-        # ★ 新增：用外部传入的页码覆盖自动定位结果（批量两阶段流程）
-        if page_overrides:
-            _new_matches = []
-            for _m in matches:
-                _ovr = page_overrides.get(_m.table_name)
-                if _ovr is not None:
-                    _new_matches.append(PageMatch(
-                        table_id=_m.table_id,
-                        table_name=_m.table_name,
-                        pages=list(_ovr),
-                        score=_m.score,
-                        evidence="人工确认",
-                        review_required=False,
-                        review_reason="",
-                        sources=_m.sources,
-                        strategy_id=_m.strategy_id,
-                        table_config=_m.table_config,
-                        # 人工确认页码是最高优先级证据，保留自动定位的
-                        # 原始置信度供结果表展示，依据注明为人工确认。
-                        confidence=_m.confidence,
-                        confidence_basis="人工确认页码",
-                    ))
-                else:
-                    _new_matches.append(_m)
-            matches = _new_matches
+        # 用外部传入的页码覆盖自动定位结果（批量两阶段流程）。
+        matches = _apply_page_overrides(list(matches), page_overrides)
         located = [m for m in matches if m.pages]
         result["定位表数"] = len(located)
         conflicts = [m for m in matches if m.review_required]

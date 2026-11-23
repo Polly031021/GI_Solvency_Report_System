@@ -129,6 +129,26 @@ def _oper_stop(line: str) -> bool:
     )
 
 
+_LIQUIDITY_ONLY_TERMS = (
+    "经营活动净现金流",
+    "百元保费经营活动净现金流",
+    "特定业务现金流支出占比",
+    "现金及流动性管理工具占比",
+    "季均融资杠杆比例",
+    "AA级（含）以下境内固定收益类资产占比",
+    "持股比例大于5%的上市股票投资占比",
+    "应收款项占比",
+    "持有关联方资产占比",
+)
+
+
+def _is_liquidity_only_operating_row(row: Sequence[str]) -> bool:
+    if not row:
+        return False
+    label = str(row[0] or "").replace(" ", "").replace("\u3000", "")
+    return any(term in label for term in _LIQUIDITY_ONLY_TERMS)
+
+
 def _parse_oper_page(lines: Sequence[str], *, has_header: bool) -> tuple[list[list[str]], bool]:
     start = 0
     if has_header:
@@ -180,6 +200,10 @@ def _rebuild_operating(doc: Any, table: Any) -> None:
     for index, page in enumerate(ordered):
         lines = _page_lines(doc, page)
         rows, stopped = _parse_oper_page(lines, has_header=(index == 0))
+        rows = [
+            row for row in rows
+            if not _is_liquidity_only_operating_row(row)
+        ]
         if not rows:
             continue
         if index == 0:
