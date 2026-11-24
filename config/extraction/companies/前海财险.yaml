@@ -69,6 +69,15 @@ tables:
     # 该表 3 个分块：量化风险/控制风险/附加资本、分险类保费与准备金、巨灾。
     required_items: [量化风险最低资本, 控制风险最低资本]
 
+  THREE_YEAR_INVESTMENT_RETURN:
+    expected_pages: []
+    tolerance: 0
+    page_match: strict
+    required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    notes: >-
+      原文没有独立的近三年平均投资收益率目标表；由公司专属定位显式返回空页，
+      提取日志记录为“未披露”，不从其他指标或汇总数据补造。
+
   LIQUIDITY_MONITORING:
     expected_pages: [11, 12]
     tolerance: 2
@@ -209,12 +218,12 @@ structure_versions:
         unit: 元
         required_items: [保险业务收入, 净利润, 综合投资收益率]
       ACTUAL_CAPITAL:
-        expected_pages: [12]
+        expected_pages: [25]
         tolerance: 2
         page_match: prefer
         anchor_terms: [实际资本明细表, 实际资本]
         unit: 元
-        required_items: [认可资产, 认可负债, 实际资本]
+        required_items: [核心一级资本, 实际资本合计]
       MINIMUM_CAPITAL:
         expected_pages: [29]
         tolerance: 2

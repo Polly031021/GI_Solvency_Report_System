@@ -3,7 +3,7 @@
 # 页码依据：2022-2025 四份四季度报告实测（物理页，容差 ±2，page_match=prefer）
 #   SOLVENCY_MAIN                 2022=10  2023=11  2024=12  2025=11
 #   NON_LIFE_OPERATING_METRICS    2022=12-13  2023=13  2024=14  2025=13-14
-#   ACTUAL_CAPITAL                2022=17-18  2023=21  2024=12  2025=21-22
+#   ACTUAL_CAPITAL                2022=17-18  2023=21  2024=21-22  2025=21-22
 #   MINIMUM_CAPITAL               2022=20  2023=25-26  2024=26  2025=26
 #   THREE_YEAR_INVESTMENT_RETURN  2022 无（全册无“近三年”字样） 2023=13  2024=14  2025=13
 #   LIQUIDITY_MONITORING          2022=11-12  2023=12  2024=13  2025=12-13
@@ -14,8 +14,8 @@
 #   2) 实际资本与最低资本两张明细表在正文中没有“S02/S05/实际资本表”字样（全文检索 0 命中），
 #      只能靠表头列（项目/本季度/上季度/下季度预测数）与行项（核心一级资本、巨灾风险）识别；
 #      因此 ACTUAL_CAPITAL / MINIMUM_CAPITAL 一律不写 anchor_terms，靠页码窗口 + required_items 判定。
-#   3) 2024 年 ACTUAL_CAPITAL 命中第 12 页的主表（内容与 SOLVENCY_MAIN 完全重复），
-#      原文该年未单独出现“实际资本”明细标题；保留窗口中转由人工复核，见 plans 文档遗留项。
+#   3) 2024 年 ACTUAL_CAPITAL 明细在第 21-22 页；第 12 页只是偿付能力主表，
+#      不能作为 S02 实际资本明细。
 #   4) MINIMUM_CAPITAL 表在 2023-2025 年为跨页三块（巨灾/市场/信用），表头在每块首行重复，
 #      通用规则按“第 N 页表格分块”切块，属正常跨页，不是版式损坏。
 #   5) 单位：四份报告表体均为“元”（不是万元），ratio 行为百分号字符串，由标准化层换算。
@@ -23,13 +23,13 @@
 company:
   canonical: 史带财险
   extractor: shidai
-  aliases: [史带财产保险股份有限公司, 史带财产保险]
+  aliases: [史带财产保险股份有限公司, 史带财产保险, 史带财产]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
   notes: >-
     四年版式同源，页码逐年漂移 1-2 页，用 structure_versions 按年钉死起始窗口。
     2022 年报无“近三年平均投资收益率”表（收益类指标只到当年），属原文缺失，不造数。
-    2024 年实际资本明细表与主表同页同内容（通用规则选择结果），待人工确认原文是否另有 S02。
+    2024 年实际资本明细表位于第 21-22 页，与主表分开。
 
 tables:
   SOLVENCY_MAIN:
@@ -84,6 +84,11 @@ structure_versions:
   - since: 2022
     until: 2022
     notes: 2022 年报 20 页，主表 10 页；无近三年投资收益率表
+    layout_contracts:
+      SOLVENCY_MAIN:
+        headers: [项目, 本季度末数, 上季度末数]
+        min_rows: 5
+        required_rows: [核心偿付能力溢额, 核心偿付能力充足率, 综合偿付能力溢额, 综合偿付能力充足率]
     tables:
       SOLVENCY_MAIN:
         expected_pages: [10]
@@ -117,14 +122,14 @@ structure_versions:
 
   - since: 2024
     until: 2024
-    notes: 2024 年报 26 页，主表 12 页；实际资本明细与主表同页（见遗留项）
+    notes: 2024 年报 26 页，主表 12 页；实际资本明细跨 21-22 页
     tables:
       SOLVENCY_MAIN:
         expected_pages: [12]
       NON_LIFE_OPERATING_METRICS:
         expected_pages: [14]
       ACTUAL_CAPITAL:
-        expected_pages: [12]
+        expected_pages: [21, 22]
       MINIMUM_CAPITAL:
         expected_pages: [26]
       THREE_YEAR_INVESTMENT_RETURN:

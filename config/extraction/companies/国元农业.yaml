@@ -28,6 +28,25 @@ company:
     农险公司，2022 年执行旧准则且缺“近三年（综合）投资收益率”表；2023 年起新准则。
     主要经营指标表中的“保险业务收入/净利润”为单季度口径，全年累计需另取 S01/年报，
     四年均如此，非提取错误。
+  layout_contracts:
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 11
+      required_rows:
+        - 经营活动净现金流
+        - 百元保费经营活动净现金流
+        - 特定业务现金流支出占比
+        - 规模保费同比增速
+        - 现金及流动性管理工具占比
+        - 季均融资杠杆比例
+        - AA级（含）以下境内固定收益类资产占比
+        - 持股比例大于5%的上市股票投资占比
+        - 应收款项占比
+        - 持有关联方资产占比
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
 tables:
   SOLVENCY_MAIN:
@@ -79,13 +98,16 @@ tables:
 
 structure_versions:
   - since: 2022
-    notes: 旧准则；无近三年投资收益率表；最低资本表 37/38 跨页无续页表头；流动性表在 19 页起
+    notes: 旧准则；无近三年投资收益率表；最低资本表 37/38 跨页无续页表头；流动性表在 12-13 页
     tables:
       SOLVENCY_MAIN: {expected_pages: [12], tolerance: 2, page_match: prefer}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [14], tolerance: 2, page_match: prefer}
       ACTUAL_CAPITAL: {expected_pages: [30], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [37, 38], tolerance: 2, page_match: prefer}
-      LIQUIDITY_MONITORING: {expected_pages: [19, 20], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN:
+        not_disclosed: true
+        notes: 原文没有近三年（综合）投资收益率表；第 14 页仅为本季度和本年度累计投资收益率
+      LIQUIDITY_MONITORING: {expected_pages: [12, 13], tolerance: 0, page_match: prefer}
 
   - since: 2023
     notes: 新准则首年；近三年收益率表与经营表同页（14）；最低资本表单页 32

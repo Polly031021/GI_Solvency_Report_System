@@ -31,11 +31,16 @@ company:
   aliases: [比亚迪财产保险有限公司, 比亚迪财险, 深圳比亚迪财产保险有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [指标名称, 本季度数, 上季度可比数, 基本情景下的下季度预测数]
+      min_rows: 19
+      required_rows: [实际资本, 最低资本, 综合偿付能力充足率]
   notes: >-
     2023 年起才有报告（原易安财险重组），无 2022 年可比期；三份均为季报版式，
     页数 27/42/47 逐年变化，用 structure_versions 维护页码，不按年写死到 tables。
-    SOLVENCY_MAIN 的认可资产/实际资本/核心偿付能力溢额三行存在标签与金额粘连，
-    标准化结果若缺值属 PDF 文本层缺陷，见 plans/company-比亚迪保险-extraction.md。
+    SOLVENCY_MAIN 由公司专属 extractor 按表格坐标重建；2024 年跨行金额会先去除
+    单元格内换行再输出，空白与短横占位符保持原文语义。
 
 tables:
   SOLVENCY_MAIN:

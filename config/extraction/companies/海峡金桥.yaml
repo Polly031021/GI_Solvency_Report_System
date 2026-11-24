@@ -85,3 +85,41 @@ tables:
     # 管理层讨论段的监管指标表共 8 行；同段还有“监测指标”表在主要指标章，
     # 不在本表定位范围内。extractor 剔除同页鉴证表并规范 LCR 标签。
     end_item: [公司净现金流, 公司净现金流（元）]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年物理页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [11], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [21], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [26, 27], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [], tolerance: 1, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [19, 20], tolerance: 2, page_match: prefer}
+  - since: 2023
+    notes: 2023 年物理页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9, 10], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [11], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [21], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [26, 27], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12], tolerance: 1, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [19, 20], tolerance: 2, page_match: prefer}
+  - since: 2024
+    notes: 2024 年物理页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [9, 10], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [10, 11], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [22], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [27, 28], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11], tolerance: 1, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [20], tolerance: 2, page_match: prefer}
+  - since: 2025
+    notes: 2025 年物理页
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [10], tolerance: 2, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [11, 12], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [27], tolerance: 2, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [32, 33], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12], tolerance: 1, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [25], tolerance: 2, page_match: prefer}

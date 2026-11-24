@@ -50,6 +50,7 @@ _DIRECT_FIELDS = {
     "notes",
     "columns",
     "defer_completeness_to_extractor",
+    "not_disclosed",
     # 续页相关：不止一次出现“YAML 里写了却不生效”，这里补进白名单。
     "include_continuation",
     "max_pages",
@@ -204,6 +205,12 @@ def _parse_tables(
                 f"{source} 的 {table_id}.page_match 非法：{mode}"
             )
         config["page_match"] = mode
+        not_disclosed = config.get("not_disclosed", False)
+        if not isinstance(not_disclosed, bool):
+            raise ExtractionConfigError(
+                f"{source} 的 {table_id}.not_disclosed 必须是布尔值。"
+            )
+        config["not_disclosed"] = not_disclosed
         tables[table_id] = config
     return tables
 
@@ -257,6 +264,31 @@ def _parse_layout_contracts(
             raise ExtractionConfigError(
                 f"{source}.layout_contracts.{table_id}.unique_rows 必须是布尔值。"
             )
+        allow_mixed_widths = raw_contract.get("allow_mixed_widths", False)
+        if not isinstance(allow_mixed_widths, bool):
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.allow_mixed_widths 必须是布尔值。"
+            )
+        raw_header_aliases = raw_contract.get("header_aliases") or {}
+        if not isinstance(raw_header_aliases, Mapping):
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.header_aliases 必须是映射。"
+            )
+        header_aliases = {
+            str(header).strip(): list(_as_terms(aliases))
+            for header, aliases in raw_header_aliases.items()
+            if str(header).strip()
+        }
+        raw_variants = raw_contract.get("header_variants") or []
+        if not isinstance(raw_variants, (list, tuple)):
+            raise ExtractionConfigError(
+                f"{source}.layout_contracts.{table_id}.header_variants 必须是列表。"
+            )
+        header_variants = [
+            list(_as_terms(variant))
+            for variant in raw_variants
+            if isinstance(variant, (list, tuple))
+        ]
         contracts[table_id] = {
             "headers": list(_as_terms(raw_contract.get("headers"))),
             "required_rows": list(_as_terms(raw_contract.get("required_rows"))),
@@ -264,6 +296,9 @@ def _parse_layout_contracts(
             "max_rows": max_rows,
             "forbidden_rows": list(_as_terms(raw_contract.get("forbidden_rows"))),
             "unique_rows": unique_rows,
+            "allow_mixed_widths": allow_mixed_widths,
+            "header_aliases": header_aliases,
+            "header_variants": header_variants,
         }
     return contracts
 

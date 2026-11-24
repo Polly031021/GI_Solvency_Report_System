@@ -33,6 +33,23 @@ _MAIN_HEADER = [
 ]
 _START_LABEL = "认可资产"
 _STOP_LABEL = "综合偿付能力充足率"
+_MAIN_LABELS = (
+    "认可资产",
+    "认可负债",
+    "实际资本",
+    "核心一级资本",
+    "核心二级资本",
+    "附属一级资本",
+    "附属二级资本",
+    "可资本化风险最低资本",
+    "控制风险最低资本",
+    "附加资本",
+    "最低资本",
+    "核心偿付能力溢额",
+    "综合偿付能力溢额",
+    "核心偿付能力充足率",
+    "综合偿付能力充足率",
+)
 
 
 def _cell(value: Any) -> str:
@@ -83,24 +100,65 @@ def _merge_fragments(label: str, fragments: list[str]) -> list[str]:
 
 
 @register("changjiang")
-def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:  # noqa: ARG001
-    """只重排偿付能力主表。"""
-    for table in tables:
-        if str(getattr(table, "table_id", "") or "") != "SOLVENCY_MAIN":
-            continue
-        rows = getattr(table, "rows", None) or []
-        rebuilt = _rebuild_main(rows)
-        if rebuilt:
-            try:
+def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
+    """重排主表，并用文本行重建实际资本明细。"""
+    from .zhufeng import _parse_detail_rows, _parse_minimum_rows
+
+    import fitz
+
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for table in tables:
+            table_id = str(getattr(table, "table_id", "") or "")
+            pages = [
+                int(page)
+                for page in (getattr(table, "source_pages", None) or [])
+                if int(page) > 0
+            ]
+            texts = [
+                document.load_page(page - 1).get_text() or ""
+                for page in pages
+                if 1 <= page <= document.page_count
+            ]
+            if table_id == "ACTUAL_CAPITAL":
+                parsed = _parse_detail_rows(texts)
+                if len(parsed) >= 10:
+                    header = ["行次", "项目", "期末数", "期初数"]
+                    table.rows = [header, *parsed]
+                    table.table_blocks = [
+                        {
+                            "page": pages[0] if pages else 1,
+                            "rows": [list(row) for row in table.rows],
+                        }
+                    ]
+                continue
+            if table_id == "MINIMUM_CAPITAL":
+                parsed = _parse_minimum_rows(texts)
+                if len(parsed) >= 20:
+                    table.rows = [["指标名称", "期末数", "期初数"], *parsed]
+                    table.table_blocks = [
+                        {
+                            "page": pages[0] if pages else 1,
+                            "rows": [list(row) for row in table.rows],
+                        }
+                    ]
+                continue
+            if table_id != "SOLVENCY_MAIN":
+                continue
+            rows = getattr(table, "rows", None) or []
+            rebuilt = _rebuild_main(rows)
+            if len(rebuilt) < 10 and texts:
+                rebuilt = _rebuild_main_from_text("\n".join(texts)) or rebuilt
+            if rebuilt:
                 table.rows = rebuilt
-            except Exception:  # pragma: no cover - 容错
-                pass
-            blocks = getattr(table, "table_blocks", None) or []
-            if blocks:
-                try:
-                    blocks[0]["rows"] = rebuilt
-                except Exception:  # pragma: no cover
-                    pass
+                table.table_blocks = [
+                    {
+                        "page": pages[0] if pages else 1,
+                        "rows": [list(row) for row in rebuilt],
+                    }
+                ]
+    finally:
+        document.close()
     return tables
 
 
@@ -152,3 +210,34 @@ def _rebuild_main(rows: Sequence[Sequence[Any]]) -> list[list[str]]:
         change = percentages[0] if percentages else ""
         rebuilt.append([label, current, previous, change, forecast])
     return rebuilt
+
+
+def _rebuild_main_from_text(text: str) -> list[list[str]]:
+    """Rebuild the compact 2022 main table when raw grid rows are incomplete."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    positions = {}
+    for label in _MAIN_LABELS:
+        try:
+            positions[label] = next(
+                index for index, line in enumerate(lines) if line.startswith(label)
+            )
+        except StopIteration:
+            continue
+    if "认可资产" not in positions or "综合偿付能力充足率" not in positions:
+        return []
+
+    ordered = sorted(positions.items(), key=lambda item: item[1])
+    rows = [list(_MAIN_HEADER)]
+    for index, (label, start) in enumerate(ordered):
+        end = ordered[index + 1][1] if index + 1 < len(ordered) else len(lines)
+        values = []
+        for token in lines[start + 1:end]:
+            compact = token.replace(" ", "")
+            if _is_amount(compact) or _is_percent(compact):
+                values.append(compact)
+            if len(values) >= 4:
+                break
+        while len(values) < 4:
+            values.append("")
+        rows.append([label, values[0], values[1], values[2], values[3]])
+    return rows

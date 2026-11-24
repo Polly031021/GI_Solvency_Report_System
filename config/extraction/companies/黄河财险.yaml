@@ -6,7 +6,7 @@
 #   ACTUAL_CAPITAL                2022=28，2023=21，2024=21，2025=20
 #   MINIMUM_CAPITAL               2022=32，2023=25，2024=25，2025=24
 #   THREE_YEAR_INVESTMENT_RETURN  2022 年报无该表；2023=13，2024=13，2025=12
-#   LIQUIDITY_MONITORING          2022=26，2023=12，2024=12-13，2025=11
+#   LIQUIDITY_MONITORING          2022=12-13，2023=12，2024=12-13，2025=11-12
 #
 # 封面公司名为“黄河财产保险股份有限公司”，文件名主干“黄河财险”与
 # canonical 一致；全称登记在 aliases，通用封面前缀正则不识别时由调用方
@@ -24,14 +24,34 @@
 company:
   canonical: 黄河财险
   extractor: huanghe
-  aliases: [黄河财产保险股份有限公司]
+  aliases: [黄河财产保险股份有限公司, 黄河财产]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
   notes: >-
     小型财险公司，2022 年报告 33 页、2023/2024 年 26 页、2025 年 25 页；
     2023 起章节整体前移一页，2025 年再前移一页。主表、实际资本表两期
     结构稳定；经营表标签列跨两格、最低资本表截断、近三年收益率表与
-    流动性表同页混排，属通用表格网格问题。
+    流动性表同页混排，属通用表格网格问题。流动性监测指标为
+    “监管及检测指标”下的文字行列表，由公司 extractor 按行重建。
+  layout_contracts:
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 11
+      required_rows:
+        - 经营活动净现金流
+        - 百元保费经营活动净现金流
+        - 特定业务现金流支出占比
+        - 规模保费同比增速
+        - 现金及流动性管理工具占比
+        - 季均融资杠杆比例
+        - AA级（含）以下境内固定收益类资产占比
+        - 持股比例大于5%的上市股票投资占比
+        - 应收款项占比
+        - 持有关联方资产占比
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
 tables:
   SOLVENCY_MAIN:
@@ -74,22 +94,24 @@ tables:
     required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
   LIQUIDITY_MONITORING:
-    expected_pages: [12]
+    expected_pages: [11, 12]
     tolerance: 2
     page_match: prefer
-    anchor_terms: [流动性风险监测指标, 经营活动净现金流]
-    required_items: [经营活动净现金流]
+    anchor_terms: [主要流动性风险监管及检测指标, 监测指标]
+    required_items: [经营活动净现金流, 规模保费同比增速]
 
 structure_versions:
   - since: 2022
-    notes: 2022 年报 33 页，实际资本/最低资本表整体后移；原文无近三年收益率表
+    notes: 2022 年报 33 页，实际资本/最低资本表整体后移；原文无近三年收益率表；流动性 12-13
     tables:
       SOLVENCY_MAIN: {expected_pages: [12], tolerance: 2, page_match: prefer}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [13], tolerance: 2, page_match: prefer}
       ACTUAL_CAPITAL: {expected_pages: [28], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [32], tolerance: 2, page_match: prefer}
-      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13], tolerance: 2, page_match: prefer}
-      LIQUIDITY_MONITORING: {expected_pages: [26], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN:
+        not_disclosed: true
+        notes: 原文没有近三年（综合）投资收益率表；第 13 页仅为本季度和本年度累计投资收益率
+      LIQUIDITY_MONITORING: {expected_pages: [12, 13], tolerance: 0, page_match: prefer}
 
   - since: 2023
     notes: 2023 年报 26 页，章节整体前移一页，近三年收益率表首次出现
@@ -119,4 +141,4 @@ structure_versions:
       ACTUAL_CAPITAL: {expected_pages: [20], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [24], tolerance: 2, page_match: prefer}
       THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12], tolerance: 2, page_match: prefer}
-      LIQUIDITY_MONITORING: {expected_pages: [11], tolerance: 2, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [11, 12], tolerance: 0, page_match: prefer}

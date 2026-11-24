@@ -22,6 +22,23 @@ company:
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
   extractor: taipingkj
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [行次, 项目, 本季度末数, 上季度末数, 下季度末预测数]
+      min_rows: 10
+      required_rows: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    ACTUAL_CAPITAL:
+      headers: [行次, 项目, 本季度末数, 上季度末数]
+      min_rows: 4
+      required_rows: [实际资本, 核心一级资本]
+    MINIMUM_CAPITAL:
+      headers: [行次, 项目, 本季度末数, 上季度末数]
+      min_rows: 10
+      required_rows: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [指标名称, 指标值]
+      min_rows: 2
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
   notes: >-
     2022–2024 版式一致；2025 报告为纯图像扫描件（仅第 4 页董事会声明有文字），
     文本层无法定位任何目标表，已在计划文档中记为“扫描件不可提取”。
@@ -80,3 +97,39 @@ tables:
     start_item: []
     end_item: []
     required_items: [经营活动净现金流, 现金及流动性管理工具占比, 持有关联方资产占比]
+
+structure_versions:
+  - since: 2022
+    notes: 2022 年报原文未披露近三年投资收益率，显式记为未披露。
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: []
+        not_disclosed: true
+        notes: 2022 年报没有近三年平均投资收益率表
+
+  - since: 2023
+    notes: 2023 起出现近三年投资收益率表，位于第 15 页。
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [15]
+        not_disclosed: false
+
+  - since: 2024
+    notes: 2024 版式与 2023 一致，投资收益率仍在第 15 页。
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN:
+        expected_pages: [15]
+        not_disclosed: false
+
+  - since: 2025
+    notes: >-
+      2025 为纯图片扫描件；页码经本地 OCR 逐页实测，主表第 12 页、流动性第 13 页、
+      投资收益率与经营表第 14-15 页、实际资本第 28-29 页、最低资本第 34-36 页。
+      提取由 taipingkj 对目标页做 OCR 后按单元格文本行重建。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [12], tolerance: 1, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [14, 15], tolerance: 1, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [28, 29], tolerance: 1, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [34], tolerance: 1, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 1, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [13], tolerance: 1, page_match: prefer}

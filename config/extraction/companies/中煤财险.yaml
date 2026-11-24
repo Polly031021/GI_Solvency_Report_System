@@ -27,6 +27,31 @@ company:
   aliases: [中煤财产, 中煤财产保险股份有限公司]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
+  layout_contracts:
+    SOLVENCY_MAIN:
+      headers: [指标名称, 本季度末数, 上季度末数, 基本情景下下季度预测数]
+      min_rows: 10
+      required_rows: [认可资产, 认可负债, 实际资本, 最低资本, 综合偿付能力充足率]
+    NON_LIFE_OPERATING_METRICS:
+      headers: [指标名称, 本季度数, 本年度累计数]
+      min_rows: 15
+      required_rows: [保险业务收入, 净利润, 综合成本率]
+    ACTUAL_CAPITAL:
+      headers: [行次, 项目, 期末数, 期初数]
+      min_rows: 4
+      required_rows: [核心一级资本, 实际资本合计]
+    MINIMUM_CAPITAL:
+      headers: [行次, 项目, 期末数, 期初数]
+      min_rows: 10
+      required_rows: [量化风险最低资本, 控制风险最低资本, 最低资本]
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [指标名称, 指标额]
+      min_rows: 2
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 2
+      required_rows: [经营活动净现金流]
   notes: >-
     2022-2023 两期版式稳定，2023 起各表整体后移一页；2024/2025 报告为纯扫描件
     （无文本层、无可用 OCR 引擎），两年数据缺失属数据源问题。2022 年无近三年
@@ -87,14 +112,26 @@ structure_versions:
       THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
       LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 2}
 
-  # 2024/2025 为扫描件，以下页码是按 2023 版式外推的估计值，未经核对；
-  # 两年均无文本层，定位必然失败，保留条目只为标注数据源缺陷。
   - since: 2024
-    notes: 扫描件无文本层，页码为 2023 版式外推估计（2024 全文 33 页 / 2025 全文 35 页），不可核对
+    notes: >-
+      2024 为 33 页纯扫描件，页码经本地 OCR 核对；第 27-28 页为上下两张报告页
+      拼在一张 PDF 页中的特殊版式，实际资本跨页。
     tables:
       SOLVENCY_MAIN: {expected_pages: [13], tolerance: 2}
-      NON_LIFE_OPERATING_METRICS: {expected_pages: [15, 16], tolerance: 2}
-      ACTUAL_CAPITAL: {expected_pages: [26, 27], tolerance: 2}
-      MINIMUM_CAPITAL: {expected_pages: [33, 34], tolerance: 2}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15], tolerance: 1}
+      ACTUAL_CAPITAL: {expected_pages: [25, 26], tolerance: 1}
+      MINIMUM_CAPITAL: {expected_pages: [30, 31], tolerance: 1}
       THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 2}
       LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 2}
+
+  - since: 2025
+    notes: >-
+      2025 为 35 页纯扫描件，页码经本地 OCR 核对：主表 13、经营 15、
+      实际资本 27-28、最低资本 33-34、投资收益率与流动性均 14。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [13], tolerance: 1}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [15], tolerance: 1}
+      ACTUAL_CAPITAL: {expected_pages: [27, 28], tolerance: 1}
+      MINIMUM_CAPITAL: {expected_pages: [33, 34], tolerance: 1}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [14], tolerance: 1}
+      LIQUIDITY_MONITORING: {expected_pages: [14], tolerance: 1}

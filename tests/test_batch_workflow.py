@@ -32,6 +32,7 @@ from services.batch_workflow import (  # noqa: E402
 )
 from services.solvency_pdf_locator import PageMatch  # noqa: E402
 from services.solvency_pdf_locator import (  # noqa: E402
+    PdfTextContext,
     analyze_document_type,
     build_pdf_text_context,
     extract_report_metadata,
@@ -269,6 +270,25 @@ def test_cached_text_context_skips_repeated_pdf_extraction() -> None:
     assert metadata["页数"] == len(context.page_texts)
     assert profile.total_pages == len(context.fitz_page_texts)
     print("PASS PDF 页文本上下文可复用，不再重复全文扫描")
+
+
+def test_metadata_parses_chinese_numeral_year_from_cover() -> None:
+    context = PdfTextContext(
+        page_texts=(
+            "安盟财产保险有限公司\n二零二五年第四季度",
+            "",
+        ),
+        fitz_page_texts=(
+            "安盟财产保险有限公司\n二零二五年第四季度",
+            "",
+        ),
+    )
+
+    metadata = extract_report_metadata(b"", text_context=context)
+
+    assert metadata["报告年度"] == 2025
+    assert metadata["报告季度"] == "Q4"
+    print("PASS 封面中文数字年份可识别")
 
 
 def test_company_specific_expected_table_cannot_disappear_silently() -> None:

@@ -1,7 +1,7 @@
 # 后续工作计划（2026-11-20，基于 89 家覆盖后的最新状态）
 
 - 基线分支：`feature/track-company-and-rule-config`
-- 基线提交：`8c2255c`（89 家覆盖 + 共享层修复）
+- 基线提交：`a54fe23`（22 家大型公司专属链路迁移）
 - 前置文档：
   - `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`（89 家交付与遗留）
   - `plans/company-extraction-playbook.md`（方法论）
@@ -10,6 +10,14 @@
   - `plans/large-company-contract-validation.md`（22 家逐表逐年契约验收）
   - `plans/data-coverage-audit.md`（Data 盘点）
   - `plans/refactor-plan-track-and-rule-config.md`（早期计划，§9 已过时）
+
+> **2026-11-24 更新：** 本文 §0、§1.4、§2.1 中“仅 22 家/扫描件未处理”的状态已被
+> `plans/company-extraction-progress-2026-11-24.md` 取代。当前 89 家均已取得公司级
+> document hooks；2025 全量契约结果为 519 通过、3 未披露、2 个公司无 PDF、0 失败、
+> 0 未生成。扫描件已接入本地 RapidOCR 与磁盘页缓存。下一步重点是：
+> 1）合并重跑 2022–2024 全量矩阵；
+> 2）建立关键金额 PDF 黄金值样本；
+> 3）完成 STEP4/STEP7 回归。
 
 ---
 

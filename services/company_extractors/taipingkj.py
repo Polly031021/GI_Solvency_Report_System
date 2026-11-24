@@ -110,10 +110,19 @@ def _is_row_number(text: str) -> bool:
     return bool(_ROW_NUMBER_RE.fullmatch(token)) and not _is_value(token)
 
 
-def _page_lines(doc: fitz.Document, index: int) -> list[str]:
+def _page_lines(
+    doc: fitz.Document,
+    index: int,
+    *,
+    pdf_bytes: bytes | None = None,
+) -> list[str]:
     """取一页的非空文本行，并去掉页首的页码行。"""
     raw = doc.load_page(index).get_text("text")
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) < 3 and pdf_bytes:
+        from ._ocr import page_cell_lines
+
+        lines = page_cell_lines(pdf_bytes, index + 1)
     if lines and re.fullmatch(r"\d{1,3}", lines[0]):
         following = _compact(lines[1]) if len(lines) > 1 else ""
         if int(lines[0]) == index + 1 or following in {
@@ -124,7 +133,11 @@ def _page_lines(doc: fitz.Document, index: int) -> list[str]:
 
 
 def _find_section(
-    doc: fitz.Document, marker: str
+    doc: fitz.Document,
+    marker: str,
+    *,
+    pdf_bytes: bytes | None = None,
+    preferred_pages: Sequence[int] = (),
 ) -> tuple[int, int] | None:
     """返回 (页索引, 标题后第一行的索引)。
 
@@ -132,8 +145,16 @@ def _find_section(
     指标名称/监测指标），目录行的下一行是另一个目录条目，不会满足。
     """
     needle = _compact(marker)
-    for index in range(doc.page_count):
-        lines = _page_lines(doc, index)
+    ordered: list[int] = []
+    for page in preferred_pages:
+        center = int(page)
+        for candidate in range(max(1, center - 2), min(doc.page_count, center + 2) + 1):
+            if candidate not in ordered:
+                ordered.append(candidate)
+    ordered.extend(page for page in range(1, doc.page_count + 1) if page not in ordered)
+    for page_number in ordered:
+        index = page_number - 1
+        lines = _page_lines(doc, index, pdf_bytes=pdf_bytes)
         for position, line in enumerate(lines):
             if needle not in _compact(line):
                 continue
@@ -149,11 +170,13 @@ def _collect(
     start: int,
     stop_terms: Sequence[str],
     max_pages: int,
+    *,
+    pdf_bytes: bytes | None = None,
 ) -> list[str]:
     stops = tuple(_compact(term) for term in stop_terms)
     collected: list[str] = []
     for current in range(page, min(doc.page_count, page + max_pages)):
-        lines = _page_lines(doc, current)
+        lines = _page_lines(doc, current, pdf_bytes=pdf_bytes)
         begin = start if current == page else 0
         for line in lines[begin:]:
             compact = _compact(line)
@@ -236,9 +259,18 @@ def _cut_after(
 
 
 def _rebuild(
-    doc: fitz.Document, spec: dict[str, Any]
+    doc: fitz.Document,
+    spec: dict[str, Any],
+    *,
+    pdf_bytes: bytes | None = None,
+    preferred_pages: Sequence[int] = (),
 ) -> tuple[list[list[str]], int] | None:
-    found = _find_section(doc, str(spec["marker"]))
+    found = _find_section(
+        doc,
+        str(spec["marker"]),
+        pdf_bytes=pdf_bytes,
+        preferred_pages=preferred_pages,
+    )
     if found is None:
         return None
     page, start = found
@@ -248,6 +280,7 @@ def _rebuild(
         start,
         spec.get("stop") or (),
         int(spec.get("max_pages") or 1),
+        pdf_bytes=pdf_bytes,
     )
     if spec["marker"] in {"偿付能力充足率指标", "十一、最低资本", "核心一级资本调整明细表"}:
         rows = _parse_numbered(lines, int(spec["width"]))
@@ -281,7 +314,17 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
             spec = _SECTIONS.get(table_id)
             if spec is None:
                 continue
-            rebuilt = _rebuild(document, spec)
+            pages = [
+                int(page)
+                for page in (getattr(table, "source_pages", None) or [])
+                if int(page) > 0
+            ]
+            rebuilt = _rebuild(
+                document,
+                spec,
+                pdf_bytes=pdf_bytes,
+                preferred_pages=pages,
+            )
             if rebuilt is None:
                 continue
             rows, page = rebuilt

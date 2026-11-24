@@ -38,6 +38,25 @@ company:
     2024-2025 均有页内区域误裁，统一关闭区域裁剪改用整页线框表；实际资本
     续页为 4 列并带分块分隔行，流动性监测表首页混入监管指标表块，由专属
     提取器按行次列与“监测指标”表头归一。
+  layout_contracts:
+    LIQUIDITY_MONITORING:
+      headers: [指标名称, 本季度数, 上季度数]
+      min_rows: 11
+      required_rows:
+        - 经营活动净现金流
+        - 百元保费经营活动净现金流
+        - 特定业务现金流支出占比
+        - 规模保费同比增速
+        - 现金及流动性管理工具占比
+        - 季均融资杠杆比例
+        - AA级（含）以下境内固定收益类资产占比
+        - 持股比例大于5%的上市股票投资占比
+        - 应收款项占比
+        - 持有关联方资产占比
+    THREE_YEAR_INVESTMENT_RETURN:
+      headers: [项目, 数值]
+      min_rows: 3
+      required_rows: [近三年平均投资收益率, 近三年平均综合投资收益率]
 
 tables:
   SOLVENCY_MAIN:
@@ -109,3 +128,27 @@ tables:
       - 应收分保账款
       - 期末总资产
       - 持有关联方资产占比
+
+structure_versions:
+  - since: 2022
+    notes: 原文未披露近三年（综合）投资收益率；第 14 页仅为本季度和本年度累计投资收益率
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN:
+        not_disclosed: true
+        notes: 原文没有近三年（综合）投资收益率表
+      LIQUIDITY_MONITORING: {expected_pages: [11, 12, 13], tolerance: 0, page_match: prefer}
+  - since: 2023
+    notes: 近三年收益率表在 13 页；流动性监测表跨 12-13 页
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13], tolerance: 0, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [11, 12, 13], tolerance: 0, page_match: prefer}
+  - since: 2024
+    notes: 近三年收益率表和流动性监测表第 12 页起
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13], tolerance: 0, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [12], tolerance: 0, page_match: prefer}
+  - since: 2025
+    notes: 近三年收益率在 13 页；流动性监测表单页 12，单位万元
+    tables:
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [13], tolerance: 0, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [12], tolerance: 0, page_match: prefer}

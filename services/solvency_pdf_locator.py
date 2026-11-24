@@ -1051,6 +1051,30 @@ def locate_tables(
     return results
 
 
+def _chinese_year_value(text: str) -> int | None:
+    """Return the first four Chinese-numeral year in text."""
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "○": 0,
+        "O": 0,
+        "一": 1,
+        "二": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    match = re.search(r"([零〇○O一二三四五六七八九]{4})年", text or "")
+    if not match:
+        return None
+    value = int("".join(str(digits[character]) for character in match.group(1)))
+    return value if 1900 <= value <= 2100 else None
+
+
 def extract_report_metadata(
     pdf_bytes: bytes,
     *,
@@ -1135,8 +1159,47 @@ def extract_report_metadata(
     # ★ 新增：独立兜底 —— 任一侧匹配失败时从独立正则补
     if year is None and year_match:
         year = int(year_match.group(1))
+    if year is None:
+        year = _chinese_year_value(cover_compact) or _chinese_year_value(head)
     if not quarter_symbol and quarter_match:
         quarter_symbol = quarter_match.group(1)
+    if (
+        pdf_bytes
+        and (year is None or not company_match)
+        and sum(len(_compact(item)) for item in page_texts[:2]) < 80
+    ):
+        try:
+            from .company_extractors._ocr import page_text_lines
+
+            ocr_head = "\n".join(
+                [
+                    *page_text_lines(pdf_bytes, 1, scale=1.5),
+                    *page_text_lines(pdf_bytes, 2, scale=1.5),
+                ]
+            )
+        except Exception:
+            ocr_head = ""
+        if ocr_head:
+            ocr_compact = _compact(ocr_head)
+            if year is None:
+                ocr_year = re.search(r"(20\d{2})年", ocr_compact)
+                year = (
+                    int(ocr_year.group(1))
+                    if ocr_year
+                    else _chinese_year_value(ocr_compact)
+                )
+            if not quarter_symbol:
+                ocr_quarter = re.search(
+                    rf"第?{_ZW}([一二三四1234]){_ZW}季度",
+                    ocr_compact,
+                )
+                if ocr_quarter:
+                    quarter_symbol = ocr_quarter.group(1)
+            if not company_match:
+                company_match = re.search(
+                    r"([^\n]{2,40}(?:保险股份有限公司|保险有限公司))",
+                    ocr_head,
+                )
     # ★ 新增：中文数字 → 阿拉伯数字，保证 quarter_map 能识别
     if quarter_symbol in {"一", "二", "三", "四"}:
         quarter_symbol = {"一": "1", "二": "2", "三": "3", "四": "4"}[quarter_symbol]

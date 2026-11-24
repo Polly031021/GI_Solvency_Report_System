@@ -11,6 +11,7 @@ import io
 import re
 import traceback
 import dataclasses
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -374,6 +375,16 @@ def _assemble_tables(
             # the header list so downstream table-block expansion can use it.
             table_config = dict(table_config)
             table_config["canonical_headers"] = list(canonical_headers)
+        if isinstance(table_config, dict):
+            source_contract = (
+                match.table_config.get("_layout_contract")
+                if isinstance(match.table_config, dict)
+                else None
+            )
+            if isinstance(source_contract, dict):
+                # sanitize_tree stringifies nested lists; contracts need their
+                # original header/variant lists for validation.
+                table_config["_layout_contract"] = deepcopy(source_contract)
         tables.append(
             FlexibleTable(
                 table_id=match.table_id,
@@ -411,6 +422,8 @@ def extract_document_tables(
     text_context: PdfTextContext | None = None,
     metadata: Mapping[str, Any] | None = None,
     profile_id: str = "",
+    force_legacy: bool = False,
+    company_extractor_override: str = "",
 ) -> BatchExtractionOutcome:
     """Extract confirmed pages for one PDF without touching Streamlit state."""
     outcome = BatchExtractionOutcome()
@@ -427,7 +440,7 @@ def extract_document_tables(
 
     company_extractor_name = extractor_from_matches(matches)
     company_document_extractor = None
-    if company_extractor_name:
+    if company_extractor_name and not force_legacy:
         _company_locator, company_document_extractor = get_company_document_hooks(
             company_extractor_name
         )
@@ -654,6 +667,7 @@ def extract_document_tables(
         outcome.tables,
         located,
         pdf_bytes=pdf_bytes,
+        extractor_name=company_extractor_override or company_extractor_name,
     )
     # 通用经营表补全：所有公司都执行，补齐 pdfplumber 漏掉的效益/规模/品质类指标。
     from .company_extractors._operating_table import complete_operating_tables
@@ -669,6 +683,106 @@ def extract_document_tables(
             ),
         )
     )
+    if force_legacy:
+        from .company_extractors._document import HEADERS, contract_failure
+
+        accepted_tables = []
+        rejected_names: set[str] = set()
+        accepted_names: set[str] = set()
+        for table in outcome.tables:
+            rows = [list(row) for row in (table.rows or [])]
+            failure = contract_failure(table, rows)
+            if failure.startswith("版式契约：表头不匹配") and rows:
+                standard_header = list(HEADERS.get(table.table_id, []))
+                trial_rows = [standard_header, *rows]
+                if not contract_failure(table, trial_rows):
+                    rows = trial_rows
+                    failure = ""
+                else:
+                    rows = trial_rows
+                    failure = contract_failure(table, rows)
+            if (
+                failure.startswith("版式契约：数据列数")
+                and table.table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"}
+                and rows
+            ):
+                width = len(rows[0])
+                rows = [
+                    [
+                        *list(row[:width]),
+                        *([""] * max(0, width - len(row))),
+                    ]
+                    for row in rows
+                ]
+                failure = contract_failure(table, rows)
+            if rows:
+                target_width = len(rows[0])
+                fixed_rows = [list(rows[0])]
+                for row in rows[1:]:
+                    cells = list(row)
+                    if (
+                        table.table_id == "NON_LIFE_OPERATING_METRICS"
+                        and target_width == 3
+                        and len(cells) == 4
+                    ):
+                        cells = [f"{cells[0]}{cells[1]}", cells[2], cells[3]]
+                    elif (
+                        table.table_id == "SOLVENCY_MAIN"
+                        and target_width == 4
+                        and len(cells) == 5
+                        and (
+                            not str(cells[0]).strip()
+                            or str(cells[0]).strip() in {"行次", "序号"}
+                        )
+                    ):
+                        cells = cells[1:]
+                    if len(cells) < target_width:
+                        cells.extend([""] * (target_width - len(cells)))
+                    fixed_rows.append(cells[:target_width])
+                rows = fixed_rows
+                failure = contract_failure(table, rows)
+            if failure:
+                rejected_names.add(str(getattr(table, "table_name", "")))
+                outcome.logs.append(
+                    {
+                        "公司": company,
+                        "目标表": str(getattr(table, "table_name", "")),
+                        "物理页码": "、".join(
+                            map(
+                                str,
+                                getattr(table, "source_pages", [])
+                                or [getattr(table, "page", "")],
+                            )
+                        ),
+                        "识别方式": "公司专属页码+既有后处理",
+                        "状态": "失败",
+                        "说明": failure,
+                    }
+                )
+                continue
+            table.rows = rows
+            table.table_blocks = [
+                {
+                    "page": int(
+                        getattr(table, "page", 1)
+                        or 1
+                    ),
+                    "rows": [list(row) for row in rows],
+                }
+            ]
+            accepted_tables.append(table)
+            accepted_names.add(str(getattr(table, "table_name", "")))
+        rejected_names -= accepted_names
+        if rejected_names:
+            outcome.logs = [
+                log
+                for log in outcome.logs
+                if not (
+                    str(log.get("状态") or "") == "成功"
+                    and str(log.get("目标表") or "") in rejected_names
+                )
+            ]
+        outcome.tables = accepted_tables
     if extractor_result:
         outcome.logs.append(
             {

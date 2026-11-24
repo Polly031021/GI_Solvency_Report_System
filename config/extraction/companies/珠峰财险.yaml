@@ -14,6 +14,15 @@ company:
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
   extractor: zhufeng
+  layout_contracts:
+    ACTUAL_CAPITAL:
+      headers: [行次, 项目, 本季度, 上季度]
+      min_rows: 10
+      required_rows: [核心一级资本, 实际资本合计]
+    MINIMUM_CAPITAL:
+      headers: [指标名称, 期末数, 期初数]
+      min_rows: 20
+      required_rows: [量化风险最低资本, 最低资本]
   notes: 各年正文页数 42/43/32/31；2024/2025 实际资本、最低资本均压缩到单页
 
 tables:
@@ -31,7 +40,7 @@ tables:
     required_items: [保险业务收入, 净利润, 综合成本率]
 
   ACTUAL_CAPITAL:
-    expected_pages: [25, 26, 29, 30]
+    expected_pages: [29, 30]
     tolerance: 0
     page_match: prefer
     include_continuation: true
@@ -39,7 +48,7 @@ tables:
     required_items: [核心一级资本, 实际资本合计]
 
   MINIMUM_CAPITAL:
-    expected_pages: [29, 30, 37, 38]
+    expected_pages: [37, 38]
     tolerance: 0
     page_match: prefer
     include_continuation: true
@@ -65,18 +74,45 @@ tables:
 # 2024 年起实际资本、最低资本、流动性监测指标均压缩在单页，禁止续页，
 # 否则会续入下一页的认可资产明细/保费及准备金风险/主要经营指标。
 structure_versions:
+  - since: 2023
+    notes: 2023 年实际资本跨 30-31 页，最低资本跨 38-39 页
+    tables:
+      ACTUAL_CAPITAL:
+        expected_pages: [30, 31]
+        max_pages: 2
+        tolerance: 0
+        page_match: prefer
+      MINIMUM_CAPITAL:
+        expected_pages: [38, 39]
+        max_pages: 2
+        tolerance: 0
+        page_match: prefer
+
   - since: 2024
     notes: 2024/2025 年正文压缩，三张表均单页
     tables:
       ACTUAL_CAPITAL:
+        expected_pages: [26]
         max_pages: 1
         tolerance: 0
         page_match: prefer
       MINIMUM_CAPITAL:
+        expected_pages: [30]
         max_pages: 1
         tolerance: 0
         page_match: prefer
       LIQUIDITY_MONITORING:
+        expected_pages: [19]
         max_pages: 1
         tolerance: 0
         page_match: prefer
+
+  - since: 2025
+    notes: 2025 年实际资本、最低资本、流动性分别压缩到单页 25/29/18。
+    tables:
+      SOLVENCY_MAIN: {expected_pages: [16], tolerance: 0, page_match: prefer}
+      NON_LIFE_OPERATING_METRICS: {expected_pages: [19], tolerance: 0, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [25], max_pages: 1, tolerance: 0, page_match: prefer}
+      MINIMUM_CAPITAL: {expected_pages: [29], max_pages: 1, tolerance: 0, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 0, page_match: prefer}
+      LIQUIDITY_MONITORING: {expected_pages: [18], max_pages: 1, tolerance: 0, page_match: prefer}

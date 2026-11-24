@@ -200,13 +200,35 @@ def _contract_failure(table: Any, rows: list[list[str]]) -> str:
 
     expected_headers = contract_values(contract.get("headers"))
     actual_headers = [_clean(value) for value in rows[0]]
-    if expected_headers and actual_headers != expected_headers:
+    header_aliases = contract.get("header_aliases") or {}
+    candidate_headers = [
+        expected_headers,
+        *[
+            contract_values(value)
+            for value in (contract.get("header_variants") or [])
+        ],
+    ]
+    matched_headers: list[str] | None = None
+    for candidate in candidate_headers:
+        if len(actual_headers) == len(candidate) and all(
+            actual == expected
+            or actual in {
+                _clean(alias)
+                for alias in (header_aliases.get(expected) or [])
+            }
+            for expected, actual in zip(candidate, actual_headers)
+        ):
+            matched_headers = candidate
+            break
+    headers_match = not expected_headers or matched_headers is not None
+    if not headers_match:
         return (
             "版式契约：表头不匹配，"
             f"预期 {expected_headers}，实际 {actual_headers}"
         )
     min_rows = int(contract.get("min_rows", 1) or 1)
-    if expected_headers and any(len(row) != len(expected_headers) for row in rows):
+    expected_width = len(matched_headers or expected_headers)
+    if expected_headers and any(len(row) != expected_width for row in rows):
         return "版式契约：数据列数与表头不一致"
     if len(rows) < min_rows:
         return f"版式契约：仅 {len(rows)} 行，少于最低要求 {min_rows} 行"

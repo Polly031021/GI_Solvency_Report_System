@@ -43,6 +43,25 @@ streamlit run app.py
 
 STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.xlsx`，无需每次在侧边栏上传；上传文件仅覆盖当前会话，可点击“恢复默认配置”切回内置模板。侧边栏只保留一级/二级分类，二级分类即图表入口。
 
+### 公司专属提取与本地 OCR
+
+89 家财险公司均有独立的公司 YAML，并可取得公司级 locator/extractor hooks。
+已验证公司优先使用公司页码、表头、必要指标和跨页契约；只有没有专属实现的兼容路径
+才使用共享文档适配，但仍强制经过契约校验。
+
+- 公司规则：`config/extraction/companies/<公司>.yaml`
+- 公司提取器：`services/company_extractors/`
+- 扫描页 OCR：`services/company_extractors/_ocr.py`
+- 契约审计：`tools/large_company_contract_audit.py`
+- 当前进度与例外：`plans/company-extraction-progress-2026-11-24.md`
+
+2025 年全量契约快照为 **519 张通过、3 张原文未披露、2 家公司无 PDF、0 失败、
+0 未生成**。该结论只代表结构、页码和必要指标契约通过，不代表所有金额都已人工核对。
+
+扫描页使用离线的 `rapidocr_onnxruntime`，识别结果按 PDF SHA1、页码和缩放比例缓存在
+`gi_solvency_cache/ocr_v1/`。相同 PDF 再次验证时不会重复执行 OCR。批量契约审计建议使用
+`--workers 6`；扫描件 OCR 在进程内串行执行，过高并发会增加锁竞争。
+
 ### STEP7 缺失指标补录脚本
 
 汇总数据（至少包含 `标准数据` 页）可直接运行：
@@ -248,6 +267,24 @@ tests/                    回归测试
 
 ## 六、测试与质量检查
 
+全量 pytest：
+
+```powershell
+& .\venv\Scripts\python.exe -m pytest tests -q
+```
+
+公司契约定向审计：
+
+```powershell
+& .\venv\Scripts\python.exe tools\large_company_contract_audit.py `
+  --companies 中煤财险,恒邦财险,太平科技 `
+  --years 2022,2023,2024,2025 `
+  --workers 3 `
+  --out-dir tmp\company_contract_audit
+```
+
+以下脚本入口仍可独立运行：
+
 ```bash
 cd tests
 python test_step1_locator_modes.py    # STEP1 定位：文档类型、离线规则法、大模型复核、S05 单行跨页
@@ -279,3 +316,5 @@ python -m pyflakes ..                 # 静态检查：未定义名字/未使用
 3. 代码里保留了较多"★ 修复/★ 新增"式的历史注释，确认稳定后可以精简为结论性说明。
 4. `config/non_life_solvency_page_features.json`、`config/solvency_page_features.json`
    与内置 JSON Profile 属于历史兼容路径，当前财险走工作簿配置，可按部署情况清理。
+5. 2025 已通过 89 家全量契约验证，但关键金额仍需要继续做 PDF 黄金值核对；
+   2022–2024 的公司定向矩阵已通过，尚需用最终代码合并重跑一次全量矩阵。

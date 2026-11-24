@@ -22,7 +22,7 @@
 company:
   canonical: 安盟财险
   extractor: anmeng
-  aliases: [安盟财产保险有限公司, 中航安盟财产保险有限公司]
+  aliases: [安盟财产保险有限公司, 中航安盟财产保险有限公司, 安盟保险]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
   notes: >-

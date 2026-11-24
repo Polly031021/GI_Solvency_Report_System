@@ -31,9 +31,14 @@
 company:
   canonical: 长江财险
   extractor: changjiang
-  aliases: [长江财产保险股份有限公司]
+  aliases: [长江财产保险股份有限公司, 长江财产]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
+  layout_contracts:
+    ACTUAL_CAPITAL:
+      headers: [行次, 项目, 期末数, 期初数]
+      min_rows: 10
+      required_rows: [核心一级资本, 实际资本合计]
   notes: >-
     2022-2025 四年版式同源，2022 年整体后移约 2 页；2022 年缺近三年投资
     收益率表，2024 年缺 S02 实际资本明细表，均属原文披露缺失。偿付能力
@@ -101,7 +106,7 @@ structure_versions:
       SOLVENCY_MAIN: {expected_pages: [10], tolerance: 2}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [11, 12], tolerance: 2}
       ACTUAL_CAPITAL: {expected_pages: [26], tolerance: 2}
-      MINIMUM_CAPITAL: {expected_pages: [31], tolerance: 2}
+      MINIMUM_CAPITAL: {expected_pages: [29], tolerance: 2}
       THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [11], tolerance: 2}
       LIQUIDITY_MONITORING: {expected_pages: [11], tolerance: 2}
 
@@ -110,8 +115,16 @@ structure_versions:
     tables:
       SOLVENCY_MAIN: {expected_pages: [10, 11], tolerance: 2}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [12], tolerance: 2}
-      ACTUAL_CAPITAL: {expected_pages: [19], tolerance: 2}
-      MINIMUM_CAPITAL: {expected_pages: [20], tolerance: 2}
+      ACTUAL_CAPITAL:
+        expected_pages: []
+        tolerance: 0
+        not_disclosed: true
+        notes: 2024 年报未披露独立实际资本表
+      MINIMUM_CAPITAL:
+        expected_pages: []
+        tolerance: 0
+        not_disclosed: true
+        notes: 2024 年报未披露独立最低资本表
       THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [12], tolerance: 2}
       LIQUIDITY_MONITORING: {expected_pages: [11, 12], tolerance: 2}
 

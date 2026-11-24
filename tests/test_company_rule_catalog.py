@@ -143,6 +143,35 @@ tables:
         directory.rmdir()
 
 
+def test_not_disclosed_table_flag_is_merged_into_profile_config() -> None:
+    directory = _temp_dir()
+    _write_rule(
+        directory,
+        "未披露测试",
+        """
+company:
+  canonical: 未披露测试
+tables:
+  ACTUAL_CAPITAL:
+    not_disclosed: true
+    notes: 特殊主体不披露资本金额
+""",
+    )
+    try:
+        resolved = rules.resolve_rule("未披露测试", 2025, directory=directory)
+        assert resolved is not None
+        merged = rules.apply_rule_to_tables(
+            [{"table_id": "ACTUAL_CAPITAL", "table_name": "实际资本"}],
+            resolved,
+        )
+        assert merged[0]["not_disclosed"] is True
+        assert merged[0]["notes"] == "特殊主体不披露资本金额"
+    finally:
+        for path in directory.glob("*"):
+            path.unlink(missing_ok=True)
+        directory.rmdir()
+
+
 def test_dadi_layout_contract_is_applied_to_profile_tables() -> None:
     resolved = rules.resolve_rule(
         "大地财产",

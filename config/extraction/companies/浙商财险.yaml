@@ -3,15 +3,15 @@
 # 页码依据：dump_tables 四份年报实测（物理页，容差 ±2）
 #   SOLVENCY_MAIN                 2022=15  2023=16  2024=16  2025=17
 #   NON_LIFE_OPERATING_METRICS    2022=17  2023=19  2024=18-19  2025=20
-#   ACTUAL_CAPITAL                2022=15  2023=16  2024=16  2025=17（与 S01 同页）
+#   ACTUAL_CAPITAL                2022=30-31  2023=33  2024=31  2025=35-36
 #   MINIMUM_CAPITAL               2022=36-37  2023=38-39  2024=36-37  2025=41-42
 #   THREE_YEAR_INVESTMENT_RETURN  2022 无该表（原文缺失） 2023=18  2024=17  2025=19
 #   LIQUIDITY_MONITORING          2022=16  2023=17  2024=17  2025=18
 #
 # 封面公司名四年一致：“浙商财产保险股份有限公司”，报告期均为 Q4，金额单位“元”。
 # 2024 年 S01 表首列金额两栏粘连（“6,775,550,577.676,904,399,328.80”），
-# 系 PDF 两列无间隙导致，非页码问题；S02（实际资本明细表）同页取数正常，
-# 两表可交叉校验，故 SOLVENCY_MAIN 的关键指标以 S02 为准（见计划文档“已知问题”）。
+# 系 PDF 两列无间隙导致，非页码问题；S02（实际资本明细表）位于资本章节，
+# 由公司专属 extractor 按表格坐标单独重建。
 
 company:
   canonical: 浙商财险
@@ -19,10 +19,16 @@ company:
   aliases: [浙商财产保险股份有限公司, 浙商财产]
   profile_id: NON_LIFE_SOLVENCY
   rule_version: 1
+  layout_contracts:
+    ACTUAL_CAPITAL:
+      headers: [行次, 项目, 期末数, 期初数]
+      min_rows: 10
+      required_rows: [核心一级资本, 实际资本合计]
   notes: >-
-    2022-2025 版式一致：第 1 页封面，之后“偿付能力充足率指标”（S01）与
-    “实际资本明细表”（S02）同页；主要经营指标跨两页；最低资本表位于文末。
-    2022 年未披露“近三年平均（综合）投资收益率”表，属原文缺失。
+    2022-2025 版式一致：第 1 页封面，之后为“偿付能力充足率指标”（S01）；
+    实际资本明细表（S02）位于后部资本章节，2022 年跨 30-31 页；主要经营
+    指标跨页；最低资本表位于文末。2022 年未披露“近三年平均（综合）投资收益
+    率”表，属原文缺失。
 
 tables:
   SOLVENCY_MAIN:
@@ -40,11 +46,11 @@ tables:
     required_items: [保险业务收入, 综合成本率, 签单保费]
 
   ACTUAL_CAPITAL:
-    expected_pages: [15]
+    expected_pages: [30, 31]
     tolerance: 2
     page_match: prefer
     anchor_terms: [实际资本]
-    required_items: [认可资产, 实际资本, 最低资本]
+    required_items: [核心一级资本, 实际资本合计]
 
   MINIMUM_CAPITAL:
     expected_pages: [36, 37]
@@ -54,11 +60,10 @@ tables:
     required_items: [最低资本]
 
   THREE_YEAR_INVESTMENT_RETURN:
-    expected_pages: [16]
-    tolerance: 2
-    page_match: prefer
+    not_disclosed: true
     anchor_terms: [近三年平均投资收益率, 近三年平均综合投资收益率]
     required_items: [近三年平均投资收益率, 近三年平均综合投资收益率]
+    notes: 2022 年报告原文未披露近三年投资收益率
 
   LIQUIDITY_MONITORING:
     expected_pages: [16]
@@ -72,9 +77,9 @@ structure_versions:
     tables:
       SOLVENCY_MAIN: {expected_pages: [16], tolerance: 2, page_match: prefer}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [19], tolerance: 2, page_match: prefer}
-      ACTUAL_CAPITAL: {expected_pages: [16], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [33], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [38, 39], tolerance: 2, page_match: prefer}
-      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [18], tolerance: 2, page_match: prefer, not_disclosed: false}
       LIQUIDITY_MONITORING: {expected_pages: [17], tolerance: 2, page_match: prefer}
 
   - since: 2024
@@ -82,9 +87,9 @@ structure_versions:
     tables:
       SOLVENCY_MAIN: {expected_pages: [19], tolerance: 2, page_match: prefer, anchor_terms: [偿付能力状况表]}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [18, 19], tolerance: 2, page_match: prefer}
-      ACTUAL_CAPITAL: {expected_pages: [19], tolerance: 2, page_match: prefer, anchor_terms: [偿付能力状况表]}
+      ACTUAL_CAPITAL: {expected_pages: [31], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [36, 37], tolerance: 2, page_match: prefer}
-      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [17], tolerance: 2, page_match: prefer, not_disclosed: false}
       LIQUIDITY_MONITORING: {expected_pages: [17], tolerance: 2, page_match: prefer}
 
   - since: 2025
@@ -92,7 +97,7 @@ structure_versions:
     tables:
       SOLVENCY_MAIN: {expected_pages: [17], tolerance: 2, page_match: prefer}
       NON_LIFE_OPERATING_METRICS: {expected_pages: [20], tolerance: 2, page_match: prefer}
-      ACTUAL_CAPITAL: {expected_pages: [17], tolerance: 2, page_match: prefer}
+      ACTUAL_CAPITAL: {expected_pages: [35, 36], tolerance: 2, page_match: prefer}
       MINIMUM_CAPITAL: {expected_pages: [41, 42], tolerance: 2, page_match: prefer}
-      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [19], tolerance: 2, page_match: prefer}
+      THREE_YEAR_INVESTMENT_RETURN: {expected_pages: [19], tolerance: 2, page_match: prefer, not_disclosed: false}
       LIQUIDITY_MONITORING: {expected_pages: [18], tolerance: 2, page_match: prefer}

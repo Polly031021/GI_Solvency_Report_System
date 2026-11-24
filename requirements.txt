@@ -19,3 +19,4 @@ kaleido
 pyyaml
 playwright
 vl-convert-python
+rapidocr_onnxruntime

@@ -12,7 +12,7 @@
 再生成公司级对标报告（STEP7）与行业分析报告（STEP8）。
 
 - 技术栈：Python 3.12 + Streamlit 单页应用（`st.tabs` 驱动 STEP0→STEP8），中文/英文双语切换。
-- 规模：约 145 个 Python 文件 / 7 万行；29 个脚本式回归测试。
+- 规模：约 145 个 Python 文件 / 7 万行；自动化测试同时支持 pytest 与脚本入口。
 - 数据不随仓库分发（`Data/`、`*.xlsx` 原始数据均被 `.gitignore` 排除），只保留
   `财险公司列表.xlsx` 这一份公司主数据。
 
@@ -40,7 +40,13 @@
 
 ### 2.3 测试
 
-**没有装 pytest**，测试是普通脚本：
+项目虚拟环境已安装 pytest；快速回归可运行：
+
+```bash
+./venv/Scripts/python.exe -m pytest tests -q
+```
+
+单项脚本仍可直接运行：
 
 ```bash
 ./venv/Scripts/python.exe -m tests.test_industry_market_share_logic
@@ -101,7 +107,8 @@ plans/                     **入库**的改造计划与实战手册（docs/ 不�
   company-extraction-playbook.md           公司专属提取实战手册
   company-layout-contract-migration.md      公司专属全链路迁移 SOP 与批次
   company-migration-template.md             单家公司迁移记录模板
-  large-company-contract-validation.md      22 家逐表逐年合同验收结论
+  large-company-contract-validation.md      契约验收历史与入口
+  company-extraction-progress-2026-11-24.md 89 家当前进度、2025 全量结论与例外
 tools/                     离线小工具（STEP7 缺失指标补录表、缺口报告、指标目录生成）
 docs/                      设计文档（pdf_export_design.md）— **不入库，本地参考**
 tmp/                       临时脚本/预览图/样例 PDF，产物不提交
@@ -116,7 +123,7 @@ Data/、gi_solvency_cache/、venv/、*.xlsx  全部在 .gitignore 中
 | PDF 定位 | `solvency_pdf_locator.py`、`semantic_period_fallback.py` | 文字版/扫描版判断、目标页物理页码定位 |
 | 混合流水线 | `solvency_hybrid_pipeline/`（`locator_rule`、`locator_vision`、`page_extract`、`extract`） | 规则法优先，失败转大模型 |
 | 表格提取 | `solvency_rule_table_extractor.py`、`solvency_table_extractor.py`、`solvency_table_region.py`、`solvency_table_boundaries.py`、`table_number_repair.py`、`table_strategy_*.py` | 规则法表格识别、边界、数字修复、策略注册 |
-| 提取配置/规则 | `extraction_config.py`、`extraction_rules.py`、`company_extractors/` | 表级 YAML、公司级页码窗口与别名、公司专属后处理（89 家：54 实修 + 35 占位） |
+| 提取配置/规则 | `extraction_config.py`、`extraction_rules.py`、`company_extractors/` | 表级 YAML、公司级页码窗口与别名、公司专属定位/提取与契约 |
 | AI 提取 | `solvency_ai_table_extractor/`（`grid`、`llm`、`units`、`source_profile`） | 图片表格识别、单位换算 |
 | 标准化 | `solvency_step3_standardizer.py`、`solvency_normalizer.py`、`solvency_disclosure_normalizer.py`、`step3_metric_gap.py`、`solvency_metric_registry.py` | 生成标准窄表、派生指标、缺口检查 |
 | 校验 | `solvency_validator.py` | 勾稽规则（公式/跨表/完整性） |
@@ -191,10 +198,17 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
 ```
 config/extraction/tables.yaml              表级定义（所有公司共用，代码内置默认兜底）
 config/extraction/companies/<公司>.yaml    公司级规则（页码窗口、锚点、extractor），当前 89 家
-services/company_extractors/<name>.py      公司级后处理：54 家实修 + 35 家占位（pass-through）
+services/company_extractors/<name>.py      公司级 locator/extractor 或兼容后处理
 services/company_extractors/_main_table.py 主表重建 helper（金额跨行/行次竖排/表头缺列）
+services/company_extractors/_ocr.py        扫描页本地 OCR、坐标词块与磁盘缓存
 ```
 
+- `get_company_document_hooks()` 为 89 家公司提供 document hooks；没有显式 hook 的公司
+  使用共享文档适配器，但仍以公司 YAML 页码和契约作为权威输入。
+- 部分已有成熟全文解析器的公司通过 `LEGACY_PAGE_ADAPTERS` 接入既有页级解析，
+  不退回通用页内表格搜索。
+- 中煤、恒邦、太平科技等纯扫描件使用 `rapidocr_onnxruntime`；缓存位于
+  `gi_solvency_cache/ocr_v1/`，按 PDF SHA1、页码和缩放比例复用。
 - 路由键：封面 `公司`（别名归一）+ `报告年度`（仅用于选 `structure_versions`）。
 - 页码：`expected_pages` + `tolerance`（默认 2）→ 窗口；窗口内按 `anchor_terms` 命中，
   窗口外回退全文；`prefer` / `strict` / `anchor_only` 三种模式。
@@ -219,12 +233,15 @@ services/company_extractors/_main_table.py 主表重建 helper（金额跨行/�
 - **主表被拆碎时用重建 helper**：`_main_table.rebuild_main_rows(doc, pages)` 按词坐标重建五列主表；
   参考 `changjiang` / `rongtong` / `dongwu` / `zhongmei` / `byd` 五个 extractor。
   新增公司时先跑通用规则，只有关键指标对不上再写 extractor。
-- **扫描件**：整本判为 SCANNED 时 `batch_processor._auto_vision_for_scanned` 自动改走 hybrid 视觉，
-  需要会话里配置 `llm_api_key/base_url/model`；未配置时在说明里提示，不再静默 0 表。
+- **扫描件**：优先使用本地 OCR 重建公司目标表；大模型视觉仍作为未配置 OCR 或
+  需要人工复核时的补充路径。OCR 失败不会被写成 0。
 - **新增一家公司的步骤**：写 YAML → 跑 `tests/test_three_companies_extraction --company ...` →
   必要时写 extractor（`@register` + 同步 rows/table_blocks）→ 在
   `tests/test_three_companies_extraction.COMPANY_FILES` 注册 → 写 `plans/company-<公司>-extraction.md`。
-- 全量覆盖记录与遗留清单见 `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
+- 当前全量进度、2025 验收快照与已知例外见
+  `plans/company-extraction-progress-2026-11-24.md`。
+- 历史覆盖记录与共享层修复见
+  `plans/extraction-coverage-89-and-shared-fixes-2026-11.md`。
 - 详细方法论与踩坑记录见 `plans/company-extraction-playbook.md`。
 
 ---

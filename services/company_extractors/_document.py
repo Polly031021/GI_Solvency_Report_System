@@ -58,6 +58,85 @@ STANDARD_NON_LIFE_LAYOUT = {
         "unit": "%",
     },
 }
+STANDARD_LAYOUT_CONTRACTS = {
+    "SOLVENCY_MAIN": {
+        "headers": MAIN,
+        "header_variants": [
+            ["指标名称", "本季度数", "上季度数", "本季度比上季度增减", "下季度预测数"],
+        ],
+        "min_rows": 10,
+        "required_rows": [],
+        "header_aliases": {
+            "指标名称": ["项目", "指标"],
+            "本季度末数": ["本季度数", "本季度末", "本季度（末）数", "项目"],
+            "上季度末数": ["上季度数", "上季度末", "上季度可比数"],
+            "下季度末预测数": ["下季度预测数", "基本情景下季度预测数"],
+        },
+    },
+    "NON_LIFE_OPERATING_METRICS": {
+        "headers": OPERATING,
+        "min_rows": 15,
+        "required_rows": [],
+        "header_aliases": {
+            "指标名称": ["项目", "指标"],
+            "本季度数": ["本季度末数", "本季度（末）数"],
+            "本年度累计数": ["本年累计数", "本年累计"],
+        },
+    },
+    "ACTUAL_CAPITAL": {
+        "headers": CAPITAL,
+        "header_variants": [
+            ["行次", "项目", "期末数", "期初数"],
+            ["项目", "行次", "期末数", "期初数"],
+        ],
+        "min_rows": 6,
+        "required_rows": [],
+        "allow_mixed_widths": True,
+        "header_aliases": {
+            "指标名称": ["项目", "指标"],
+            "期末数": ["本季度末", "本季度末数", "本期末数", "本期末"],
+            "期初数": ["上季度末", "上季度末数", "上期末数", "上期末"],
+        },
+    },
+    "MINIMUM_CAPITAL": {
+        "headers": CAPITAL,
+        "header_variants": [
+            ["行次", "项目", "期末数", "期初数"],
+            ["项目", "行次", "期末数", "期初数"],
+        ],
+        "min_rows": 10,
+        "required_rows": [],
+        "allow_mixed_widths": True,
+        "header_aliases": {
+            "指标名称": ["项目", "指标"],
+            "期末数": ["本季度末", "本季度末数", "本期末数", "本期末"],
+            "期初数": ["上季度末", "上季度末数", "上期末数", "上期末"],
+        },
+    },
+    "LIQUIDITY_MONITORING": {
+        "headers": LIQUIDITY,
+        "min_rows": 2,
+        "required_rows": [],
+        "header_aliases": {
+            "指标名称": ["项目", "指标", "监测指标"],
+            "本季度数": ["本季度", "本季度末数", "本季度（末）数"],
+            "上季度数": ["上季度", "上季度末数", "上季度（末）数"],
+        },
+    },
+    "THREE_YEAR_INVESTMENT_RETURN": {
+        "headers": RETURN,
+        "header_variants": [
+            ["项目", "本季度"],
+            ["项目", "本季度数"],
+        ],
+        "min_rows": 2,
+        "required_rows": [],
+        "header_aliases": {
+            "项目": ["指标名称"],
+            "数值": ["指标金额", "本季度", "近三年平均"],
+        },
+    },
+}
 NUMBER = r"(?:[-－—–]{1,2}|[-+]?\d[\d,]*(?:\.\d+)?%?)"
 VALUES = re.compile(rf"^(.*?)\s+({NUMBER})(?:\s+({NUMBER}))?(?:\s+({NUMBER}))?\s*$")
 SECTION = re.compile(r"^(?:[一二三四五六七八九十]{1,3}[、．.]|[（(][一二三四五六七八九十]{1,3}[）)])")
@@ -72,14 +151,48 @@ def compact(value):
     return re.sub(r"\s+", "", str(value if value is not None else ""))
 
 
+def _header_key(value) -> str:
+    text = compact(value)
+    return re.sub(
+        r"[（(](?:亿元|万元|千元|元|%|％|百分点)[）)]",
+        "",
+        text,
+    )
+
+
 def contract_failure(table, rows):
     contract = getattr(table, "table_config", {}).get("_layout_contract") or {}
     if not contract:
         return "版式契约未配置"
     headers = list(contract.get("headers") or [])
-    if not rows or rows[0] != headers:
+    header_variants = [
+        list(value)
+        for value in (contract.get("header_variants") or [])
+        if isinstance(value, (list, tuple))
+    ]
+    header_aliases = contract.get("header_aliases") or {}
+    actual_headers = list(rows[0]) if rows else []
+    matched_headers: list[Any] | None = None
+    for candidate in [headers, *header_variants]:
+        candidate_match = len(actual_headers) == len(candidate) and all(
+            _header_key(actual) == _header_key(expected)
+            or _header_key(actual) in {
+                _header_key(alias)
+                for alias in (header_aliases.get(expected) or [])
+            }
+            for expected, actual in zip(candidate, actual_headers)
+        )
+        if candidate_match:
+            matched_headers = candidate
+            break
+    headers_match = matched_headers is not None
+    if not headers_match:
         return f"版式契约：表头不匹配，预期 {headers}"
-    if any(len(row) != len(headers) for row in rows):
+    expected_width = len(matched_headers or headers)
+    if contract.get("allow_mixed_widths"):
+        if any(len(row) not in {3, 4} for row in rows):
+            return "版式契约：数据列数与表头不一致"
+    elif any(len(row) != expected_width for row in rows):
         return "版式契约：数据列数与表头不一致"
     if len(rows) < int(contract.get("min_rows", 1)):
         return f"版式契约：行数不足（{len(rows)}）"
@@ -260,6 +373,49 @@ def locate_document(pdf_bytes, layout):
         return locate_from_texts([page.get_text() for page in pdf], layout)
 
 
+def locate_document_with_rules(pdf_bytes, table_configs):
+    """Use title-based location, then fall back to the year's YAML page window."""
+    located = locate_document(pdf_bytes, STANDARD_NON_LIFE_LAYOUT)
+    import fitz
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
+        page_count = len(pdf)
+    requested: set[str] = set()
+    for raw in table_configs:
+        config = dict(raw)
+        table_id = str(config.get("table_id") or "").strip()
+        if table_id == "OPERATING_METRICS":
+            table_id = "NON_LIFE_OPERATING_METRICS"
+        if not table_id:
+            continue
+        requested.add(table_id)
+        if config.get("not_disclosed"):
+            located[table_id] = []
+            continue
+        fallback = [
+            int(page)
+            for page in (config.get("expected_pages") or [])
+            if int(page) > 0
+        ]
+        if fallback:
+            # Company rules remain authoritative when a PDF has fewer pages
+            # than the baseline layout. Clamp instead of silently dropping the
+            # table and falling back to a title search on scanned summaries.
+            located[table_id] = sorted(
+                {
+                    min(max(1, page), page_count)
+                    for page in fallback
+                }
+            )
+    if requested:
+        located = {
+            table_id: pages
+            for table_id, pages in located.items()
+            if table_id in requested
+        }
+    return located
+
+
 def make_document_hooks(layout, company, postprocess):
     """Build company hooks while keeping each layout explicit and isolated."""
 
@@ -280,6 +436,138 @@ def make_document_hooks(layout, company, postprocess):
 
 def make_standard_document_hooks(company, postprocess):
     return make_document_hooks(STANDARD_NON_LIFE_LAYOUT, company, postprocess)
+
+
+def _capital_rows_from_texts(texts: Sequence[str], pages: Sequence[int]):
+    lines: list[str] = []
+    for page in pages:
+        if 1 <= int(page) <= len(texts):
+            lines.extend(
+                line.strip()
+                for line in texts[int(page) - 1].splitlines()
+                if line.strip()
+            )
+    start = None
+    has_row_no = False
+    for index in range(len(lines) - 2):
+        window = lines[index:index + 5]
+        compacted = [compact(value) for value in window]
+        if "项目" in compacted and "期末数" in compacted and "期初数" in compacted:
+            start = index + max(
+                compacted.index("项目"),
+                compacted.index("期初数"),
+            ) + 1
+            has_row_no = "行次" in compacted[:compacted.index("项目")]
+            break
+    if start is None:
+        return []
+    rows: list[list[str]] = []
+    code = ""
+    label: list[str] = []
+    values: list[str] = []
+
+    def flush():
+        nonlocal code, label, values
+        text = "".join(label).strip()
+        if text and code:
+            rows.append([code, text, values[0] if values else "", values[1] if len(values) > 1 else ""])
+        elif text and not has_row_no:
+            rows.append([text, values[0] if values else "", values[1] if len(values) > 1 else ""])
+        code, label, values = "", [], []
+
+    for line in lines[start:]:
+        token = compact(line)
+        if token.startswith("S0") or token.startswith("认可资产") or token.startswith("最低资本表"):
+            break
+        if re.fullmatch(r"\d+(?:\.\d+)*\*?", token):
+            flush()
+            code = line
+            continue
+        if re.fullmatch(NUMBER, token):
+            values.append(line)
+            continue
+        if values and len(values) >= 2:
+            flush()
+        label.append(line)
+        if not has_row_no and values:
+            flush()
+    flush()
+    return rows
+
+
+def _liquidity_rows_from_texts(texts: Sequence[str], pages: Sequence[int]):
+    labels = (
+        "经营活动净现金流",
+        "百元保费经营活动净现金流",
+        "特定业务现金流支出占比",
+        "规模保费同比增速",
+        "现金及流动性管理工具占比",
+        "季均融资杠杆比例",
+        "AA级（含）以下境内固定收益类资产占比",
+        "持股比例大于5%的上市股票投资占比",
+        "应收款项占比",
+        "持有关联方资产占比",
+    )
+    lines: list[str] = []
+    for page in pages:
+        if 1 <= int(page) <= len(texts):
+            lines.extend(
+                line.strip()
+                for line in texts[int(page) - 1].splitlines()
+                if line.strip()
+            )
+    rows = []
+    for wanted in labels:
+        key = compact(wanted)
+        try:
+            index = next(
+                i
+                for i, line in enumerate(lines)
+                if key in compact(line)
+            )
+        except StopIteration:
+            continue
+        values = []
+        for candidate in lines[index + 1:index + 10]:
+            value = candidate.replace(" ", "").replace("\u3000", "")
+            if not re.fullmatch(NUMBER, value):
+                continue
+            if re.fullmatch(r"\d{1,2}", value):
+                continue
+            values.append(candidate)
+            if len(values) == 2:
+                break
+        if values:
+            rows.append(
+                [
+                    wanted,
+                    values[0],
+                    values[1] if len(values) > 1 else "",
+                ]
+            )
+    return rows
+
+
+def _normalize_capital_width(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+    width = len(rows[0])
+    output = [list(rows[0])]
+    for row in rows[1:]:
+        cells = list(row)
+        if len(cells) > width and width in {3, 4}:
+            if width == 4:
+                cells = [
+                    cells[0],
+                    "".join(cells[1:-2]),
+                    *cells[-2:],
+                ]
+            else:
+                cells = ["".join(cells[:-2]), *cells[-2:]]
+        if len(cells) < width:
+            cells.extend([""] * (width - len(cells)))
+        output.append(cells[:width])
+    return output
 
 
 def _number_rows(lines, width):
@@ -606,14 +894,34 @@ def _text_segment(text, table_id):
     return result
 
 
-def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metadata=None, generic=False):
+def extract_document(
+    pdf_bytes,
+    configs,
+    layout,
+    postprocess,
+    company,
+    *,
+    metadata=None,
+    generic=False,
+    enforce_contract: bool | None = None,
+):
     import fitz
     import pandas as pd
     import pdfplumber
     from ..batch_extraction import FlexibleTable
 
+    if enforce_contract is None:
+        enforce_contract = not generic
+
     with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
         texts = [page.get_text() for page in pdf]
+    has_return_disclosure = any(
+        re.search(
+            r"近三年.{0,16}(?:平均)?(?:（?综合）?)?投资收益率",
+            compact(text),
+        )
+        for text in texts
+    )
     # STEP1's year-aware page decisions are authoritative. Never silently search
     # elsewhere when a confirmed locator returned no page for a target table.
     pages_by_table = {config["table_id"]: list(config.get("_confirmed_pages") or [])
@@ -757,6 +1065,47 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
     # Company postprocessors run last so they can remove rows that the shared
     # operating-table completion recovered from an adjacent section.
     tables = list(postprocess(tables, pdf_bytes=pdf_bytes))
+    by_id = {table.table_id: table for table in tables}
+    for table_id, table in by_id.items():
+        pages = [
+            int(page)
+            for page in (getattr(table, "source_pages", None) or [])
+            if int(page) > 0
+        ]
+        if not pages:
+            pages = [
+                int(page)
+                for page in (pages_by_table.get(table_id) or [])
+                if int(page) > 0
+            ]
+        if table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"}:
+            parsed = _capital_rows_from_texts(texts, pages)
+            if parsed and len(table.rows or []) <= 1:
+                header = (
+                    ["行次", "项目", "期末数", "期初数"]
+                    if any(len(row) == 4 for row in parsed)
+                    else ["项目", "期末数", "期初数"]
+                )
+                table.rows = [header, *parsed]
+                table.table_blocks = [
+                    {
+                        "page": pages[0] if pages else int(getattr(table, "page", 1) or 1),
+                        "rows": [header, *parsed],
+                    }
+                ]
+                table.strategy = "公司规则·资本表文本重建"
+        elif table_id == "LIQUIDITY_MONITORING":
+            parsed = _liquidity_rows_from_texts(texts, pages)
+            if parsed and len(table.rows or []) <= 1:
+                header = ["指标名称", "本季度数", "上季度数"]
+                table.rows = [header, *parsed]
+                table.table_blocks = [
+                    {
+                        "page": pages[0] if pages else int(getattr(table, "page", 1) or 1),
+                        "rows": [header, *parsed],
+                    }
+                ]
+                table.strategy = "公司规则·流动性文本重建"
     for table in tables:
         if table.table_id != "NON_LIFE_OPERATING_METRICS":
             continue
@@ -858,7 +1207,58 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
             if table.table_id == "SOLVENCY_MAIN" and company == "dongwu":
                 table.table_blocks = [{"page": table.page, "rows": [list(row) for row in table.rows],
                                        "unit": table.unit}]
-        tables = [table for table in tables if len(getattr(table, "rows", []) or []) > 1]
+            if table.table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"}:
+                table.rows = _normalize_capital_width(
+                    [list(row) for row in table.rows]
+                )
+                for block in table.table_blocks:
+                    block["rows"] = _normalize_capital_width(
+                        [list(row) for row in block.get("rows", [])]
+                    )
+            elif (
+                table.table_id == "SOLVENCY_MAIN"
+                and table.rows
+                and len(table.rows[0]) in {4, 5}
+            ):
+                width = len(table.rows[0])
+                table.rows = [
+                    [*list(row), *([""] * max(0, width - len(row)))][:width]
+                    for row in table.rows
+                ]
+                for block in table.table_blocks:
+                    block["rows"] = [
+                        [*list(row), *([""] * max(0, width - len(row)))][:width]
+                        for row in block.get("rows", [])
+                    ]
+            elif (
+                table.table_id == "LIQUIDITY_MONITORING"
+                and table.rows
+                and len(table.rows[0]) in {3, 4}
+            ):
+                width = len(table.rows[0])
+                table.rows = [
+                    [*list(row), *([""] * max(0, width - len(row)))][:width]
+                    for row in table.rows
+                ]
+                for block in table.table_blocks:
+                    block["rows"] = [
+                        [*list(row), *([""] * max(0, width - len(row)))][:width]
+                        for row in block.get("rows", [])
+                    ]
+        contract_failures = {}
+        for table in tables:
+            rows = [list(row) for row in (getattr(table, "rows", []) or [])]
+            if len(rows) <= 1:
+                continue
+            failure = contract_failure(table, rows)
+            if failure:
+                contract_failures[table.table_id] = failure
+        tables = [
+            table
+            for table in tables
+            if len(getattr(table, "rows", []) or []) > 1
+            and table.table_id not in contract_failures
+        ]
         table_ids = {table.table_id for table in tables}
         logs = []
         for config in configs:
@@ -866,14 +1266,15 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
             exists = table_id in table_ids
             has_pages = bool(pages_by_table.get(table_id))
             undisclosed_return = (table_id == "THREE_YEAR_INVESTMENT_RETURN"
-                                  and not has_pages
-                                  and not any("近三年" in text for text in texts))
+                                  and not exists
+                                  and not has_return_disclosure)
             logs.append({"目标表": config.get("table_name", table_id), "表编码": table_id,
                          "物理页码": "、".join(map(str, pages_by_table.get(table_id, []))),
                          "识别方式": f"公司规则文档适配:{company}",
                          "状态": "未披露" if undisclosed_return else "成功" if exists else "失败",
                          "说明": "原文未披露近三年投资收益率" if undisclosed_return else
                          "复用现有公司定位规则与后处理的整份文档提取" if exists else
+                         contract_failures.get(table_id) if table_id in contract_failures else
                          "提取或公司后处理未生成该表" if has_pages else "公司规则定位未找到目标页"})
         return {"tables": tables, "logs": logs, "pages_by_table": pages_by_table}
     # Restore row provenance after legacy postprocessors rebuild a single block.
@@ -906,6 +1307,38 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
         for block in table.table_blocks:
             block["rows"] = [row for row in block.get("rows", []) if not row or not re.search(pattern, compact(row[0]))]
         table.table_blocks.extend(blocks)
+    for table in tables:
+        if (
+            str(getattr(table, "table_id", ""))
+            not in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"}
+            or not table.rows
+        ):
+            continue
+        if (
+            len(table.rows[0]) == 3
+            and any(
+                len(row) == 4
+                and re.fullmatch(r"\d+(?:\.\d+)*\*?", compact(row[0]))
+                for row in table.rows[1:]
+            )
+        ):
+            table.rows[0] = ["行次", "项目", "期末数", "期初数"]
+        table.rows = _normalize_capital_width(table.rows)
+        width = len(table.rows[0])
+        for block in table.table_blocks:
+            header = list(block.get("rows", [[]])[0])
+            if (
+                len(header) == 3
+                and any(
+                    len(row) == 4
+                    and re.fullmatch(r"\d+(?:\.\d+)*\*?", compact(row[0]))
+                    for row in block.get("rows", [])[1:]
+                )
+            ):
+                header = ["行次", "项目", "期末数", "期初数"]
+            block["rows"] = _normalize_capital_width(
+                [header, *list(block.get("rows", []))[1:]]
+            )
     logs = []
     accepted = []
     by_id = {table.table_id: table for table in tables}
@@ -916,7 +1349,7 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
         if table is None:
             undisclosed_return = (table_id == "THREE_YEAR_INVESTMENT_RETURN"
                                   and not pages_by_table.get(table_id)
-                                  and not any("近三年" in text for text in texts))
+                                  and not has_return_disclosure)
             failure = "" if undisclosed_return else (
                 "公司专属定位未找到目标表" if not pages_by_table.get(table_id)
                 else "公司专属解析未取得表体"
@@ -924,7 +1357,26 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
         else:
             table.table_config = dict(config)
             table.blank_cell_evidence = blank_evidence.get(table_id, [])
-            rows = [list(HEADERS[table_id])]
+            contract = config.get("_layout_contract") or {}
+            source_header = list(table.rows[0]) if table.rows else []
+            expected_header = list(HEADERS[table_id])
+            if (
+                table_id == "THREE_YEAR_INVESTMENT_RETURN"
+                and source_header
+                and "近三年" in compact(source_header[0])
+            ):
+                expected_header = list(HEADERS[table_id])
+            elif (
+                source_header
+                and len(source_header) != len(expected_header)
+                and any(
+                    len(variant) == len(source_header)
+                    for variant in (contract.get("header_variants") or [])
+                )
+            ):
+                expected_header = source_header
+            expected_width = len(expected_header)
+            rows = [list(expected_header)]
             normalized_blocks = []
             seen = set()
             for block in table.table_blocks:
@@ -940,14 +1392,34 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
                         continue
                     if table_id == "NON_LIFE_OPERATING_METRICS" and "规模保费同比增速" in compact(cells[0]):
                         continue
-                    if len(cells) == len(HEADERS[table_id]) + 1 and table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL", "LIQUIDITY_MONITORING"}:
+                    if table_id == "SOLVENCY_MAIN" and len(cells) == len(HEADERS[table_id]) + 1:
+                        # Some company templates prefix the main table with a
+                        # row-number column or leave a trailing empty column.
+                        if (
+                            compact(cells[0]) in {"行次", "序号"}
+                            or re.fullmatch(r"\d+(?:\.\d+)*", compact(cells[0]))
+                        ):
+                            cells = cells[1:]
+                        elif not compact(cells[-1]):
+                            cells = cells[:-1]
+                    if (
+                        expected_width == len(HEADERS[table_id])
+                        and len(cells) == expected_width + 1
+                        and table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL", "LIQUIDITY_MONITORING"}
+                    ):
                         cells = [cells[0] + " " + cells[1], *cells[2:]]
+                    if (
+                        generic
+                        and table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"}
+                        and len(cells) < expected_width
+                    ):
+                        cells.extend([""] * (expected_width - len(cells)))
                     if table_id == "LIQUIDITY_MONITORING" and len(cells) == 3 and not re.fullmatch(NUMBER, compact(cells[1])) and re.fullmatch(NUMBER, compact(cells[2])):
                         cells = [cells[0] if cells[1].startswith("指标值") else cells[1], cells[2], ""]
-                    if len(cells) != len(HEADERS[table_id]) and not generic:
+                    if len(cells) != expected_width and not generic:
                         failure = f"版式契约：数据列数不符（{len(cells)}）"
                         break
-                    if len(cells) != len(HEADERS[table_id]) and generic:
+                    if len(cells) != expected_width and generic:
                         # Existing company postprocessors sometimes emit numbered
                         # four-column rows or merged multi-value layouts. Preserve
                         # them for the established STEP3 table parser.
@@ -963,9 +1435,15 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
                 if failure:
                     break
                 if body:
-                    normalized_blocks.append({**block, "rows": [list(HEADERS[table_id]), *body]})
+                    normalized_blocks.append({**block, "rows": [list(expected_header), *body]})
                     rows.extend(body)
-            if not generic:
+            if table_id in {"ACTUAL_CAPITAL", "MINIMUM_CAPITAL"} and rows:
+                rows = _normalize_capital_width(rows)
+                for block in normalized_blocks:
+                    block["rows"] = _normalize_capital_width(
+                        list(block.get("rows", []))
+                    )
+            if enforce_contract:
                 failure = failure or contract_failure(table, rows)
             if not failure:
                 table.rows = rows
@@ -976,8 +1454,8 @@ def extract_document(pdf_bytes, configs, layout, postprocess, company, *, metada
                 table.to_frame = lambda *args, _frame=frame, **kwargs: _frame.copy()
                 accepted.append(table)
         undisclosed = (table_id == "THREE_YEAR_INVESTMENT_RETURN"
-                       and not pages_by_table.get(table_id)
-                       and not any("近三年" in text for text in texts))
+                       and table is None
+                       and not has_return_disclosure)
         logs.append({"目标表": config["table_name"], "表编码": table_id,
                      "物理页码": "、".join(map(str, pages_by_table.get(table_id, []))),
                      "识别方式": f"公司专属规则:{company}", "状态": "未披露" if undisclosed else "失败" if failure else "成功",

@@ -25,7 +25,7 @@ from services.extraction_rules import (  # noqa: E402
     resolve_rule,
 )
 from services.report_profiles import load_profile_workbook  # noqa: E402
-from tools.company_extraction_audit import sample_path  # noqa: E402
+from tools.company_extraction_audit import ALL_COMPANIES, sample_path  # noqa: E402
 
 
 def scope_companies(path: Path, categories: set[str]) -> list[str]:
@@ -156,6 +156,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--years", default="2022,2023,2024,2025")
     parser.add_argument("--companies", default="")
+    parser.add_argument("--all-companies", action="store_true")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--company-list", default=str(ROOT / "财险公司列表.xlsx"))
@@ -163,14 +164,19 @@ def main() -> int:
 
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    companies = (
-        [value.strip() for value in args.companies.split(",") if value.strip()]
-        if args.companies
-        else scope_companies(
+    if args.all_companies:
+        companies = list(ALL_COMPANIES)
+    elif args.companies:
+        companies = [
+            value.strip()
+            for value in args.companies.split(",")
+            if value.strip()
+        ]
+    else:
+        companies = scope_companies(
             Path(args.company_list),
             {"前十大", "大型公司"},
         )
-    )
     profile = load_profile_workbook(
         (ROOT / "config/report_profiles/NON_LIFE_SOLVENCY_profile.xlsx").read_bytes(),
         project_root=ROOT,

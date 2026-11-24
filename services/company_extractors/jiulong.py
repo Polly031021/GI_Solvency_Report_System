@@ -25,6 +25,9 @@ from . import register
 
 _BLOCK_MARK_RE = re.compile(r"^【第\d+页表格分块】$")
 _ROW_NO_RE = re.compile(r"^\d+(?:\.\d+)*$")
+_VALUE_RE = re.compile(
+    r"^(?:-{1,2}|—|–|－|[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?)$"
+)
 
 _HEADER_LABELS = {"指标名称", "项目", "行次", "监测指标", "行次/项目"}
 
@@ -96,11 +99,80 @@ def _rebuild_table(table: Any) -> None:
         table.rows = _align_rows(rows, width)
 
 
+def _rebuild_2022_main(table: Any, pdf_bytes: bytes) -> bool:
+    pages = [
+        int(page)
+        for page in (getattr(table, "source_pages", None) or [])
+        if str(page).isdigit()
+    ]
+    if pages != [11]:
+        return False
+    import fitz
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf:
+        text = pdf.load_page(10).get_text() or ""
+    lines = [_text(line) for line in text.splitlines() if _text(line)]
+    try:
+        start = lines.index("下季度预测数") + 1
+    except ValueError:
+        return False
+
+    rows: list[list[str]] = []
+    row_no = ""
+    label: list[str] = []
+    values: list[str] = []
+
+    def flush() -> None:
+        nonlocal row_no, label, values
+        if row_no and label:
+            rows.append(
+                [
+                    f"{row_no} {''.join(label)}".strip(),
+                    values[0] if values else "",
+                    values[1] if len(values) > 1 else "",
+                    values[2] if len(values) > 2 else "",
+                ]
+            )
+        row_no = ""
+        label = []
+        values = []
+
+    for line in lines[start:]:
+        if line.startswith("（二）流动性风险监管指标"):
+            break
+        if _ROW_NO_RE.fullmatch(line) and not line.startswith("0."):
+            flush()
+            row_no = line
+            continue
+        if row_no and _VALUE_RE.fullmatch(line):
+            values.append(line)
+            if len(values) >= 3:
+                flush()
+            continue
+        if row_no:
+            if values:
+                values = []
+            label.append(line)
+    flush()
+    if len(rows) < 14:
+        return False
+    header = ["指标名称", "本季度末数", "上季度末数", "下季度末预测数"]
+    table.rows = [header, *rows]
+    table.table_blocks = [
+        {"page": 11, "rows": [list(row) for row in table.rows]}
+    ]
+    table.unit = "元"
+    table.unit_source = "元"
+    return True
+
+
 @register("jiulong")
 def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     """久隆保险专属后处理入口。"""
     for table in tables:
         table_id = str(getattr(table, "table_id", "") or "")
+        if table_id == "SOLVENCY_MAIN":
+            _rebuild_2022_main(table, pdf_bytes)
         if table_id in {
             "NON_LIFE_OPERATING_METRICS",
             "ACTUAL_CAPITAL",
