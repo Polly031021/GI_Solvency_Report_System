@@ -33,6 +33,8 @@ _GROUP_TITLE_RE = re.compile(r"^\d+[.．]\s*(主要|效益|规模|品质)类?指
 # 平安报告写“基本情境下，未来3个月LCR1”，标准库写“LCR1未来3个月”，
 # 顺序相反导致子串匹配失败；这里按正则重新拼成标准标签。
 _LCR_LABEL_RE = re.compile(r"未来\s*(3|12)\s*个月\s*LCR([123])")
+_LOSS_ABSORPTION_RE = re.compile(r"特定类(?:别)?保险合同损失吸收效应")
+_LOSS_ABSORPTION_LABEL = "特定类别保险合同损失吸收效应"
 
 
 def _fix_liquidity_rows(rows: list[list[str]]) -> list[list[str]]:
@@ -176,6 +178,79 @@ def _page_text(doc, page_number: int) -> str:
     return doc.load_page(page_number - 1).get_text() or ""
 
 
+def _loss_absorption_row(cells: Sequence[Any]) -> list[str] | None:
+    values = [str(cell or "").strip() for cell in cells]
+    for index, cell in enumerate(values[:2]):
+        if not _LOSS_ABSORPTION_RE.search(_clean_cell(cell)):
+            continue
+        measures = values[index + 1:index + 3]
+        while len(measures) < 2:
+            measures.append("")
+        return [_LOSS_ABSORPTION_LABEL, *measures]
+    return None
+
+
+def _ensure_loss_absorption_rows(
+    table: Any,
+    doc,
+) -> None:
+    rows = [list(row) for row in (getattr(table, "rows", None) or [])]
+    found_index = None
+    canonical = None
+    for index, row in enumerate(rows):
+        canonical = _loss_absorption_row(row)
+        if canonical:
+            found_index = index
+            break
+
+    pages = [
+        int(page)
+        for page in (
+            getattr(table, "source_pages", None)
+            or [getattr(table, "page", 1)]
+        )
+        if str(page).isdigit()
+    ]
+    has_source_label = any(
+        _LOSS_ABSORPTION_RE.search(_clean_cell(_page_text(doc, page)))
+        for page in pages
+    )
+    if canonical is None:
+        if not has_source_label:
+            return
+        canonical = [_LOSS_ABSORPTION_LABEL, "-", "-"]
+    if found_index is None:
+        insert_at = len(rows)
+        for index, row in enumerate(rows):
+            if "损失吸收效应调整上限" in _clean_cell("".join(map(str, row))):
+                insert_at = index + 1
+                break
+        rows.insert(insert_at, canonical)
+    else:
+        rows[found_index] = canonical
+    table.rows = rows
+
+    blocks = list(getattr(table, "table_blocks", None) or [])
+    block_found = False
+    for block in blocks:
+        block_rows = [list(row) for row in (block.get("rows") or [])]
+        for index, row in enumerate(block_rows):
+            replacement = _loss_absorption_row(row)
+            if replacement:
+                block_rows[index] = replacement
+                block_found = True
+                break
+        if block_found:
+            block["rows"] = block_rows
+            break
+    if not block_found:
+        page = pages[0] if pages else int(getattr(table, "page", 1) or 1)
+        if not blocks:
+            blocks = [{"page": page, "rows": []}]
+        blocks[-1].setdefault("rows", []).append(canonical)
+    table.table_blocks = blocks
+
+
 def _parse_operating_rows(text: str) -> list[list[str]]:
     """从“指标名称/本季度数/本年度累计数”表重建数据行。"""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -264,6 +339,8 @@ def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
                         block["rows"] = _fix_liquidity_rows(
                             [list(row) for row in block["rows"]]
                         )
+            elif table_id == "MINIMUM_CAPITAL":
+                _ensure_loss_absorption_rows(table, doc)
     finally:
         doc.close()
     return tables

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from services.company_extractors._document import (
     CAPITAL, _number_rows, _priority_rows, _regulatory_rows, contract_failure, locate_from_texts,
 )
+from services.company_extractors.pingan import _loss_absorption_row
 
 
 def test_locator_skips_directory_and_keeps_minimum_continuation():
@@ -48,10 +49,16 @@ def test_main_missing_forecast_keeps_blank_instead_of_dropping_row():
     assert _number_rows(["核心二级资本 - -"], 3) == [["核心二级资本", "-", "-", ""]]
 
 
-def test_priority_loss_absorption_keeps_blank_and_alias():
+def test_priority_loss_absorption_keeps_placeholder_and_alias():
     assert _priority_rows([["1.1.5", "特定类保险合同损失吸收效应", "", ""]], "MINIMUM_CAPITAL") == [
         ["特定类别保险合同损失吸收效应", "", ""]]
     assert not _priority_rows([["1.6.1", "损失吸收调整-不考虑上限", "5", "6"]], "MINIMUM_CAPITAL")
+
+
+def test_pingan_loss_absorption_row_keeps_source_placeholder() -> None:
+    assert _loss_absorption_row(
+        ["特定类别保险合同损失吸收效应", "-", "-"]
+    ) == ["特定类别保险合同损失吸收效应", "-", "-"]
 
 
 def test_priority_growth_keeps_negative_value_and_merged_group():
