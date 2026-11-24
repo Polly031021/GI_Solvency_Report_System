@@ -43,6 +43,24 @@ class FlexibleTable(SimpleNamespace):
     _STR_FIELDS = {"strategy", "evidence", "note", "unit", "sheet_name", "remark"}
     _NUM_FIELDS = {"quality_score", "score", "confidence", "row_count"}
 
+    def to_frame(self, *args, **kwargs):
+        """Build a display frame when a company extractor omitted to_frame."""
+        del args, kwargs
+        rows = [
+            [str(cell if cell is not None else "").strip() for cell in row]
+            for row in (getattr(self, "rows", None) or [])
+        ]
+        if not rows:
+            return pd.DataFrame()
+        width = max(len(row) for row in rows)
+        normalized = [
+            [*row, *([""] * (width - len(row)))]
+            for row in rows
+        ]
+        if len(normalized) == 1:
+            return pd.DataFrame(columns=normalized[0])
+        return pd.DataFrame(normalized[1:], columns=normalized[0])
+
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)

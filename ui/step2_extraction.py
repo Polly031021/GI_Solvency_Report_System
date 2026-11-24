@@ -1889,8 +1889,17 @@ def _render_extraction_batch_tab(active_profile: ReportProfile) -> None:
     st.caption(
         f"提取方式：{table.strategy}｜单位：{getattr(table, 'unit', '未识别')}"
     )
+    to_frame = getattr(table, "to_frame", None)
+    if callable(to_frame):
+        frame = to_frame()
+    else:
+        rows = [
+            list(row)
+            for row in (getattr(table, "rows", None) or [])
+        ]
+        frame = pd.DataFrame(rows[1:], columns=rows[0]) if rows else pd.DataFrame()
     st.dataframe(
-        table.to_frame(),
+        frame,
         width="stretch",
         hide_index=True,
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from services.company_extractors._ocr import OCRToken, group_tokens_into_lines
 from services.company_extractors import hengbang, zhongmei
+from services.batch_extraction import FlexibleTable
 
 
 def _token(text: str, x0: float, y0: float, width: float = 20) -> OCRToken:
@@ -86,3 +87,19 @@ def test_zhongmei_rejoins_split_row_numbers_and_amounts() -> None:
         "实际资本合计",
         "1,174,501,804.34",
     ]
+
+
+def test_flexible_table_defaults_to_rows_dataframe() -> None:
+    table = FlexibleTable(
+        table_id="ACTUAL_CAPITAL",
+        table_name="实际资本",
+        rows=[
+            ["行次", "项目", "期末数"],
+            ["1", "核心一级资本", "100"],
+        ],
+    )
+
+    frame = table.to_frame()
+
+    assert list(frame.columns) == ["行次", "项目", "期末数"]
+    assert frame.iloc[0].tolist() == ["1", "核心一级资本", "100"]
