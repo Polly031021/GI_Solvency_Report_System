@@ -45,9 +45,9 @@ STEP7 默认自动读取 `templates/Step7-偿付能力公司报告展示模块.x
 
 ### 公司专属提取与本地 OCR
 
-89 家财险公司均有独立的公司 YAML，并可取得公司级 locator/extractor hooks。
-已验证公司优先使用公司页码、表头、必要指标和跨页契约；只有没有专属实现的兼容路径
-才使用共享文档适配，但仍强制经过契约校验。
+89 家财险公司的模块都显式声明 `locate_company_tables()` 和
+`extract_company_tables()`，共享入口不再运行时自动补 hooks。每家公司仍使用自己的
+YAML 页码、表头、必要指标、跨页契约和执行方式，专属逻辑失败时整表阻断，不回退通用结果。
 
 - 公司规则：`config/extraction/companies/<公司>.yaml`
 - 公司提取器：`services/company_extractors/`

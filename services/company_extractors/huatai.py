@@ -558,3 +558,18 @@ _HUATAI_LAYOUT["LIQUIDITY_MONITORING"] = {
 locate_company_tables, extract_company_tables = make_document_hooks(
     _HUATAI_LAYOUT, "华泰财险", postprocess
 )
+
+# Explicit company extraction hooks.
+def locate_company_tables(pdf_bytes, table_configs=()):
+    from ._company_hooks import locate_for_company
+    return locate_for_company("huatai", pdf_bytes, table_configs)
+
+
+def extract_company_tables(pdf_bytes, table_configs):
+    from ._company_hooks import extract_for_company
+    return extract_for_company(
+        "huatai",
+        pdf_bytes,
+        table_configs,
+        mode="document",
+    )

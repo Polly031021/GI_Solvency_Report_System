@@ -93,3 +93,18 @@ from ._document import make_standard_document_hooks
 locate_company_tables, extract_company_tables = make_standard_document_hooks(
     "紫金财产", postprocess
 )
+
+# Explicit company extraction hooks.
+def locate_company_tables(pdf_bytes, table_configs=()):
+    from ._company_hooks import locate_for_company
+    return locate_for_company("zijin", pdf_bytes, table_configs)
+
+
+def extract_company_tables(pdf_bytes, table_configs):
+    from ._company_hooks import extract_for_company
+    return extract_for_company(
+        "zijin",
+        pdf_bytes,
+        table_configs,
+        mode="document",
+    )

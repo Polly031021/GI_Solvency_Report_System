@@ -14,9 +14,10 @@
 > `plans/large-company-contract-validation.md`。22 家文字层可提取表通过当前契约；
 > 诚泰 2022 的 4 张纯图片表和 3 个缺失样例年份单独保留为例外。
 
-> **2026-11-24 更新：** 89 家公司均已取得公司级 document hooks。
-> 67 家通过公司 YAML + 兼容文档适配器接入，16 家成熟全文解析器通过
-> `LEGACY_PAGE_ADAPTERS` 接入；中煤、恒邦、太平科技接入本地 OCR。
+> **2026-11-24 更新：** 89 个公司模块均显式声明
+> `locate_company_tables()` 和 `extract_company_tables()`；共享入口不再自动生成 hooks。
+> 12 家保留专用实现，15 家在公司模块内显式声明 `mode="legacy"`，
+> 其余 62 家显式声明 `mode="document"`。中煤、恒邦、太平科技接入本地 OCR。
 > 2025 全量契约快照为 519 通过、3 原文未披露、2 个公司无 PDF、0 失败、0 未生成。
 > 最新结果以 `plans/company-extraction-progress-2026-11-24.md`、
 > `plans/all-company-contract-validation-2025.csv` 为准；本文 §1、§6 的历史遗留表

@@ -241,3 +241,18 @@ def _rebuild_main_from_text(text: str) -> list[list[str]]:
             values.append("")
         rows.append([label, values[0], values[1], values[2], values[3]])
     return rows
+
+# Explicit company extraction hooks.
+def locate_company_tables(pdf_bytes, table_configs=()):
+    from ._company_hooks import locate_for_company
+    return locate_for_company("changjiang", pdf_bytes, table_configs)
+
+
+def extract_company_tables(pdf_bytes, table_configs):
+    from ._company_hooks import extract_for_company
+    return extract_for_company(
+        "changjiang",
+        pdf_bytes,
+        table_configs,
+        mode="document",
+    )

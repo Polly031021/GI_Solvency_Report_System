@@ -198,15 +198,17 @@ services.solvency_dataset_adapter.read_standard_workbook(bytes, filename, includ
 ```
 config/extraction/tables.yaml              表级定义（所有公司共用，代码内置默认兜底）
 config/extraction/companies/<公司>.yaml    公司级规则（页码窗口、锚点、extractor），当前 89 家
-services/company_extractors/<name>.py      公司级 locator/extractor 或兼容后处理
+services/company_extractors/<name>.py      显式公司级 locator/extractor 与后处理
+services/company_extractors/_company_hooks.py 显式公司 hook 的共享执行原语
 services/company_extractors/_main_table.py 主表重建 helper（金额跨行/行次竖排/表头缺列）
 services/company_extractors/_ocr.py        扫描页本地 OCR、坐标词块与磁盘缓存
 ```
 
-- `get_company_document_hooks()` 为 89 家公司提供 document hooks；没有显式 hook 的公司
-  使用共享文档适配器，但仍以公司 YAML 页码和契约作为权威输入。
-- 部分已有成熟全文解析器的公司通过 `LEGACY_PAGE_ADAPTERS` 接入既有页级解析，
-  不退回通用页内表格搜索。
+- 89 个公司模块都在 AST 层面显式定义 `locate_company_tables()` 和
+  `extract_company_tables()`；`get_company_document_hooks()` 只导入和返回这两个函数，
+  不再自动生成，也不允许缺函数时静默回退。
+- 12 家保留专用实现；15 家在公司模块中显式声明 `mode="legacy"` 接入既有页级解析；
+  其余 62 家显式声明 `mode="document"`，使用该公司 YAML 与后处理。
 - 中煤、恒邦、太平科技等纯扫描件使用 `rapidocr_onnxruntime`；缓存位于
   `gi_solvency_cache/ocr_v1/`，按 PDF SHA1、页码和缩放比例复用。
 - 路由键：封面 `公司`（别名归一）+ `报告年度`（仅用于选 `structure_versions`）。

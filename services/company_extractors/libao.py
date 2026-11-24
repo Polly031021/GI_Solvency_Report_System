@@ -14,3 +14,18 @@ from . import register
 @register("libao")
 def postprocess(tables: Sequence[Any], *, pdf_bytes: bytes) -> Sequence[Any]:
     return tables
+
+# Explicit company extraction hooks.
+def locate_company_tables(pdf_bytes, table_configs=()):
+    from ._company_hooks import locate_for_company
+    return locate_for_company("libao", pdf_bytes, table_configs)
+
+
+def extract_company_tables(pdf_bytes, table_configs):
+    from ._company_hooks import extract_for_company
+    return extract_for_company(
+        "libao",
+        pdf_bytes,
+        table_configs,
+        mode="document",
+    )

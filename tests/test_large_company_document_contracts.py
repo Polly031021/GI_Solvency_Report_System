@@ -1,5 +1,6 @@
 """Structural checks for the top-ten plus large-company migration scope."""
 
+import ast
 from pathlib import Path
 
 from services.company_extractors import get_company_document_hooks
@@ -39,7 +40,7 @@ def test_all_large_companies_have_document_hooks_and_six_contracts() -> None:
     print("PASS 22 家大型公司均有公司专属 hooks 与六表契约")
 
 
-def test_all_repository_companies_have_document_hooks() -> None:
+def test_all_repository_companies_have_explicit_document_hooks() -> None:
     missing: list[str] = []
     for company in ALL_COMPANIES:
         rule = resolve_rule(
@@ -48,11 +49,29 @@ def test_all_repository_companies_have_document_hooks() -> None:
             profile_id="NON_LIFE_SOLVENCY",
         )
         assert rule is not None, company
+        module_path = (
+            ROOT
+            / "services"
+            / "company_extractors"
+            / f"{rule.extractor}.py"
+        )
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if not {
+            "locate_company_tables",
+            "extract_company_tables",
+        }.issubset(functions):
+            missing.append(rule.canonical)
+            continue
         locator, extractor = get_company_document_hooks(rule.extractor)
         if not callable(locator) or not callable(extractor):
             missing.append(rule.canonical)
     assert not missing, missing
-    print("PASS 89 家公司均可取得公司专属 document hooks")
+    print("PASS 89 家公司均显式声明 document hooks")
 
 
 def test_all_workbook_company_names_route_to_rules() -> None:
@@ -80,5 +99,5 @@ def test_all_workbook_company_names_route_to_rules() -> None:
 
 if __name__ == "__main__":
     test_all_large_companies_have_document_hooks_and_six_contracts()
-    test_all_repository_companies_have_document_hooks()
+    test_all_repository_companies_have_explicit_document_hooks()
     test_all_workbook_company_names_route_to_rules()
